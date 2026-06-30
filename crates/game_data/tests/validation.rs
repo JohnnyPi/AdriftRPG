@@ -124,3 +124,79 @@ fn workspace_registry_resolves_active_profiles() {
         8.0
     );
 }
+
+#[test]
+fn biome_rules_accept_stub_profile_fields() {
+    let dir = tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("app.yaml"),
+        r#"schema_version: 1
+id: app.vertical_slice
+world: world.vertical_slice
+player: player.default
+camera: camera.mmo_default
+performance: performance.rtx3070_60fps
+"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("world.yaml"),
+        r#"schema_version: 1
+id: world.vertical_slice
+seed: 1
+voxel:
+  cell_size_m: 1.0
+chunks:
+  cells: [16, 16, 16]
+  world_extent: [6, 3, 6]
+terrain: terrain.vertical_slice
+biomes: biomes.vertical_slice
+materials: materials.vertical_slice
+water: water.tropical_shallow
+lighting: lighting.late_morning
+"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("biomes.yaml"),
+        r#"schema_version: 1
+id: biomes.vertical_slice
+rules:
+  - id: grassland
+    material_id: 0
+    color: [0.3, 0.5, 0.2]
+    vegetation_profile_id: vegetation.vertical_slice
+    ambient_audio_profile_id: audio.coastal_day
+    weather_profile_id: weather.clear
+    spawn_profile_id: spawn.coastal_wildlife
+    gameplay_tags: [coastal, traversable]
+    tint: [1.0, 1.0, 1.0]
+    roughness_modifier: 0.05
+    wetness_modifier: 0.1
+"#,
+    )
+    .unwrap();
+    for name in [
+        "player.yaml",
+        "camera.yaml",
+        "performance.yaml",
+        "water.yaml",
+        "lighting.yaml",
+        "terrain.yaml",
+        "materials.yaml",
+    ] {
+        let src = workspace_assets().join("config").join(name);
+        if src.exists() {
+            fs::copy(&src, dir.path().join(name)).unwrap();
+        }
+    }
+    let terrain_src = workspace_assets().join("terrain/generation/vertical_slice.terrain.yaml");
+    fs::copy(&terrain_src, dir.path().join("terrain.yaml")).unwrap();
+    let mat_src = workspace_assets().join("terrain/materials/terrain.materials.yaml");
+    fs::copy(&mat_src, dir.path().join("materials.yaml")).unwrap();
+
+    let registry = load_registry_from_directory(dir.path()).expect("registry with biome stubs");
+    let biomes = registry.biomes.get(&shared::StableId::new("biomes.vertical_slice")).unwrap();
+    assert_eq!(biomes.rules[0].gameplay_tags.len(), 2);
+    assert!(biomes.rules[0].vegetation_profile_id.is_some());
+}

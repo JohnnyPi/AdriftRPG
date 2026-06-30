@@ -1,0 +1,1 @@
+   Compiling game_bevy v0.1.0 (E:\CursorApps\RPGAdrift\crates\game_bevy)

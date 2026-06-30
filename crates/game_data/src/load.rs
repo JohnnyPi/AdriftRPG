@@ -112,6 +112,28 @@ fn parse_yaml_file(path: &Path, text: &str) -> DataResult<RawDefinition> {
         RawDefinition::Cave(deserialize(path, text)?)
     } else if id.starts_with("debug.") {
         RawDefinition::Debug(deserialize(path, text)?)
+    } else if id.starts_with("options.") {
+        RawDefinition::Options(deserialize(path, text)?)
+    } else if id.starts_with("physics.") {
+        RawDefinition::Physics(deserialize(path, text)?)
+    } else if id.starts_with("river.") {
+        RawDefinition::River(deserialize(path, text)?)
+    } else if id.starts_with("hydrology.") {
+        RawDefinition::Hydrology(deserialize(path, text)?)
+    } else if id.starts_with("waterbody.") {
+        RawDefinition::WaterBodyMaterial(deserialize(path, text)?)
+    } else if id.starts_with("atmosphere.") {
+        RawDefinition::Atmosphere(deserialize(path, text)?)
+    } else if id.starts_with("fog.") {
+        RawDefinition::Fog(deserialize(path, text)?)
+    } else if id.starts_with("sky.") {
+        RawDefinition::Sky(deserialize(path, text)?)
+    } else if id.starts_with("landmarks.") {
+        RawDefinition::Landmarks(deserialize(path, text)?)
+    } else if id.starts_with("routes.") {
+        RawDefinition::Routes(deserialize(path, text)?)
+    } else if id.starts_with("structure.") {
+        RawDefinition::Structure(deserialize(path, text)?)
     } else {
         return Err(DataError::Parse {
             path: path.display().to_string(),

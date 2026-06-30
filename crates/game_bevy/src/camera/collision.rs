@@ -2,6 +2,10 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 
 use crate::data::ConfigRegistryResource;
+use physics_bridge::CollisionLayer;
+
+use crate::camera::environment::{CameraEnvironment, CameraEnvironmentState};
+use crate::ui::CameraTweaks;
 
 use super::components::{CameraDebugSnapshot, CameraInputState, MmoCamera};
 use super::{clamp_visual_delta, desired_camera_position, smooth_scalar};
@@ -27,6 +31,8 @@ pub fn resolve_camera_collision(
     time: Res<Time>,
     registry: Res<ConfigRegistryResource>,
     spatial: SpatialQuery,
+    camera_env: Res<CameraEnvironment>,
+    camera_tweaks: Res<CameraTweaks>,
     mut debug: ResMut<CameraDebugSnapshot>,
     mut cameras: Query<&mut MmoCamera>,
 ) {
@@ -53,7 +59,9 @@ pub fn resolve_camera_collision(
     let collision_limit = if desired_distance > 0.05 {
         let shape = Collider::sphere(config.collision_radius);
         let cast_config = ShapeCastConfig::from_max_distance(desired_distance);
-        let filter = SpatialQueryFilter::default().with_excluded_entities([camera.player]);
+        let filter = SpatialQueryFilter::default()
+            .with_excluded_entities([camera.player])
+            .with_mask(CollisionLayer::Terrain);
 
         if let Some(hit) = spatial.cast_shape(
             &shape,
@@ -74,14 +82,31 @@ pub fn resolve_camera_collision(
         desired_distance
     };
 
-    camera.collision_limited_distance = resolve_collision_distance(
+    let inward_sharpness = if camera_tweaks.use_overrides {
+        camera_tweaks.collision_inward_sharpness
+    } else {
+        config.collision_inward_sharpness
+    };
+    let outward_sharpness = if camera_tweaks.use_overrides {
+        camera_tweaks.collision_outward_sharpness
+    } else {
+        config.collision_outward_sharpness
+    };
+
+    let mut limited = resolve_collision_distance(
         camera.collision_limited_distance,
         camera.current_distance,
         collision_limit,
-        config.collision_inward_sharpness,
-        config.collision_outward_sharpness,
+        inward_sharpness,
+        outward_sharpness,
         dt,
     );
+
+    if camera_env.state == CameraEnvironmentState::Interior && camera_env.obstruction_hold_s > 0.0 {
+        limited = limited.min(camera.collision_limited_distance);
+    }
+
+    camera.collision_limited_distance = limited;
 
     debug.focus = focus;
     debug.desired_position = desired_position;

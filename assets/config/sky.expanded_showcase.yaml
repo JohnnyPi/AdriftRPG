@@ -1,0 +1,17 @@
+﻿schema_version: 1
+id: sky.expanded_showcase
+
+zenith_color: [0.22, 0.42, 0.78]
+horizon_color: [0.58, 0.72, 0.88]
+mie_strength: 0.55
+sun_disc_radius: 0.022
+stars_enabled: false
+stars_density: 0.55
+clouds_enabled: true
+clouds_opacity: 0.55
+clouds_speed: 0.028
+clouds_direction_deg: 55.0
+clouds_altitude: 0.12
+night_zenith_color: [0.02, 0.04, 0.14]
+night_horizon_color: [0.06, 0.08, 0.16]
+shader: shaders/sky.wgsl

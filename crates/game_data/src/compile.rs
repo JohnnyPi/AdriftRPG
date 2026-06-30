@@ -41,6 +41,8 @@ pub struct CompiledPlayer {
     pub step_height_m: f32,
     pub ground_snap_m: f32,
     pub jump_height_m: f32,
+    pub jump_buffer_s: f32,
+    pub coyote_time_s: f32,
     pub gravity_mps2: f32,
 }
 
@@ -111,6 +113,11 @@ pub struct CompiledWorld {
     pub materials: StableId,
     pub water: StableId,
     pub lighting: StableId,
+    pub sky: Option<StableId>,
+    pub landmarks: Option<StableId>,
+    pub structures: Vec<StableId>,
+    pub ocean_extent_m: Option<f32>,
+    pub coord_offset: [f32; 3],
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -197,6 +204,8 @@ impl From<&PlayerDefinition> for CompiledPlayer {
             step_height_m: def.movement.step_height_m,
             ground_snap_m: def.movement.ground_snap_m,
             jump_height_m: def.movement.jump_height_m,
+            jump_buffer_s: def.movement.jump_buffer_s,
+            coyote_time_s: def.movement.coyote_time_s,
             gravity_mps2: def.gravity_mps2,
         }
     }
@@ -280,7 +289,22 @@ impl From<&WorldDefinition> for CompiledWorld {
             materials: def.materials.clone(),
             water: def.water.clone(),
             lighting: def.lighting.clone(),
+            sky: def.sky.clone(),
+            landmarks: def.landmarks.clone(),
+            structures: def.structures.clone(),
+            ocean_extent_m: def.ocean_extent_m,
+            coord_offset: def.coord_offset.unwrap_or([0.0, 0.0, 0.0]),
         }
+    }
+}
+
+impl CompiledWorld {
+    pub fn recipe_to_world(&self, position: [f32; 3]) -> [f32; 3] {
+        [
+            position[0] - self.coord_offset[0],
+            position[1] - self.coord_offset[1],
+            position[2] - self.coord_offset[2],
+        ]
     }
 }
 
@@ -336,6 +360,401 @@ impl From<&DebugDefinition> for CompiledDebug {
         Self {
             id: def.header.id.clone(),
             bindings: def.bindings.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompiledOptions {
+    pub id: StableId,
+    pub toggle_key: String,
+    pub default_tab: String,
+    pub stubs: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompiledPhysics {
+    pub id: StableId,
+    pub gravity_mps2: f32,
+    pub fixed_timestep_hz: u32,
+    pub maximum_substeps: u32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompiledRiver {
+    pub id: StableId,
+    pub source_region_center: [f32; 2],
+    pub source_region_radius_m: f32,
+    pub minimum_elevation_m: f32,
+    pub grid_spacing_m: f32,
+    pub direction_inertia: f32,
+    pub maximum_turn_deg: f32,
+    pub depression_repair_radius_cells: u32,
+    pub maximum_breach_depth_m: f32,
+    pub source_width_m: f32,
+    pub mouth_width_m: f32,
+    pub source_depth_m: f32,
+    pub mouth_depth_m: f32,
+    pub bank_width_m: f32,
+    pub minimum_depth_m: f32,
+    pub maximum_segment_slope: f32,
+    pub waterfall_threshold_m: f32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompiledHydrology {
+    pub id: StableId,
+    pub kind: String,
+    pub elevation_m: f32,
+    pub depth_m: Option<f32>,
+    pub center: Option<[f32; 2]>,
+    pub radius_m: Option<f32>,
+}
+
+impl From<&OptionsDefinition> for CompiledOptions {
+    fn from(def: &OptionsDefinition) -> Self {
+        Self {
+            id: def.header.id.clone(),
+            toggle_key: def.panel.toggle_key.clone(),
+            default_tab: def.panel.default_tab.clone(),
+            stubs: def.stubs.clone(),
+        }
+    }
+}
+
+impl From<&PhysicsDefinition> for CompiledPhysics {
+    fn from(def: &PhysicsDefinition) -> Self {
+        Self {
+            id: def.header.id.clone(),
+            gravity_mps2: def.gravity_mps2,
+            fixed_timestep_hz: def.fixed_timestep_hz,
+            maximum_substeps: def.maximum_substeps,
+        }
+    }
+}
+
+impl From<&RiverDefinition> for CompiledRiver {
+    fn from(def: &RiverDefinition) -> Self {
+        Self {
+            id: def.header.id.clone(),
+            source_region_center: def.source.region_center,
+            source_region_radius_m: def.source.region_radius_m,
+            minimum_elevation_m: def.source.minimum_elevation_m,
+            grid_spacing_m: def.routing.grid_spacing_m,
+            direction_inertia: def.routing.direction_inertia,
+            maximum_turn_deg: def.routing.maximum_turn_deg,
+            depression_repair_radius_cells: def.routing.depression_repair_radius_cells,
+            maximum_breach_depth_m: def.routing.maximum_breach_depth_m,
+            source_width_m: def.channel.source_width_m,
+            mouth_width_m: def.channel.mouth_width_m,
+            source_depth_m: def.channel.source_depth_m,
+            mouth_depth_m: def.channel.mouth_depth_m,
+            bank_width_m: def.channel.bank_width_m,
+            minimum_depth_m: def.water.minimum_depth_m,
+            maximum_segment_slope: def.water.maximum_segment_slope,
+            waterfall_threshold_m: def.water.waterfall_threshold_m,
+        }
+    }
+}
+
+impl From<&HydrologyDefinition> for CompiledHydrology {
+    fn from(def: &HydrologyDefinition) -> Self {
+        Self {
+            id: def.header.id.clone(),
+            kind: def.kind.clone(),
+            elevation_m: def.elevation_m,
+            depth_m: def.depth_m,
+            center: def.center,
+            radius_m: def.radius_m,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompiledAtmosphere {
+    pub id: StableId,
+    pub sun_azimuth_deg: f32,
+    pub sun_elevation_deg: f32,
+    pub sun_illuminance_lux: f32,
+    pub sun_color: [f32; 3],
+    pub moon_enabled: bool,
+    pub moon_azimuth_deg: f32,
+    pub moon_elevation_deg: f32,
+    pub moon_illuminance: f32,
+    pub moon_phase: f32,
+    pub moon_angular_radius: f32,
+    pub ambient_color: [f32; 3],
+    pub ambient_brightness: f32,
+    pub exposure_target: f32,
+    pub exposure_adaptation_speed: f32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompiledFog {
+    pub id: StableId,
+    pub distance_color: [f32; 3],
+    pub distance_start_m: f32,
+    pub distance_end_m: f32,
+    pub height_base_m: f32,
+    pub height_density: f32,
+    pub height_color: [f32; 3],
+    pub underwater_density: f32,
+    pub underwater_color: [f32; 3],
+    pub cave_density: f32,
+    pub cave_color: [f32; 3],
+    pub local_volumes: Vec<CompiledFogLocalVolume>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompiledFogLocalVolume {
+    pub center: [f32; 3],
+    pub half_extents: [f32; 3],
+    pub density: f32,
+    pub color: [f32; 3],
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompiledLandmarks {
+    pub id: StableId,
+    pub facts: Vec<CompiledLandmarkFact>,
+    pub route_signs: Vec<CompiledLandmarkSign>,
+    pub fog_volumes: Vec<CompiledFogLocalVolume>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompiledLandmarkFact {
+    pub tag: String,
+    pub position: [f32; 3],
+    pub label: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompiledLandmarkSign {
+    pub position: [f32; 3],
+    pub label: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompiledRoutes {
+    pub id: StableId,
+    pub routes: Vec<CompiledRoute>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompiledRoute {
+    pub id: String,
+    pub waypoints: Vec<[f32; 2]>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompiledStructure {
+    pub id: StableId,
+    pub anchor: [f32; 3],
+    pub yaw_deg: f32,
+    pub flatten_radius_m: f32,
+    pub parts: Vec<CompiledStructurePart>,
+    pub collision: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompiledStructurePart {
+    pub kind: String,
+    pub size: Option<[f32; 3]>,
+    pub radius: Option<f32>,
+    pub height: Option<f32>,
+    pub offset: [f32; 3],
+    pub material: Option<String>,
+    pub tag: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompiledSky {
+    pub id: StableId,
+    pub zenith_color: [f32; 3],
+    pub horizon_color: [f32; 3],
+    pub mie_strength: f32,
+    pub sun_disc_radius: f32,
+    pub stars_enabled: bool,
+    pub stars_density: f32,
+    pub clouds_enabled: bool,
+    pub clouds_opacity: f32,
+    pub clouds_speed: f32,
+    pub clouds_direction_deg: f32,
+    pub clouds_altitude: f32,
+    pub night_zenith_color: [f32; 3],
+    pub night_horizon_color: [f32; 3],
+    pub shader: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompiledWaterBodyMaterial {
+    pub id: StableId,
+    pub shallow_color: [f32; 3],
+    pub deep_color: [f32; 3],
+    pub transparency: f32,
+    pub wave_amplitude: f32,
+    pub wave_speed: f32,
+    pub flow_tint: Option<[f32; 3]>,
+}
+
+impl From<&WaterBodyMaterialDefinition> for CompiledWaterBodyMaterial {
+    fn from(def: &WaterBodyMaterialDefinition) -> Self {
+        Self {
+            id: def.header.id.clone(),
+            shallow_color: def.material.shallow_color,
+            deep_color: def.material.deep_color,
+            transparency: def.material.transparency,
+            wave_amplitude: def.material.wave_amplitude,
+            wave_speed: def.material.wave_speed,
+            flow_tint: def.material.flow_tint,
+        }
+    }
+}
+
+impl From<&AtmosphereDefinition> for CompiledAtmosphere {
+    fn from(def: &AtmosphereDefinition) -> Self {
+        Self {
+            id: def.header.id.clone(),
+            sun_azimuth_deg: def.sun.azimuth_deg,
+            sun_elevation_deg: def.sun.elevation_deg,
+            sun_illuminance_lux: def.sun.illuminance_lux,
+            sun_color: def.sun.color,
+            moon_enabled: def.moon.enabled,
+            moon_azimuth_deg: def.moon.azimuth_deg,
+            moon_elevation_deg: def.moon.elevation_deg,
+            moon_illuminance: def.moon.illuminance,
+            moon_phase: def.moon.phase,
+            moon_angular_radius: def.moon.angular_radius,
+            ambient_color: def.ambient.color,
+            ambient_brightness: def.ambient.brightness,
+            exposure_target: def.exposure.target,
+            exposure_adaptation_speed: def.exposure.adaptation_speed,
+        }
+    }
+}
+
+impl From<&FogDefinition> for CompiledFog {
+    fn from(def: &FogDefinition) -> Self {
+        Self {
+            id: def.header.id.clone(),
+            distance_color: def.distance.color,
+            distance_start_m: def.distance.start_m,
+            distance_end_m: def.distance.end_m,
+            height_base_m: def.height.base_height_m,
+            height_density: def.height.density,
+            height_color: def.height.color,
+            underwater_density: def.underwater.density,
+            underwater_color: def.underwater.color,
+            cave_density: def.cave.density,
+            cave_color: def.cave.color,
+            local_volumes: def
+                .local_volumes
+                .iter()
+                .map(|v| CompiledFogLocalVolume {
+                    center: v.center,
+                    half_extents: v.half_extents,
+                    density: v.density,
+                    color: v.color,
+                })
+                .collect(),
+        }
+    }
+}
+
+impl From<&SkyDefinition> for CompiledSky {
+    fn from(def: &SkyDefinition) -> Self {
+        Self {
+            id: def.header.id.clone(),
+            zenith_color: def.zenith_color,
+            horizon_color: def.horizon_color,
+            mie_strength: def.mie_strength,
+            sun_disc_radius: def.sun_disc_radius,
+            stars_enabled: def.stars_enabled,
+            stars_density: def.stars_density,
+            clouds_enabled: def.clouds_enabled,
+            clouds_opacity: def.clouds_opacity,
+            clouds_speed: def.clouds_speed,
+            clouds_direction_deg: def.clouds_direction_deg,
+            clouds_altitude: def.clouds_altitude,
+            night_zenith_color: def.night_zenith_color,
+            night_horizon_color: def.night_horizon_color,
+            shader: def.shader.clone(),
+        }
+    }
+}
+
+impl From<&LandmarksDefinition> for CompiledLandmarks {
+    fn from(def: &LandmarksDefinition) -> Self {
+        Self {
+            id: def.header.id.clone(),
+            facts: def
+                .facts
+                .iter()
+                .map(|f| CompiledLandmarkFact {
+                    tag: f.tag.clone(),
+                    position: f.position,
+                    label: f.label.clone(),
+                })
+                .collect(),
+            route_signs: def
+                .route_signs
+                .iter()
+                .map(|s| CompiledLandmarkSign {
+                    position: s.position,
+                    label: s.label.clone(),
+                })
+                .collect(),
+            fog_volumes: def
+                .fog_volumes
+                .iter()
+                .map(|v| CompiledFogLocalVolume {
+                    center: v.center,
+                    half_extents: v.half_extents,
+                    density: v.density,
+                    color: v.color,
+                })
+                .collect(),
+        }
+    }
+}
+
+impl From<&RoutesDefinition> for CompiledRoutes {
+    fn from(def: &RoutesDefinition) -> Self {
+        Self {
+            id: def.header.id.clone(),
+            routes: def
+                .routes
+                .iter()
+                .map(|r| CompiledRoute {
+                    id: r.id.clone(),
+                    waypoints: r.waypoints.clone(),
+                })
+                .collect(),
+        }
+    }
+}
+
+impl From<&StructureDefinition> for CompiledStructure {
+    fn from(def: &StructureDefinition) -> Self {
+        Self {
+            id: def.header.id.clone(),
+            anchor: def.placement.anchor,
+            yaw_deg: def.placement.yaw_deg,
+            flatten_radius_m: def.placement.flatten_radius_m,
+            parts: def
+                .parts
+                .iter()
+                .map(|p| CompiledStructurePart {
+                    kind: p.kind.clone(),
+                    size: p.size,
+                    radius: p.radius,
+                    height: p.height,
+                    offset: p.offset,
+                    material: p.material.clone(),
+                    tag: p.tag.clone(),
+                })
+                .collect(),
+            collision: def.collision.clone(),
         }
     }
 }

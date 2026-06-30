@@ -1,0 +1,30 @@
+﻿schema_version: 1
+id: river.demo_upland
+
+source:
+  region_center: [82.0, 196.0]
+  region_radius_m: 24.0
+  minimum_elevation_m: 24.0
+
+destination:
+  type: nearest_water_body
+  required_kind: sea
+
+routing:
+  grid_spacing_m: 2.0
+  direction_inertia: 0.65
+  maximum_turn_deg: 80.0
+  depression_repair_radius_cells: 12
+  maximum_breach_depth_m: 3.0
+
+channel:
+  source_width_m: 1.8
+  mouth_width_m: 6.5
+  source_depth_m: 0.4
+  mouth_depth_m: 1.6
+  bank_width_m: 3.5
+
+water:
+  minimum_depth_m: 0.25
+  maximum_segment_slope: 0.08
+  waterfall_threshold_m: 2.5

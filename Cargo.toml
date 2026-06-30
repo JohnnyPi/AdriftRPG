@@ -15,10 +15,22 @@ name = "rpg_adrift"
 version = "0.1.0"
 edition = "2024"
 publish = false
+default-run = "rpg_adrift"
+
+[[bin]]
+name = "rpg_adrift"
+path = "src/main.rs"
+
+[[bin]]
+name = "profile_vertical_slice"
+path = "tools/profile_vertical_slice.rs"
 
 [dependencies]
 game_bevy = { path = "crates/game_bevy" }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+terrain_generation = { path = "crates/terrain_generation" }
+terrain_meshing = { path = "crates/terrain_meshing" }
+voxel_core = { path = "crates/voxel_core" }
 
 [profile.dev]
 opt-level = 1

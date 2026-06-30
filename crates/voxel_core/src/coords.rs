@@ -1,7 +1,9 @@
 use std::ops::{Div, Rem};
 
+use serde::{Deserialize, Serialize};
+
 /// Chunk position in chunk-space coordinates. May be negative.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct ChunkCoord {
     pub x: i32,
     pub y: i32,

@@ -48,6 +48,10 @@ impl ValueNoise {
         y0v + (y1v - y0v) * tz
     }
 
+    pub fn fbm_2d(&self, x: f32, z: f32, octaves: u32) -> f32 {
+        self.fbm(x, 0.0, z, octaves, 2.0, 0.5) * 2.0 - 1.0
+    }
+
     pub fn fbm(&self, x: f32, y: f32, z: f32, octaves: u32, lacunarity: f32, gain: f32) -> f32 {
         let mut sum = 0.0;
         let mut amp = 1.0;

@@ -3,9 +3,11 @@ use std::collections::BTreeMap;
 use shared::{DataError, DataResult, StableId};
 
 use crate::compile::{
-    CompiledApp, CompiledBiomes, CompiledCamera, CompiledCave, CompiledDebug, CompiledLighting,
-    CompiledPerformance, CompiledPlayer, CompiledTerrain, CompiledTerrainMaterials,
-    CompiledVegetation, CompiledWater, CompiledWorld,
+    CompiledApp, CompiledAtmosphere, CompiledBiomes, CompiledCamera, CompiledCave, CompiledDebug,
+    CompiledFog, CompiledHydrology, CompiledLandmarks, CompiledLighting, CompiledOptions,
+    CompiledPerformance, CompiledPhysics, CompiledPlayer, CompiledRiver, CompiledRoutes,
+    CompiledSky, CompiledStructure, CompiledTerrain, CompiledTerrainMaterials, CompiledVegetation,
+    CompiledWater, CompiledWaterBodyMaterial, CompiledWorld,
 };
 use crate::definitions::RawDefinition;
 use crate::hash::registry_hash;
@@ -27,6 +29,17 @@ pub struct ConfigRegistry {
     pub materials: BTreeMap<StableId, CompiledTerrainMaterials>,
     pub vegetation: BTreeMap<StableId, CompiledVegetation>,
     pub debug: BTreeMap<StableId, CompiledDebug>,
+    pub options: BTreeMap<StableId, CompiledOptions>,
+    pub physics: BTreeMap<StableId, CompiledPhysics>,
+    pub rivers: BTreeMap<StableId, CompiledRiver>,
+    pub hydrology: BTreeMap<StableId, CompiledHydrology>,
+    pub water_body_materials: BTreeMap<StableId, CompiledWaterBodyMaterial>,
+    pub atmosphere: BTreeMap<StableId, CompiledAtmosphere>,
+    pub fog: BTreeMap<StableId, CompiledFog>,
+    pub sky: BTreeMap<StableId, CompiledSky>,
+    pub landmarks: BTreeMap<StableId, CompiledLandmarks>,
+    pub routes: BTreeMap<StableId, CompiledRoutes>,
+    pub structures: BTreeMap<StableId, CompiledStructure>,
     pub hash: String,
 }
 
@@ -47,6 +60,17 @@ impl ConfigRegistry {
         let mut materials = BTreeMap::new();
         let mut vegetation = BTreeMap::new();
         let mut debug = BTreeMap::new();
+        let mut options = BTreeMap::new();
+        let mut physics = BTreeMap::new();
+        let mut rivers = BTreeMap::new();
+        let mut hydrology = BTreeMap::new();
+        let mut water_body_materials = BTreeMap::new();
+        let mut atmosphere = BTreeMap::new();
+        let mut fog = BTreeMap::new();
+        let mut sky = BTreeMap::new();
+        let mut landmarks = BTreeMap::new();
+        let mut routes = BTreeMap::new();
+        let mut structures = BTreeMap::new();
         let mut app: Option<CompiledApp> = None;
 
         for definition in &definitions {
@@ -90,6 +114,39 @@ impl ConfigRegistry {
                 RawDefinition::Debug(def) => {
                     debug.insert(def.header.id.clone(), def.into());
                 }
+                RawDefinition::Options(def) => {
+                    options.insert(def.header.id.clone(), def.into());
+                }
+                RawDefinition::Physics(def) => {
+                    physics.insert(def.header.id.clone(), def.into());
+                }
+                RawDefinition::River(def) => {
+                    rivers.insert(def.header.id.clone(), def.into());
+                }
+                RawDefinition::Hydrology(def) => {
+                    hydrology.insert(def.header.id.clone(), def.into());
+                }
+                RawDefinition::WaterBodyMaterial(def) => {
+                    water_body_materials.insert(def.header.id.clone(), def.into());
+                }
+                RawDefinition::Atmosphere(def) => {
+                    atmosphere.insert(def.header.id.clone(), def.into());
+                }
+                RawDefinition::Fog(def) => {
+                    fog.insert(def.header.id.clone(), def.into());
+                }
+                RawDefinition::Sky(def) => {
+                    sky.insert(def.header.id.clone(), def.into());
+                }
+                RawDefinition::Landmarks(def) => {
+                    landmarks.insert(def.header.id.clone(), def.into());
+                }
+                RawDefinition::Routes(def) => {
+                    routes.insert(def.header.id.clone(), def.into());
+                }
+                RawDefinition::Structure(def) => {
+                    structures.insert(def.header.id.clone(), def.into());
+                }
             }
         }
 
@@ -114,6 +171,17 @@ impl ConfigRegistry {
             materials,
             vegetation,
             debug,
+            options,
+            physics,
+            rivers,
+            hydrology,
+            water_body_materials,
+            atmosphere,
+            fog,
+            sky,
+            landmarks,
+            routes,
+            structures,
             hash: String::new(),
         };
         registry.hash = registry_hash(&registry);
@@ -125,6 +193,116 @@ impl ConfigRegistry {
             reference: self.app.world.clone(),
             context: "active world".to_string(),
         })
+    }
+
+    pub fn world_by_id(&self, id: &StableId) -> DataResult<&CompiledWorld> {
+        self.worlds.get(id).ok_or_else(|| DataError::UnknownReference {
+            reference: id.clone(),
+            context: "world profile".to_string(),
+        })
+    }
+
+    pub fn effective_world<'a>(&'a self, override_id: Option<&StableId>) -> DataResult<&'a CompiledWorld> {
+        if let Some(id) = override_id {
+            self.world_by_id(id)
+        } else {
+            self.active_world()
+        }
+    }
+
+    pub fn active_options(&self) -> DataResult<&CompiledOptions> {
+        self.options
+            .get(&StableId::new("options.default"))
+            .or_else(|| self.options.values().next())
+            .ok_or_else(|| DataError::UnknownReference {
+                reference: StableId::new("options.default"),
+                context: "active options".to_string(),
+            })
+    }
+
+    pub fn active_physics(&self) -> DataResult<&CompiledPhysics> {
+        self.physics
+            .get(&StableId::new("physics.default"))
+            .or_else(|| self.physics.values().next())
+            .ok_or_else(|| DataError::UnknownReference {
+                reference: StableId::new("physics.default"),
+                context: "active physics".to_string(),
+            })
+    }
+
+    pub fn demo_river(&self) -> Option<&CompiledRiver> {
+        self.rivers
+            .get(&StableId::new("river.demo_upland"))
+            .or_else(|| self.rivers.values().next())
+    }
+
+    pub fn upland_pool_hydrology(&self) -> Option<&CompiledHydrology> {
+        self.hydrology
+            .values()
+            .find(|h| h.kind == "lake")
+            .or_else(|| self.hydrology.values().next())
+    }
+
+    pub fn water_body_material(&self, id: &StableId) -> Option<&CompiledWaterBodyMaterial> {
+        self.water_body_materials.get(id)
+    }
+
+    pub fn active_atmosphere(&self) -> Option<&CompiledAtmosphere> {
+        self.atmosphere
+            .get(&StableId::new("atmosphere.default"))
+            .or_else(|| self.atmosphere.values().next())
+    }
+
+    pub fn active_fog(&self) -> Option<&CompiledFog> {
+        self.fog
+            .get(&StableId::new("fog.default"))
+            .or_else(|| self.fog.values().next())
+    }
+
+    pub fn active_sky(&self) -> Option<&CompiledSky> {
+        self.sky
+            .get(&StableId::new("sky.default"))
+            .or_else(|| self.sky.values().next())
+    }
+
+    pub fn effective_sky(&self, world: &CompiledWorld) -> Option<&CompiledSky> {
+        world
+            .sky
+            .as_ref()
+            .and_then(|id| self.sky.get(id))
+            .or_else(|| self.active_sky())
+    }
+
+    pub fn effective_landmarks(&self, world: &CompiledWorld) -> Option<&CompiledLandmarks> {
+        world
+            .landmarks
+            .as_ref()
+            .and_then(|id| self.landmarks.get(id))
+    }
+
+    pub fn world_structures(&self, world: &CompiledWorld) -> Vec<&CompiledStructure> {
+        world
+            .structures
+            .iter()
+            .filter_map(|id| self.structures.get(id))
+            .collect()
+    }
+
+    pub fn world_ocean_extent_m(&self, world: &CompiledWorld) -> f32 {
+        world.ocean_extent_m.unwrap_or_else(|| {
+            let cells = world.chunk_cells[0] as f32 * world.cell_size_m;
+            let extent = world.world_extent_chunks[0].max(world.world_extent_chunks[2]) as f32;
+            extent * cells + 32.0
+        })
+    }
+
+    pub fn routes_for_world(&self, world: &CompiledWorld) -> Option<&CompiledRoutes> {
+        let id = StableId::new("routes.expanded_slice");
+        if world.id == id || world.id.as_str() == "world.expanded_slice" {
+            self.routes.get(&id).or_else(|| self.routes.values().next())
+        } else {
+            None
+        }
     }
 
     pub fn active_player(&self) -> DataResult<&CompiledPlayer> {
@@ -286,5 +464,30 @@ mod tests {
         let first = load_registry_from_directory(workspace_assets()).expect("first load");
         let second = load_registry_from_directory(workspace_assets()).expect("second load");
         assert_eq!(first.hash, second.hash);
+    }
+
+    #[test]
+    fn expanded_showcase_sky_enables_clouds() {
+        let registry = load_registry_from_directory(workspace_assets()).expect("registry");
+        let sky = registry
+            .sky
+            .get(&shared::StableId::new("sky.expanded_showcase"))
+            .expect("expanded sky");
+        assert!(sky.clouds_enabled);
+    }
+
+    #[test]
+    fn atmosphere_fog_sky_yaml_are_compiled() {
+        let registry = load_registry_from_directory(workspace_assets()).expect("registry");
+        let atmo = registry.active_atmosphere().expect("atmosphere");
+        assert_eq!(atmo.id.as_str(), "atmosphere.default");
+        assert!(atmo.sun_illuminance_lux > 0.0);
+        let fog = registry.active_fog().expect("fog");
+        assert!(fog.distance_end_m > fog.distance_start_m);
+        let sky = registry.active_sky().expect("sky");
+        assert!(sky.shader.contains("sky.wgsl"));
+        assert!(sky.night_zenith_color[2] > sky.night_zenith_color[0]);
+        assert!(!atmo.moon_enabled);
+        assert!(atmo.moon_angular_radius > 0.0);
     }
 }

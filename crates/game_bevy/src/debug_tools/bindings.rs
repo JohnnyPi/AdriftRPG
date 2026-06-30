@@ -14,6 +14,9 @@ pub struct DebugKeyBindings {
     pub regen: KeyCode,
     pub next_seed: KeyCode,
     pub freeze_pipeline: KeyCode,
+    pub subtract: KeyCode,
+    pub add: KeyCode,
+    pub paint: KeyCode,
 }
 
 impl Default for DebugKeyBindings {
@@ -48,6 +51,9 @@ impl DebugKeyBindings {
             regen: parse_key(&bindings.regen).unwrap_or(KeyCode::F8),
             next_seed: parse_key(&bindings.next_seed).unwrap_or(KeyCode::F9),
             freeze_pipeline: parse_key(&bindings.freeze_pipeline).unwrap_or(KeyCode::F10),
+            subtract: parse_key(&bindings.subtract).unwrap_or(KeyCode::Digit1),
+            add: parse_key(&bindings.add).unwrap_or(KeyCode::Digit2),
+            paint: parse_key(&bindings.paint).unwrap_or(KeyCode::Digit3),
         }
     }
 }
@@ -65,6 +71,9 @@ fn default_bindings() -> DebugBindingsDefinition {
         regen: "F8".to_string(),
         next_seed: "F9".to_string(),
         freeze_pipeline: "F10".to_string(),
+        subtract: "Digit1".to_string(),
+        add: "Digit2".to_string(),
+        paint: "Digit3".to_string(),
     }
 }
 

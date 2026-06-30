@@ -3,6 +3,7 @@ use bevy::input::InputSystems;
 
 use crate::state::AppState;
 
+use super::environment;
 use super::collision::{resolve_camera_collision, update_camera_debug_input};
 use super::components::{CameraDebugSnapshot, CameraInputState};
 use super::debug::draw_camera_debug;
@@ -24,6 +25,7 @@ impl Plugin for ThirdPersonCameraPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CameraInputState>()
             .init_resource::<CameraDebugSnapshot>()
+            .init_resource::<environment::CameraEnvironment>()
             .configure_sets(
                 Update,
                 (
@@ -40,6 +42,12 @@ impl Plugin for ThirdPersonCameraPlugin {
                     .chain()
                     .after(InputSystems)
                     .run_if(in_state(AppState::Running)),
+            )
+            .add_systems(
+                Update,
+                environment::update_camera_environment
+                    .in_set(CameraSystemSet::Follow)
+                    .after(update_camera_focus),
             )
             .add_systems(
                 Update,

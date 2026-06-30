@@ -22,6 +22,8 @@ pub struct TerrainParams {
     pub props2: Vec4,
     pub props3: Vec4,
     pub props4: Vec4,
+    /// `.x` = debug mode (0 = normal, 1 = constant green diagnostic)
+    pub debug: Vec4,
 }
 
 impl TerrainParams {
@@ -56,6 +58,10 @@ impl Material for TerrainTriplanarMaterial {
     fn fragment_shader() -> ShaderRef {
         "shaders/terrain_triplanar.wgsl".into()
     }
+
+    fn alpha_mode(&self) -> AlphaMode {
+        AlphaMode::Opaque
+    }
 }
 
 impl TerrainTriplanarMaterial {
@@ -72,6 +78,7 @@ impl TerrainTriplanarMaterial {
                 props2: Vec4::new(0.25, 0.85, 0.0, 0.0),
                 props3: Vec4::new(0.2, 0.95, 0.0, 0.0),
                 props4: Vec4::new(0.25, 0.4, 0.0, 0.0),
+                debug: Vec4::ZERO,
             },
         }
     }

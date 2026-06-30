@@ -25,6 +25,14 @@ impl TerrainPipelineMetrics {
     pub fn record_upload_ms(&mut self, ms: f32) {
         self.last_upload_ms = ms;
     }
+
+    pub fn within_vs_budget(&self, chunk_count: usize) -> bool {
+        crate::performance::terrain_pipeline_within_budget(
+            self.last_density_ms,
+            self.last_mesh_ms,
+            chunk_count,
+        )
+    }
 }
 
 /// Overrides the procedural world seed (F9 increments, F8 keeps current).

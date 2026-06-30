@@ -15,6 +15,7 @@ struct TerrainParams {
     props2: vec4<f32>,
     props3: vec4<f32>,
     props4: vec4<f32>,
+    debug: vec4<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0)
@@ -27,16 +28,6 @@ fn terrain_color(idx: u32) -> vec4<f32> {
         case 2u: { return params.color2; }
         case 3u: { return params.color3; }
         default: { return params.color4; }
-    }
-}
-
-fn terrain_props(idx: u32) -> vec4<f32> {
-    switch idx {
-        case 0u: { return params.props0; }
-        case 1u: { return params.props1; }
-        case 2u: { return params.props2; }
-        case 3u: { return params.props3; }
-        default: { return params.props4; }
     }
 }
 
@@ -58,22 +49,8 @@ fn vertex(vertex: Vertex) -> VertexOutput {
     return out;
 }
 
-fn triplanar_weights(normal: vec3<f32>) -> vec3<f32> {
-    let blending = abs(normal);
-    let b = blending / (blending.x + blending.y + blending.z + 0.0001);
-    return b * b;
-}
-
-fn sample_color(id: u32, p: vec3<f32>, normal: vec3<f32>, scale: f32) -> vec3<f32> {
-    let w = triplanar_weights(normal);
-    let base = terrain_color(id).rgb;
-    let n = p * scale;
-    let tint = vec3<f32>(
-        sin(n.x) * 0.04 + cos(n.z) * 0.03,
-        sin(n.y) * 0.02,
-        cos(n.x + n.z) * 0.03,
-    );
-    return base + tint * w;
+fn sample_color(id: u32) -> vec3<f32> {
+    return terrain_color(id).rgb;
 }
 
 @fragment
@@ -81,27 +58,37 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 #ifdef VERTEX_UVS_B
     let ids = vec4<f32>(in.uv.x, in.uv.y, in.uv_b.x, in.uv_b.y);
 #else
+#ifdef VERTEX_UVS_A
     let ids = vec4<f32>(in.uv.x, in.uv.y, 0.0, 0.0);
+#else
+    let ids = vec4<f32>(0.0, 0.0, 0.0, 0.0);
 #endif
+#endif
+#ifdef VERTEX_COLORS
     let weights = in.color;
-    let normal = normalize(in.world_normal);
-    let p = in.world_position.xyz;
+#else
+    let weights = vec4<f32>(1.0, 0.0, 0.0, 0.0);
+#endif
 
     var color = vec3<f32>(0.0);
-    var rough = 0.85;
     for (var i = 0u; i < 4u; i = i + 1u) {
         let id = u32(ids[i] + 0.5);
         let w = weights[i];
         if w > 0.001 {
-            let idx = min(id, 4u);
-            let props = terrain_props(idx);
-            color += sample_color(idx, p, normal, props.x) * w;
-            rough += props.y * w;
+            color += sample_color(min(id, 4u)) * w;
         }
     }
 
-    let slope = 1.0 - abs(normal.y);
-    color = mix(color, params.color2.rgb, slope * 0.35);
+    let weight_sum = weights.x + weights.y + weights.z + weights.w;
+    if weight_sum < 0.001 {
+        let id = u32(ids.x + 0.5);
+        color = terrain_color(min(id, 4u)).rgb;
+    }
+
+    let debug_mode = u32(params.debug.x + 0.5);
+    if debug_mode == 1u {
+        return vec4<f32>(0.2, 0.7, 0.25, 1.0);
+    }
 
     return vec4<f32>(color, 1.0);
 }

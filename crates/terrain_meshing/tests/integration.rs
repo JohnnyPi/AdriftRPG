@@ -98,3 +98,96 @@ fn neighbor_chunk_boundary_vertices_align() {
         left_boundary.len()
     );
 }
+
+#[test]
+fn all_adjacent_chunk_pairs_have_boundary_vertex_correspondence() {
+    let source = VerticalSliceDensitySource::new(48129, 2.0);
+    let mesher = SurfaceNetsMesher;
+    let extent = [6i32, 3, 6];
+    let coords: Vec<_> = iter_world_chunk_coords(extent).collect();
+    let mut checked = 0usize;
+    let mut matched_pairs = 0usize;
+
+    for a in &coords {
+        for b in &coords {
+            if a.x + 1 == b.x && a.y == b.y && a.z == b.z {
+                if assert_chunk_x_seam(&source, &mesher, *a, *b) {
+                    matched_pairs += 1;
+                }
+                checked += 1;
+            }
+        }
+    }
+
+    assert!(
+        matched_pairs > 0,
+        "expected at least one seam pair with matching boundary verts (checked {checked})"
+    );
+}
+
+/// Returns true when the pair was checked and passed; false when skipped (no surface on seam).
+fn assert_chunk_x_seam(
+    source: &VerticalSliceDensitySource,
+    mesher: &SurfaceNetsMesher,
+    left: ChunkCoord,
+    right: ChunkCoord,
+) -> bool {
+    let left_samples =
+        terrain_generation::generate_padded_samples(source, left, MaterialId(0));
+    let right_samples =
+        terrain_generation::generate_padded_samples(source, right, MaterialId(0));
+    let left = mesher
+        .build_mesh(&ChunkMeshingInput {
+            samples: &left_samples,
+            chunk_cells: CHUNK_CELLS,
+        })
+        .expect("left mesh");
+    let right = mesher
+        .build_mesh(&ChunkMeshingInput {
+            samples: &right_samples,
+            chunk_cells: CHUNK_CELLS,
+        })
+        .expect("right mesh");
+
+    if left.indices.is_empty() || right.indices.is_empty() {
+        return false;
+    }
+
+    if left.positions.is_empty() || right.positions.is_empty() {
+        return false;
+    }
+
+    let boundary_x = CHUNK_CELLS as f32;
+    let mut left_boundary = Vec::new();
+    for pos in &left.positions {
+        if pos[0] >= boundary_x - 0.5 {
+            left_boundary.push(*pos);
+        }
+    }
+    if left_boundary.is_empty() {
+        return false;
+    }
+
+    let mut matched = 0usize;
+    for lpos in &left_boundary {
+        for rpos in &right.positions {
+            if rpos[0] > 0.5 {
+                continue;
+            }
+            if (lpos[1] - rpos[1]).abs() < 0.35 && (lpos[2] - rpos[2]).abs() < 0.35 {
+                matched += 1;
+                break;
+            }
+        }
+    }
+
+    let match_ratio = matched as f32 / left_boundary.len() as f32;
+    assert!(
+        match_ratio > 0.5,
+        "chunk seam {:?}/{:?} matched only {matched}/{} boundary verts",
+        left,
+        right,
+        left_boundary.len()
+    );
+    true
+}

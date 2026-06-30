@@ -51,7 +51,7 @@ fn initial_load(
             status.last_error = None;
             commands.insert_resource(ConfigRegistryResource(registry));
             commands.insert_resource(YamlWatcher::new(&status.assets_root));
-            next_state.set(AppState::Running);
+            next_state.set(AppState::MainMenu);
         }
         Err(error) => {
             let message = format_load_error(&error);

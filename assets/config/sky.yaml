@@ -1,0 +1,17 @@
+﻿schema_version: 1
+id: sky.default
+
+zenith_color: [0.25, 0.45, 0.75]
+horizon_color: [0.62, 0.74, 0.86]
+mie_strength: 0.5
+sun_disc_radius: 0.02
+stars_enabled: false
+stars_density: 0.55
+clouds_enabled: false
+clouds_opacity: 0.35
+clouds_speed: 0.015
+clouds_direction_deg: 45.0
+clouds_altitude: 0.22
+night_zenith_color: [0.02, 0.04, 0.14]
+night_horizon_color: [0.06, 0.08, 0.16]
+shader: shaders/sky.wgsl

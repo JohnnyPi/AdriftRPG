@@ -1,0 +1,6 @@
+﻿schema_version: 1
+id: physics.default
+
+gravity_mps2: 18.0
+fixed_timestep_hz: 60
+maximum_substeps: 4

@@ -4,6 +4,7 @@ mod debug;
 mod follow;
 mod input;
 mod orbit;
+mod environment;
 mod plugin;
 mod spawn;
 mod transform;
@@ -12,8 +13,8 @@ mod transform;
 mod tests;
 
 pub use components::{
-    CameraFollowTarget, CameraInputState, CameraPivot, CameraRig, CharacterFacing,
-    MainGameCamera, MmoCamera, PlayerInterpolation,
+    CameraDebugSnapshot, CameraFollowTarget, CameraInputState, CameraPivot, CameraRig,
+    CharacterFacing, MainGameCamera, MmoCamera, PlayerInterpolation,
 };
 pub use plugin::ThirdPersonCameraPlugin;
 pub use spawn::spawn_game_camera;

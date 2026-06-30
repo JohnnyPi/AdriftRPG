@@ -1,0 +1,23 @@
+﻿schema_version: 1
+id: world.expanded_slice
+
+seed: 48129
+
+voxel:
+  cell_size_m: 1.0
+
+chunks:
+  cells: [16, 16, 16]
+  world_extent: [16, 6, 16]
+
+terrain: terrain.expanded_slice
+biomes: biomes.vertical_slice
+materials: materials.vertical_slice
+water: water.tropical_shallow
+lighting: lighting.late_morning
+sky: sky.expanded_showcase
+landmarks: landmarks.expanded_slice
+structures:
+  - structure.coastal_fort
+ocean_extent_m: 288.0
+coord_offset: [128.0, 0.0, 128.0]

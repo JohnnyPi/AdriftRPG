@@ -1,9 +1,11 @@
 //! Surface Nets and alternative terrain meshers. No Bevy dependency.
 
+mod dual_contouring;
 mod surface_nets;
 
 use voxel_core::TerrainSample;
 
+pub use dual_contouring::DualContouringMesher;
 pub use surface_nets::SurfaceNetsMesher;
 
 #[derive(Clone, Debug, Default)]

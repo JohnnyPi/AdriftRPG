@@ -5,9 +5,9 @@ orbit:
   default_distance: 8.0
   minimum_distance: 2.2
   maximum_distance: 16.0
-  default_pitch_degrees: -28.0
-  minimum_pitch_degrees: -65.0
-  maximum_pitch_degrees: -8.0
+  default_pitch_degrees: -16.0
+  minimum_pitch_degrees: -74.0
+  maximum_pitch_degrees: 63.0
   mouse_sensitivity_x: 0.0035
   mouse_sensitivity_y: 0.0030
   invert_y: false

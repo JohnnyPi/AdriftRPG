@@ -15,5 +15,7 @@ movement:
   step_height_m: 0.45
   ground_snap_m: 0.28
   jump_height_m: 1.15
+  jump_buffer_s: 0.12
+  coyote_time_s: 0.1
 
 gravity_mps2: 18.0

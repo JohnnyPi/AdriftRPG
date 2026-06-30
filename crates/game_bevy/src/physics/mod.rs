@@ -1,18 +1,29 @@
 use bevy::prelude::*;
 use physics_bridge::{
     CharacterController, CharacterControllerBundle, CharacterControllerPlugin,
-    CharacterPhysicsSystems, GroundedState, LinearVelocity, PhysicsBridgePlugin,
+    CharacterPhysicsSystems, GroundedState, LinearVelocity, PhysicsBridgePlugin, player_layers,
 };
+use avian3d::prelude::CollisionLayers;
 use game_data::CompiledPlayer;
+
+mod props;
+mod water_physics;
+
+pub use props::DynamicPropPlugin;
+pub use water_physics::WaterPhysicsPlugin;
 
 use crate::camera::{
     camera_forward_xz, camera_right_xz, CameraInputState, CharacterFacing, MmoCamera,
     PlayerInterpolation,
 };
 use crate::data::ConfigRegistryResource;
-use crate::player::{Player, PlayerCapsuleVisual, PlayerMovementState};
+use crate::player::{CharacterMotorState, MovementIntent, MovementSpeed, PlayerFacingMode};
+use crate::player::{
+    classify_locomotion, resolve_facing_yaw, Player, PlayerCapsuleVisual, PlayerMovementState,
+};
 use crate::state::AppState;
 use crate::terrain::{ChunkState, TerrainPipelineState};
+use crate::ui::MovementTweaks;
 use voxel_core::ChunkCoord;
 
 pub struct GamePhysicsPlugin;
@@ -30,11 +41,12 @@ pub struct PlayerMoveIntent {
     pub direction: Vec3,
     pub sprinting: bool,
     pub jumping: bool,
+    pub jump_held: bool,
 }
 
 impl Plugin for GamePhysicsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((PhysicsBridgePlugin, CharacterControllerPlugin))
+        app.add_plugins((PhysicsBridgePlugin, CharacterControllerPlugin, DynamicPropPlugin, WaterPhysicsPlugin))
             .add_systems(
                 FixedUpdate,
                 (
@@ -42,6 +54,8 @@ impl Plugin for GamePhysicsPlugin {
                     hold_player_until_spawn_terrain,
                     gather_player_movement,
                     apply_character_movement,
+                    props::inherit_platform_velocity,
+                    water_physics::apply_shallow_water_movement,
                 )
                     .chain()
                     .before(CharacterPhysicsSystems)
@@ -51,6 +65,7 @@ impl Plugin for GamePhysicsPlugin {
                 FixedUpdate,
                 (
                     update_character_facing,
+                    enforce_water_depth,
                     snapshot_player_interpolation,
                 )
                     .chain()
@@ -88,7 +103,14 @@ pub fn attach_character_physics(player: &CompiledPlayer, entity: &mut EntityComm
         bundle.linear_velocity,
         bundle.collider,
         bundle.friction,
+        CollisionLayers::from(player_layers()),
+    ));
+    entity.insert((
+        MovementIntent::default(),
+        CharacterMotorState::default(),
+        PlayerFacingMode::default(),
         PlayerMoveIntent::default(),
+        crate::physics::water_physics::WetnessState::default(),
     ));
 }
 
@@ -135,12 +157,15 @@ fn gather_player_movement(
     keyboard: Res<ButtonInput<KeyCode>>,
     input_state: Res<CameraInputState>,
     cameras: Query<&MmoCamera>,
-    mut players: Query<&mut PlayerMoveIntent, (With<Player>, Without<AwaitingSpawnTerrain>)>,
+    mut players: Query<
+        (&mut PlayerMoveIntent, &mut MovementIntent),
+        (With<Player>, Without<AwaitingSpawnTerrain>),
+    >,
 ) {
     let Ok(camera) = cameras.single() else {
         return;
     };
-    let Ok(mut intent) = players.single_mut() else {
+    let Ok((mut intent, mut motor_intent)) = players.single_mut() else {
         return;
     };
 
@@ -174,64 +199,173 @@ fn gather_player_movement(
     let yaw = camera.intent_yaw();
     let forward = camera_forward_xz(yaw);
     let right = camera_right_xz(yaw);
-    intent.direction = (forward * axis.y + right * axis.x).normalize_or_zero();
+    let world_dir = (forward * axis.y + right * axis.x).normalize_or_zero();
+    intent.direction = Vec3::new(world_dir.x, 0.0, world_dir.z);
     intent.sprinting =
         keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight);
     intent.jumping = keyboard.just_pressed(KeyCode::Space);
+    intent.jump_held = keyboard.pressed(KeyCode::Space);
+
+    motor_intent.direction = axis;
+    motor_intent.requested_speed = if intent.sprinting {
+        MovementSpeed::Run
+    } else {
+        MovementSpeed::Walk
+    };
+    motor_intent.jump_pressed = intent.jumping;
+    motor_intent.jump_held = intent.jump_held;
 }
 
 fn apply_character_movement(
     time: Res<Time<Fixed>>,
     registry: Res<ConfigRegistryResource>,
-    intent: Query<&PlayerMoveIntent, (With<Player>, Without<AwaitingSpawnTerrain>)>,
+    tweaks: Res<MovementTweaks>,
+    cameras: Query<&MmoCamera>,
     mut players: Query<
         (
             &CharacterController,
             &GroundedState,
             &mut LinearVelocity,
             &mut PlayerMovementState,
+            &mut CharacterMotorState,
+            &MovementIntent,
         ),
         (With<Player>, Without<AwaitingSpawnTerrain>),
     >,
 ) {
-    let Ok(move_intent) = intent.single() else {
+    let Ok(camera) = cameras.single() else {
         return;
     };
-    let Ok((controller, grounded, mut velocity, mut movement)) = players.single_mut() else {
+    let Ok((controller, grounded, mut velocity, mut movement, mut motor, move_intent)) =
+        players.single_mut()
+    else {
         return;
     };
 
     let player = registry.0.active_player().expect("player config");
     let dt = time.delta_secs();
 
-    let target_speed = if move_intent.sprinting {
-        controller.run_speed
+    let walk_speed = if tweaks.use_overrides {
+        tweaks.walk_speed
     } else {
         controller.walk_speed
     };
-
-    let desired_velocity = Vec3::new(
-        move_intent.direction.x,
-        0.0,
-        move_intent.direction.z,
-    ) * target_speed;
-    let current_planar = Vec2::new(velocity.x, velocity.z);
-    let desired_planar = Vec2::new(desired_velocity.x, desired_velocity.z);
-
-    let accelerating = desired_planar.length_squared() > current_planar.length_squared();
-    let rate = if accelerating {
+    let run_speed = if tweaks.use_overrides {
+        tweaks.run_speed
+    } else {
+        controller.run_speed
+    };
+    let accel = if tweaks.use_overrides {
+        tweaks.acceleration
+    } else {
         player.acceleration_mps2
+    };
+    let decel = if tweaks.use_overrides {
+        tweaks.deceleration
     } else {
         player.deceleration_mps2
     };
+    let jump_buffer_s = if tweaks.use_overrides {
+        tweaks.jump_buffer_s
+    } else {
+        player.jump_buffer_s
+    };
+    let coyote_time_s = if tweaks.use_overrides {
+        tweaks.coyote_time_s
+    } else {
+        player.coyote_time_s
+    };
 
-    let new_planar = approach_vec2(current_planar, desired_planar, rate * dt);
+    let target_speed = match move_intent.requested_speed {
+        MovementSpeed::Run => run_speed,
+        MovementSpeed::Walk => walk_speed,
+    };
+
+    let yaw = camera.intent_yaw();
+    let forward = camera_forward_xz(yaw);
+    let right = camera_right_xz(yaw);
+    let world_dir = (forward * move_intent.direction.y + right * move_intent.direction.x).normalize_or_zero();
+    let mut desired_dir = Vec2::new(world_dir.x, world_dir.z);
+    if grounded.grounded && grounded.ground_normal.y < 0.99 {
+        let ground_normal = grounded.ground_normal;
+        let desired_3d = Vec3::new(desired_dir.x, 0.0, desired_dir.y);
+        let projected = desired_3d.reject_from(ground_normal).normalize_or_zero();
+        desired_dir = Vec2::new(projected.x, projected.z);
+    }
+
+    let desired_velocity = desired_dir * target_speed;
+    let current_planar = Vec2::new(velocity.x, velocity.z);
+
+    let accelerating = desired_velocity.length_squared() > current_planar.length_squared();
+    let rate = if accelerating { accel } else { decel };
+
+    let new_planar = approach_vec2(current_planar, desired_velocity, rate * dt);
     velocity.x = new_planar.x;
     velocity.z = new_planar.y;
     movement.planar_velocity = new_planar;
 
-    if move_intent.jumping && grounded.grounded {
+    if move_intent.jump_pressed {
+        movement.jump_buffer_remaining_s = jump_buffer_s;
+    } else {
+        movement.jump_buffer_remaining_s = (movement.jump_buffer_remaining_s - dt).max(0.0);
+    }
+
+    if grounded.grounded {
+        movement.coyote_remaining_s = coyote_time_s;
+    } else if movement.was_grounded {
+        movement.coyote_remaining_s = (movement.coyote_remaining_s - dt).max(0.0);
+    }
+
+    let can_jump = grounded.grounded || movement.coyote_remaining_s > 0.0;
+    if movement.jump_buffer_remaining_s > 0.0 && can_jump {
         velocity.y = controller.jump_speed;
+        movement.jump_buffer_remaining_s = 0.0;
+        movement.coyote_remaining_s = 0.0;
+    }
+
+    movement.was_grounded = grounded.grounded;
+
+    motor.velocity = velocity.0;
+    motor.grounded = grounded.grounded;
+    motor.ground_normal = grounded.ground_normal;
+    motor.current_slope = grounded
+        .ground_normal
+        .angle_between(Vec3::Y)
+        .to_degrees();
+    motor.locomotion_state = classify_locomotion(
+        grounded.grounded,
+        motor.current_slope,
+        player.maximum_walkable_slope_deg,
+    );
+}
+
+const SHALLOW_WATER_DEPTH_M: f32 = 1.5;
+
+fn enforce_water_depth(
+    registry: Res<ConfigRegistryResource>,
+    mut players: Query<
+        (&mut Transform, &mut LinearVelocity, &mut PlayerMovementState),
+        With<Player>,
+    >,
+) {
+    let Ok(world) = registry.0.active_world() else {
+        return;
+    };
+    let Some(water) = registry.0.water.get(&world.water) else {
+        return;
+    };
+    let sea = water.sea_level_m;
+    let deep_floor = sea - SHALLOW_WATER_DEPTH_M;
+
+    for (mut transform, mut velocity, mut movement) in &mut players {
+        let y = transform.translation.y;
+        movement.in_shallow_water = y < sea && y > deep_floor;
+        if y < deep_floor {
+            transform.translation.y = deep_floor;
+            if velocity.y < 0.0 {
+                velocity.y = 0.0;
+            }
+        }
     }
 }
 
@@ -239,24 +373,31 @@ fn update_character_facing(
     time: Res<Time<Fixed>>,
     input_state: Res<CameraInputState>,
     cameras: Query<&MmoCamera>,
-    intent: Query<&PlayerMoveIntent, With<Player>>,
+    intent: Query<(&MovementIntent, &PlayerFacingMode), With<Player>>,
     mut players: Query<(&mut CharacterFacing, &mut Transform), With<Player>>,
 ) {
     let Ok(camera) = cameras.single() else {
         return;
     };
-    let Ok(move_intent) = intent.single() else {
+    let Ok((move_intent, facing_mode)) = intent.single() else {
         return;
     };
     let Ok((mut facing, mut transform)) = players.single_mut() else {
         return;
     };
 
-    if input_state.steering_character() {
-        facing.desired_yaw = camera.intent_yaw();
-    } else if move_intent.direction.length_squared() > 0.001 {
-        facing.desired_yaw = move_intent.direction.x.atan2(move_intent.direction.z);
-    }
+    let yaw = camera.intent_yaw();
+    let forward = camera_forward_xz(yaw);
+    let right = camera_right_xz(yaw);
+    let world_dir = (forward * move_intent.direction.y + right * move_intent.direction.x).normalize_or_zero();
+    let movement_dir = Vec2::new(world_dir.x, world_dir.z);
+
+    facing.desired_yaw = resolve_facing_yaw(
+        facing_mode.0,
+        input_state.steering_character(),
+        yaw,
+        movement_dir,
+    );
 
     facing.yaw = rotate_toward_angle(
         facing.yaw,
@@ -306,5 +447,45 @@ fn rotate_toward_angle(current: f32, target: f32, max_step: f32) -> f32 {
         target
     } else {
         current + delta.signum() * max_step
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn jump_buffer_after_press(buffer: f32, jump_buffer_s: f32) -> f32 {
+    jump_buffer_s.max(buffer)
+}
+
+#[cfg(test)]
+pub(crate) fn coyote_after_grounded(coyote_time_s: f32) -> f32 {
+    coyote_time_s
+}
+
+#[cfg(test)]
+pub(crate) fn should_execute_jump(buffer: f32, coyote: f32, grounded: bool) -> bool {
+    buffer > 0.0 && (grounded || coyote > 0.0)
+}
+
+#[cfg(test)]
+mod character_movement_tests {
+    use super::*;
+
+    #[test]
+    fn jump_buffer_extends_after_press() {
+        let buffer = jump_buffer_after_press(0.0, 0.12);
+        assert!((buffer - 0.12).abs() < 1e-5);
+    }
+
+    #[test]
+    fn coyote_time_allows_jump_after_leaving_ground() {
+        let coyote = coyote_after_grounded(0.1);
+        assert!(should_execute_jump(0.05, coyote, false));
+    }
+
+    #[test]
+    fn slope_projection_removes_vertical_from_direction() {
+        let ground = Vec3::new(0.5, 0.866, 0.0).normalize();
+        let desired = Vec3::new(1.0, 0.0, 0.0);
+        let projected = desired.reject_from(ground).normalize_or_zero();
+        assert!(projected.dot(ground).abs() < 0.05);
     }
 }

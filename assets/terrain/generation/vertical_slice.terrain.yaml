@@ -21,7 +21,13 @@ operations:
     radii: [18.0, 22.0, 12.0]
     peak_noise: [0.1, 3.0]
     combine: union
+  # Single ridge envelope — hillside, cliff, and overhang lip as one solid mass.
   - type: ellipsoid
-    center: [28.0, 16.0, 8.0]
-    radii: [8.0, 14.0, 6.0]
+    center: [26.0, 13.0, 10.0]
+    radii: [14.0, 17.0, 12.0]
     combine: union
+  # Headroom carve beneath the overhang lip.
+  - type: ellipsoid
+    center: [28.0, 11.5, 8.0]
+    radii: [6.5, 4.5, 4.5]
+    combine: subtract

@@ -1,0 +1,23 @@
+﻿schema_version: 1
+id: cave.expanded_cave
+description: Flooded low chamber and river-valley side branch
+operations:
+  - type: ellipsoid
+    center: [142.0, -5.0, 118.0]
+    radii: [6.0, 4.5, 5.5]
+    combine: subtract
+  - type: capsule
+    start: [142.0, -5.0, 118.0]
+    end: [138.0, 2.0, 122.0]
+    radius: 2.0
+    combine: subtract
+  - type: capsule
+    start: [138.0, 2.0, 122.0]
+    end: [132.0, 6.0, 125.0]
+    radius: 1.6
+    combine: subtract
+  - type: noise_perturb
+    scale: 0.25
+    amplitude: 0.35
+    density_min: -1.0
+    density_max: 2.0

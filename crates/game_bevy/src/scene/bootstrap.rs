@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder};
 use tracing::info;
 
 use crate::data::ConfigRegistryResource;
@@ -6,12 +7,16 @@ use crate::player::spawn_player;
 use crate::state::AppState;
 use crate::environment::{CaveAmbientZone, SunLight};
 use crate::terrain::TerrainSpawnPoint;
+use crate::terrain::TerrainWorldInitSet;
 
 pub struct BootstrapScenePlugin;
 
 impl Plugin for BootstrapScenePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(OnEnter(AppState::Running), spawn_bootstrap_scene);
+        app.add_systems(
+            OnEnter(AppState::Running),
+            spawn_bootstrap_scene.after(TerrainWorldInitSet),
+        );
     }
 }
 
@@ -27,6 +32,11 @@ fn spawn_bootstrap_scene(
     let performance = registry.0.active_performance().expect("performance config");
     let camera = registry.0.active_camera().expect("camera config");
     let player = registry.0.active_player().expect("player config");
+    let physics_gravity = registry
+        .0
+        .active_physics()
+        .map(|p| p.gravity_mps2)
+        .unwrap_or(player.gravity_mps2);
 
     let sky_color = Color::srgb(
         lighting.fog_color[0],
@@ -44,7 +54,7 @@ fn spawn_bootstrap_scene(
 
     commands.insert_resource(avian3d::prelude::Gravity(Vec3::new(
         0.0,
-        -player.gravity_mps2,
+        -physics_gravity,
         0.0,
     )));
 
@@ -57,9 +67,10 @@ fn spawn_bootstrap_scene(
                 lighting.sun_color[1],
                 lighting.sun_color[2],
             ),
-            shadow_maps_enabled: lighting.sun_shadows_enabled,
+            shadow_maps_enabled: lighting.sun_shadows_enabled && performance.shadows_enabled,
             ..default()
         },
+        cascade_shadow_config(&performance.shadow_quality),
         Transform::from_rotation(Quat::from_rotation_arc(
             -Vec3::Z,
             Vec3::new(
@@ -98,4 +109,28 @@ fn spawn_bootstrap_scene(
         spawn = ?spawn_point.0,
         "bootstrap scene ready"
     );
+}
+
+fn cascade_shadow_config(quality: &str) -> CascadeShadowConfig {
+    let builder = match quality.to_ascii_lowercase().as_str() {
+        "low" => CascadeShadowConfigBuilder {
+            num_cascades: 2,
+            minimum_distance: 0.5,
+            maximum_distance: 80.0,
+            ..default()
+        },
+        "medium" => CascadeShadowConfigBuilder {
+            num_cascades: 3,
+            minimum_distance: 0.5,
+            maximum_distance: 120.0,
+            ..default()
+        },
+        _ => CascadeShadowConfigBuilder {
+            num_cascades: 4,
+            minimum_distance: 0.5,
+            maximum_distance: 180.0,
+            ..default()
+        },
+    };
+    builder.into()
 }

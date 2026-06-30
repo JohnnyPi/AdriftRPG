@@ -27,6 +27,9 @@ struct HudGroundedText;
 #[derive(Component)]
 struct HudBiomeText;
 
+#[derive(Component)]
+struct HudWaterText;
+
 fn spawn_hud(mut commands: Commands) {
     commands
         .spawn((
@@ -44,6 +47,7 @@ fn spawn_hud(mut commands: Commands) {
             parent.spawn((HudSpeedText, Text::new("Speed: 0.0 m/s")));
             parent.spawn((HudGroundedText, Text::new("Grounded: no")));
             parent.spawn((HudBiomeText, Text::new("Biome: -")));
+            parent.spawn((HudWaterText, Text::new("")));
         });
 }
 
@@ -58,7 +62,11 @@ fn update_hud(
     >,
     mut biome_text: Query<
         &mut Text,
-        (With<HudBiomeText>, Without<HudSpeedText>, Without<HudGroundedText>),
+        (With<HudBiomeText>, Without<HudSpeedText>, Without<HudGroundedText>, Without<HudWaterText>),
+    >,
+    mut water_text: Query<
+        &mut Text,
+        (With<HudWaterText>, Without<HudSpeedText>, Without<HudGroundedText>, Without<HudBiomeText>),
     >,
 ) {
     let Ok((transform, movement, grounded_state)) = player.single() else {
@@ -77,9 +85,15 @@ fn update_hud(
     if let (Some(source), Ok(mut text)) = (pipeline.density_source.as_ref(), biome_text.single_mut())
     {
         let p = transform.translation;
-        let sea = source.recipe().sea_level;
         let density = source.density_at(p.x, p.y, p.z);
-        let biome = classify_biome(biomes.as_ref(), sea, p.x, p.y, p.z, density);
+        let biome = classify_biome(biomes.as_ref(), source, p.x, p.y, p.z, density);
         **text = format!("Biome: {biome:?}");
+    }
+    if let Ok(mut text) = water_text.single_mut() {
+        **text = if movement.in_shallow_water {
+            "Shallow water".to_string()
+        } else {
+            String::new()
+        };
     }
 }

@@ -1,0 +1,56 @@
+﻿schema_version: 1
+id: terrain.expanded_slice
+description: Bounded tropical island with peak, trench, river basin, and fort pad
+spawn: [70.0, 0.0, 160.0]
+includes:
+  - cave.demo_cave
+  - cave.expanded_cave
+operations:
+  - type: island_mask
+    center: [128.0, 128.0]
+    radius_m: 92.0
+    falloff_m: 24.0
+    ocean_floor_y: -28.0
+  - type: ocean_floor
+    origin: [128.0, 128.0]
+    scale: [256.0, 256.0]
+    base_depth_m: 18.0
+    variation_m: 8.0
+    detail_frequency: 0.018
+    detail_octaves: 4
+  - type: coastal_surface
+    origin: [128.0, 128.0]
+    scale: [256.0, 256.0]
+    base_height: 6.0
+    height_range: 16.0
+    ridge_origin: [180.0, 196.0]
+    ridge_scale: [48.0, 56.0]
+    ridge_amplitude: 12.0
+    detail_frequency: 0.025
+    detail_amplitude: 3.0
+    detail_octaves: 4
+  - type: mountain_peak
+    center: [188.0, 178.0]
+    base_elevation_m: 18.0
+    base_radius_m: 38.0
+    peak_height_m: 58.0
+    steepness: 1.7
+    peak_noise: [0.06, 3.0]
+  - type: ellipsoid
+    center: [82.0, 31.5, 196.0]
+    radii: [22.0, 4.0, 22.0]
+    combine: subtract
+  - type: ellipsoid
+    center: [140.0, 12.0, 120.0]
+    radii: [8.0, 5.0, 10.0]
+    combine: subtract
+  - type: underwater_trench
+    points:
+      - [218.0, 2.0, 45.0]
+      - [228.0, -10.0, 70.0]
+      - [238.0, -28.0, 95.0]
+    width_m: 14.0
+  - type: ellipsoid
+    center: [48.0, 10.0, 185.0]
+    radii: [14.0, 3.0, 14.0]
+    combine: union

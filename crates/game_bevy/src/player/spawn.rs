@@ -40,6 +40,7 @@ pub fn spawn_player(
             desired_yaw: 0.0,
             turn_speed: player.rotation_speed_deg_per_s.to_radians(),
         },
+        crate::environment::lighting_state::SkyVisibility(1.0),
         Transform::from_translation(spawn_center),
         Visibility::default(),
     ));

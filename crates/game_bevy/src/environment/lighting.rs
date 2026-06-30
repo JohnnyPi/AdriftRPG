@@ -1,10 +1,10 @@
 use bevy::prelude::*;
 
-use crate::camera::MainGameCamera;
 use crate::data::ConfigRegistryResource;
 use crate::player::Player;
 use crate::state::AppState;
 use crate::terrain::TerrainPipelineState;
+use crate::ui::LightingTweaks;
 use terrain_generation::RecipeDensitySource;
 
 #[derive(Component)]
@@ -13,68 +13,30 @@ pub struct SunLight;
 #[derive(Component)]
 pub struct CaveAmbientZone;
 
-#[derive(Component)]
-pub struct SkyGradient;
-
 pub struct LightingPlugin;
 
 impl Plugin for LightingPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(OnEnter(AppState::Running), spawn_sky_gradient)
-            .add_systems(
-                Update,
-                (
-                    apply_lighting_hot_reload,
-                    apply_cave_atmosphere,
-                )
-                    .run_if(in_state(AppState::Running)),
-            );
+        app.add_systems(
+            Update,
+            (
+                apply_lighting_hot_reload,
+                apply_cave_atmosphere,
+                update_sky_visibility,
+            )
+                .run_if(in_state(AppState::Running)),
+        );
     }
-}
-
-fn spawn_sky_gradient(
-    mut commands: Commands,
-    registry: Res<ConfigRegistryResource>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
-    let Ok(lighting) = registry.0.active_lighting() else {
-        return;
-    };
-    let horizon = Color::srgb(
-        lighting.fog_color[0],
-        lighting.fog_color[1],
-        lighting.fog_color[2],
-    );
-    let zenith = Color::srgb(
-        lighting.sun_color[0] * 0.35 + 0.25,
-        lighting.sun_color[1] * 0.35 + 0.45,
-        lighting.sun_color[2] * 0.35 + 0.75,
-    );
-    commands.spawn((
-        SkyGradient,
-        Mesh3d(meshes.add(Sphere::new(500.0))),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: horizon,
-            emissive: LinearRgba::from(zenith),
-            unlit: true,
-            cull_mode: None,
-            ..default()
-        })),
-        Transform::from_xyz(0.0, 0.0, 0.0),
-    ));
 }
 
 fn apply_lighting_hot_reload(
     registry: Res<ConfigRegistryResource>,
+    tweaks: Res<LightingTweaks>,
     mut last_hash: Local<Option<String>>,
     mut clear: ResMut<ClearColor>,
-    mut ambient: ResMut<GlobalAmbientLight>,
-    mut sun: Query<(&mut DirectionalLight, &mut Transform), With<SunLight>>,
-    mut fog: Query<&mut DistanceFog, With<MainGameCamera>>,
 ) {
     let hash = registry.0.hash.clone();
-    if last_hash.as_ref() == Some(&hash) {
+    if last_hash.as_ref() == Some(&hash) && !tweaks.override_fog {
         return;
     }
     *last_hash = Some(hash);
@@ -83,57 +45,47 @@ fn apply_lighting_hot_reload(
         return;
     };
 
-    clear.0 = Color::srgb(
-        lighting.fog_color[0] * 0.85,
-        lighting.fog_color[1] * 0.9,
-        lighting.fog_color[2] * 1.05,
-    );
-    ambient.color = Color::srgb(
-        lighting.ambient_color[0],
-        lighting.ambient_color[1],
-        lighting.ambient_color[2],
-    );
-    ambient.brightness = lighting.ambient_brightness;
+    let fog_color = if tweaks.override_fog {
+        tweaks.fog_color
+    } else {
+        lighting.fog_color
+    };
 
-    if let Ok((mut light, mut transform)) = sun.single_mut() {
-        light.illuminance = lighting.sun_illuminance_lux;
-        light.color = Color::srgb(
-            lighting.sun_color[0],
-            lighting.sun_color[1],
-            lighting.sun_color[2],
-        );
-        light.shadow_maps_enabled = lighting.sun_shadows_enabled;
-        *transform = Transform::from_rotation(Quat::from_rotation_arc(
-            -Vec3::Z,
-            Vec3::new(
-                lighting.sun_direction[0],
-                lighting.sun_direction[1],
-                lighting.sun_direction[2],
-            )
-            .normalize_or_zero(),
-        ));
-    }
+    clear.0 = Color::srgb(fog_color[0] * 0.85, fog_color[1] * 0.9, fog_color[2] * 1.05);
+}
 
-    for mut distance_fog in &mut fog {
-        *distance_fog = DistanceFog {
-            color: Color::srgba(
-                lighting.fog_color[0],
-                lighting.fog_color[1],
-                lighting.fog_color[2],
-                1.0,
-            ),
-            falloff: FogFalloff::Linear {
-                start: lighting.fog_start_m,
-                end: lighting.fog_end_m,
-            },
-            ..default()
-        };
+fn update_sky_visibility(
+    pipeline: Res<TerrainPipelineState>,
+    player: Query<&Transform, With<Player>>,
+    mut visibility: Query<&mut super::lighting_state::SkyVisibility, With<Player>>,
+) {
+    let Ok(player_tf) = player.single() else {
+        return;
+    };
+    let Ok(mut sky_vis) = visibility.single_mut() else {
+        return;
+    };
+    let Some(source) = pipeline.density_source.as_ref() else {
+        sky_vis.0 = 1.0;
+        return;
+    };
+    sky_vis.0 = sky_visibility_at(source, player_tf.translation);
+}
+
+pub fn sky_visibility_at(source: &RecipeDensitySource, position: Vec3) -> f32 {
+    let sea = source.recipe().sea_level;
+    if position.y < sea - 2.0 {
+        let density = source.density_at(position.x, position.y + 2.0, position.z);
+        if density < 0.0 {
+            return 0.15;
+        }
     }
+    1.0 - cave_depth_factor(source, position) * 0.85
 }
 
 fn apply_cave_atmosphere(
     pipeline: Res<TerrainPipelineState>,
-    player: Query<&Transform, With<Player>>,
+    player: Query<(&Transform, &super::lighting_state::SkyVisibility), With<Player>>,
     mut zones: Query<(&Transform, &mut PointLight), With<CaveAmbientZone>>,
     mut ambient: ResMut<GlobalAmbientLight>,
     registry: Res<ConfigRegistryResource>,
@@ -141,7 +93,7 @@ fn apply_cave_atmosphere(
     let Ok(lighting) = registry.0.active_lighting() else {
         return;
     };
-    let Ok(player_tf) = player.single() else {
+    let Ok((player_tf, sky_vis)) = player.single() else {
         return;
     };
     let Some(source) = pipeline.density_source.as_ref() else {
@@ -149,6 +101,7 @@ fn apply_cave_atmosphere(
     };
 
     let cave_factor = cave_depth_factor(source, player_tf.translation);
+    let sky_factor = sky_vis.0;
     for (tf, mut light) in &mut zones {
         let dist = player_tf.translation.distance(tf.translation);
         light.intensity = if dist < 25.0 {
@@ -158,7 +111,7 @@ fn apply_cave_atmosphere(
         };
     }
 
-    let base = lighting.ambient_brightness;
+    let base = lighting.ambient_brightness * sky_factor;
     ambient.brightness = base * (1.0 - cave_factor * 0.55);
     ambient.color = Color::srgb(
         lighting.ambient_color[0] * (1.0 - cave_factor * 0.3),
@@ -191,3 +144,37 @@ pub trait LightPropagationBackend: Send + Sync {
 pub struct StubLightPropagation;
 
 impl LightPropagationBackend for StubLightPropagation {}
+
+/// Simulation time stub for day/night cycle.
+#[allow(dead_code)]
+pub trait SimulationTime: Send + Sync {
+    fn hours(&self) -> f32 {
+        10.5
+    }
+}
+
+#[allow(dead_code)]
+pub struct FixedMorningTime;
+
+impl SimulationTime for FixedMorningTime {}
+
+/// Celestial lighting stub (sun/moon orbit, phases).
+#[allow(dead_code)]
+pub trait CelestialLightingBackend: Send + Sync {
+    fn sun_direction(&self) -> Vec3 {
+        Vec3::new(-0.4, -0.85, -0.3).normalize_or_zero()
+    }
+
+    fn moon_direction(&self) -> Vec3 {
+        Vec3::new(0.5, 0.6, 0.2).normalize_or_zero()
+    }
+
+    fn moon_phase(&self) -> f32 {
+        0.25
+    }
+}
+
+#[allow(dead_code)]
+pub struct FixedCelestialLighting;
+
+impl CelestialLightingBackend for FixedCelestialLighting {}

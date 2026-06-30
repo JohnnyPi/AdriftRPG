@@ -1,0 +1,17 @@
+﻿schema_version: 1
+id: options.default
+
+panel:
+  toggle_key: escape
+  default_tab: atmosphere
+
+stubs:
+  - weather
+  - day_night_cycle
+  - networking
+  - save_load
+  - archipelago_streaming
+  - dual_contouring
+  - volumetric_clouds
+  - swimming
+  - quests

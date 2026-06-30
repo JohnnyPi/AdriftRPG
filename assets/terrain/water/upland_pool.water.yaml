@@ -1,0 +1,9 @@
+﻿schema_version: 1
+id: waterbody.upland_pool
+
+material:
+  shallow_color: [0.18, 0.62, 0.58]
+  deep_color: [0.08, 0.35, 0.42]
+  transparency: 0.85
+  wave_amplitude: 0.12
+  wave_speed: 0.35

@@ -12,3 +12,6 @@ bindings:
   regen: F8
   next_seed: F9
   freeze_pipeline: F10
+  subtract: Digit1
+  add: Digit2
+  paint: Digit3

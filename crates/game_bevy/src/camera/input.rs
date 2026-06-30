@@ -1,14 +1,18 @@
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow, WindowFocused};
 
+use crate::state::AppState;
+use crate::ui::OptionsPanelState;
+
 use super::components::CameraInputState;
 
-/// Stub until UI/menu systems exist.
-pub fn should_capture_input() -> bool {
-    true
+pub fn should_capture_input(state: &AppState, options_open: bool) -> bool {
+    *state == AppState::Running && !options_open
 }
 
 pub fn update_cursor_capture(
+    state: Res<State<AppState>>,
+    panel: Res<OptionsPanelState>,
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
     mut input_state: ResMut<CameraInputState>,
@@ -23,7 +27,7 @@ pub fn update_cursor_capture(
         }
     }
 
-    if !should_capture_input() {
+    if !should_capture_input(state.get(), panel.open) {
         input_state.left_look = false;
         input_state.right_steer = false;
         input_state.cursor_captured = false;

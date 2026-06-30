@@ -32,3 +32,9 @@ rules:
     density: 0.2
     slope_max_deg: 80.0
     spacing_m: 2.5
+  - category: fungus
+    mesh: sphere
+    biomes: [cave]
+    density: 0.06
+    slope_max_deg: 80.0
+    spacing_m: 3.0

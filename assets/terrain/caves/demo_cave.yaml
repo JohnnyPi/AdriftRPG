@@ -3,12 +3,12 @@ id: cave.demo_cave
 description: Entrance chamber, descending tunnel, main chamber, and side branch
 operations:
   - type: ellipsoid
-    center: [26.0, 10.0, 8.0]
-    radii: [10.0, 8.0, 8.0]
+    center: [27.5, 9.5, 7.5]
+    radii: [7.0, 5.5, 6.0]
     combine: subtract
   - type: ellipsoid
     center: [30.0, 8.0, 5.0]
-    radii: [5.0, 4.0, 4.0]
+    radii: [4.5, 3.5, 3.5]
     combine: subtract
   - type: capsule
     start: [30.0, 8.0, 5.0]
@@ -29,3 +29,23 @@ operations:
     amplitude: 0.4
     density_min: 0.0
     density_max: 2.0
+  # Walkable surfaces inside the carved entrance (after subtracts, before headroom).
+  - type: capsule
+    start: [22.0, 4.5, 6.0]
+    end: [31.0, 4.5, 11.0]
+    radius: 3.2
+    combine: union
+  - type: ellipsoid
+    center: [29.5, 5.5, 6.5]
+    radii: [6.0, 4.5, 5.5]
+    combine: union
+  - type: capsule
+    start: [19.0, 13.5, 12.0]
+    end: [25.0, 5.5, 9.5]
+    radius: 3.0
+    combine: union
+  # Headroom passage through the entrance (last subtract).
+  - type: ellipsoid
+    center: [26.5, 11.5, 8.5]
+    radii: [11.0, 5.5, 8.0]
+    combine: subtract

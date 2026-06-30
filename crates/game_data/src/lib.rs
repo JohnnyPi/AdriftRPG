@@ -8,9 +8,12 @@ mod registry;
 mod validate;
 
 pub use compile::{
-    CompiledApp, CompiledBiomes, CompiledCamera, CompiledCave, CompiledDebug, CompiledLighting,
-    CompiledPerformance, CompiledPlayer, CompiledTerrain, CompiledTerrainMaterials,
-    CompiledVegetation, CompiledWater, CompiledWorld,
+    CompiledApp, CompiledAtmosphere, CompiledBiomes, CompiledCamera, CompiledCave, CompiledDebug,
+    CompiledFog, CompiledFogLocalVolume, CompiledHydrology, CompiledLandmarkFact,
+    CompiledLandmarks, CompiledLandmarkSign, CompiledLighting, CompiledOptions, CompiledPerformance,
+    CompiledPhysics, CompiledPlayer, CompiledRiver, CompiledRoute, CompiledRoutes, CompiledSky,
+    CompiledStructure, CompiledStructurePart, CompiledTerrain, CompiledTerrainMaterials,
+    CompiledVegetation, CompiledWater, CompiledWaterBodyMaterial, CompiledWorld,
 };
 pub use definitions::*;
 pub use hash::registry_hash;

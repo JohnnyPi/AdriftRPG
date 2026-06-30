@@ -1,0 +1,38 @@
+﻿schema_version: 1
+id: landmarks.expanded_slice
+
+facts:
+  - tag: fresh_water
+    position: [70.0, 2.0, 160.0]
+    label: "Coastal beach spawn"
+  - tag: cave_entrance
+    position: [24.0, 4.0, 10.0]
+    label: "Demo cave entrance"
+  - tag: traversable_route
+    position: [82.0, 32.0, 196.0]
+    label: "Upland pool"
+  - tag: high_ground
+    position: [188.0, 58.0, 178.0]
+    label: "Summit peak"
+  - tag: shelter
+    position: [48.0, 12.0, 185.0]
+    label: "Coastal fort"
+  - tag: dangerous_drop
+    position: [220.0, -28.0, 45.0]
+    label: "Deep ocean trench"
+
+route_signs:
+  - position: [70.0, 18.0, 180.0]
+    label: "Waterfall overlook"
+  - position: [55.0, 8.0, 120.0]
+    label: "River crossing"
+
+fog_volumes:
+  - center: [26.0, 0.0, 12.0]
+    half_extents: [14.0, 8.0, 14.0]
+    density: 0.12
+    color: [0.2, 0.22, 0.28]
+  - center: [142.0, -3.0, 118.0]
+    half_extents: [8.0, 6.0, 8.0]
+    density: 0.14
+    color: [0.15, 0.2, 0.26]
