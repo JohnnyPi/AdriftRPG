@@ -1,0 +1,26 @@
+﻿schema_version: 1
+id: biomes.vertical_slice
+description: Beach, grassland, rocky upland, cave, and shallow water biomes
+rules:
+  - id: shallow_water
+    material_id: 1
+    color: [0.18, 0.62, 0.58]
+    elevation_max: 3.5
+  - id: beach
+    material_id: 1
+    color: [0.86, 0.78, 0.58]
+    elevation_min: -1.0
+    elevation_max: 5.0
+  - id: cave
+    material_id: 3
+    color: [0.28, 0.26, 0.30]
+    cave_depth_min: 0.0
+    elevation_max: 12.0
+  - id: rocky_upland
+    material_id: 2
+    color: [0.45, 0.44, 0.42]
+    elevation_min: 12.0
+    slope_min: 25.0
+  - id: grassland
+    material_id: 0
+    color: [0.34, 0.52, 0.28]

@@ -1,0 +1,33 @@
+﻿schema_version: 1
+id: camera.mmo_default
+
+orbit:
+  default_distance: 8.0
+  minimum_distance: 2.2
+  maximum_distance: 16.0
+  default_pitch_degrees: -28.0
+  minimum_pitch_degrees: -65.0
+  maximum_pitch_degrees: -8.0
+  mouse_sensitivity_x: 0.0035
+  mouse_sensitivity_y: 0.0030
+  invert_y: false
+  zoom_speed: 1.5
+
+follow:
+  focus_height: 1.4
+  focus_offset_x: 0.0
+  focus_offset_z: 0.0
+  shoulder_offset: 0.0
+  follow_sharpness: 18.0
+  rotation_sharpness: 24.0
+  zoom_sharpness: 20.0
+
+collision:
+  radius: 0.25
+  margin: 0.10
+  inward_sharpness: 40.0
+  outward_sharpness: 8.0
+
+controls:
+  both_buttons_move_forward: true
+  recenter_key: home

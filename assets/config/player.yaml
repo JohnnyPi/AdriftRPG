@@ -1,0 +1,19 @@
+﻿schema_version: 1
+id: player.default
+
+capsule:
+  radius_m: 0.38
+  half_height_m: 0.72
+
+movement:
+  walk_speed_mps: 4.8
+  run_speed_mps: 7.5
+  acceleration_mps2: 26.0
+  deceleration_mps2: 32.0
+  rotation_speed_deg_per_s: 720.0
+  maximum_walkable_slope_deg: 47.0
+  step_height_m: 0.45
+  ground_snap_m: 0.28
+  jump_height_m: 1.15
+
+gravity_mps2: 18.0

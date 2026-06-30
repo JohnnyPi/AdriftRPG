@@ -1,0 +1,13 @@
+[package]
+name = "terrain_meshing"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+shared = { path = "../shared" }
+voxel_core = { path = "../voxel_core" }
+thiserror = "2"
+
+[dev-dependencies]
+terrain_generation = { path = "../terrain_generation" }

@@ -1,0 +1,14 @@
+﻿schema_version: 1
+id: debug.default
+bindings:
+  panel: F1
+  chunk_bounds: F2
+  wireframe: F3
+  biome: F4
+  material: F5
+  collider: F6
+  density: F7
+  normals: KeyN
+  regen: F8
+  next_seed: F9
+  freeze_pipeline: F10

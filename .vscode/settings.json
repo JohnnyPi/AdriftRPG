@@ -1,0 +1,5 @@
+{
+  "terminal.integrated.env.windows": {
+    "Path": "C:\\Users\\thoth\\.cargo\\bin;${env:Path}"
+  }
+}

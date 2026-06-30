@@ -1,0 +1,27 @@
+[package]
+name = "game_bevy"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+bevy = { version = "=0.19.0", default-features = true, features = ["bevy_dev_tools"] }
+game_data = { path = "../game_data" }
+shared = { path = "../shared" }
+voxel_core = { path = "../voxel_core" }
+terrain_generation = { path = "../terrain_generation" }
+terrain_meshing = { path = "../terrain_meshing" }
+avian3d = "0.7"
+physics_bridge = { path = "../physics_bridge" }
+notify = "8"
+thiserror = "2"
+sha2 = "0.10"
+hex = "0.4"
+tracing = "0.1"
+
+[features]
+default = []
+dev_hot_reload = ["bevy/file_watcher"]
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,0 +1,22 @@
+﻿schema_version: 1
+id: performance.rtx3070_60fps
+
+target_fps: 60
+target_resolution: [2560, 1440]
+
+terrain:
+  maximum_density_jobs: 4
+  maximum_mesh_jobs: 4
+  mesh_uploads_per_frame: 8
+  collider_builds_per_frame: 4
+
+shadows:
+  enabled: true
+  quality: high
+
+vegetation:
+  density_multiplier: 1.0
+  maximum_distance_m: 80.0
+
+water:
+  quality: high

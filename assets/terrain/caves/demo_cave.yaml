@@ -1,0 +1,31 @@
+﻿schema_version: 1
+id: cave.demo_cave
+description: Entrance chamber, descending tunnel, main chamber, and side branch
+operations:
+  - type: ellipsoid
+    center: [26.0, 10.0, 8.0]
+    radii: [10.0, 8.0, 8.0]
+    combine: subtract
+  - type: ellipsoid
+    center: [30.0, 8.0, 5.0]
+    radii: [5.0, 4.0, 4.0]
+    combine: subtract
+  - type: capsule
+    start: [30.0, 8.0, 5.0]
+    end: [28.0, 2.0, 8.0]
+    radius: 2.2
+    combine: subtract
+  - type: ellipsoid
+    center: [26.0, -2.0, 12.0]
+    radii: [8.0, 6.0, 7.0]
+    combine: subtract
+  - type: capsule
+    start: [26.0, -2.0, 12.0]
+    end: [22.0, -1.0, 18.0]
+    radius: 1.8
+    combine: subtract
+  - type: noise_perturb
+    scale: 0.3
+    amplitude: 0.4
+    density_min: 0.0
+    density_max: 2.0

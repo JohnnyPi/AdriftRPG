@@ -1,0 +1,9 @@
+﻿schema_version: 1
+id: water.tropical_shallow
+
+sea_level_m: 2.0
+shallow_color: [0.18, 0.62, 0.58]
+deep_color: [0.03, 0.18, 0.32]
+transparency: 0.72
+wave_speed: 0.35
+wave_amplitude: 0.12

@@ -1,0 +1,22 @@
+﻿schema_version: 1
+id: performance.default
+
+target_fps: 60
+target_resolution: [1280, 720]
+
+terrain:
+  maximum_density_jobs: 4
+  maximum_mesh_jobs: 4
+  mesh_uploads_per_frame: 8
+  collider_builds_per_frame: 4
+
+shadows:
+  enabled: true
+  quality: medium
+
+vegetation:
+  density_multiplier: 0.75
+  maximum_distance_m: 60.0
+
+water:
+  quality: medium

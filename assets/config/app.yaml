@@ -1,0 +1,7 @@
+﻿schema_version: 1
+id: app.vertical_slice
+
+world: world.vertical_slice
+player: player.default
+camera: camera.mmo_default
+performance: performance.default

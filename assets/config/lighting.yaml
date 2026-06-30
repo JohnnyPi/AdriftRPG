@@ -1,0 +1,18 @@
+﻿schema_version: 1
+id: lighting.late_morning
+
+sun:
+  direction: [-0.45, -0.75, -0.35]
+  illuminance_lux: 100000.0
+  color: [1.0, 0.97, 0.92]
+  shadows_enabled: true
+
+ambient:
+  brightness: 300.0
+  color: [0.55, 0.62, 0.75]
+
+fog:
+  enabled: true
+  color: [0.62, 0.74, 0.86]
+  start_m: 40.0
+  end_m: 220.0
