@@ -9,40 +9,9 @@ pub const FOUNDATION_DEPTH_M: f32 = 14.0;
 /// SDF margin: treat points with cavity SDF above this as outside caves (eligible for sealing).
 pub const CAVITY_EXTERIOR_MARGIN: f32 = 0.35;
 
-/// Coastal surface height from the first `CoastalSurface` recipe op.
+/// Coastal surface height including valley and coast modifiers.
 pub fn coastal_surface_height(recipe: &TerrainRecipe, x: f32, z: f32) -> f32 {
-    let noise = ValueNoise::new(recipe.seed);
-    for op in &recipe.ops {
-        if let RecipeOp::CoastalSurface {
-            base_height,
-            height_range,
-            ridge_origin,
-            ridge_scale,
-            ridge_amplitude,
-            detail_frequency,
-            detail_amplitude,
-            detail_octaves,
-            ..
-        } = op
-        {
-            let coast = crate::recipe::coastal_inland_factor(recipe, x, z);
-            let broad = *base_height + coast * *height_range;
-            let ridge_bump = ((x - ridge_origin[0]) / ridge_scale[0]).clamp(0.0, 1.0)
-                * ((z + ridge_origin[1]) / ridge_scale[1]).clamp(0.0, 1.0)
-                * *ridge_amplitude;
-            let detail = (noise.fbm(
-                x * detail_frequency,
-                0.0,
-                z * detail_frequency,
-                *detail_octaves,
-                2.0,
-                0.5,
-            ) - 0.5)
-                * *detail_amplitude;
-            return broad + ridge_bump + detail;
-        }
-    }
-    recipe.sea_level
+    crate::surface_height::land_surface_height(recipe, x, z)
 }
 
 /// Minimum SDF across all subtract primitives (negative = inside a declared cavity).
@@ -113,7 +82,9 @@ pub fn count_outdoor_void_columns(
     while x <= x_max {
         let mut z = z_min;
         while z <= z_max {
-            let surface = coastal_surface_height(recipe, x, z);
+            let rx = x + recipe.coord_offset[0];
+            let rz = z + recipe.coord_offset[2];
+            let surface = coastal_surface_height(recipe, rx, rz);
             if surface < recipe.sea_level {
                 z += step;
                 continue;
@@ -123,7 +94,7 @@ pub fn count_outdoor_void_columns(
             let mut had_solid = false;
             let mut void_to_surface = false;
             while y <= surface + 1.0 {
-                if outside_declared_cavities(recipe, x, y, z) {
+                if outside_declared_cavities(recipe, rx, y, rz) {
                     let d = source.density_at(x, y, z);
                     if d <= 0.0 {
                         had_solid = true;

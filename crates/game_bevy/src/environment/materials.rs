@@ -88,7 +88,9 @@ fn material_id_to_biome_kind(material_id: u16) -> BiomeKind {
         1 => BiomeKind::Beach,
         2 => BiomeKind::RockyUpland,
         3 => BiomeKind::Cave,
-        4 => BiomeKind::RockyUpland,
+        4 => BiomeKind::Wetland,
+        5 => BiomeKind::Forest,
+        6 => BiomeKind::Scrub,
         _ => BiomeKind::Grassland,
     }
 }
@@ -111,10 +113,15 @@ mod tests {
             elevation: 18.0,
             slope_degrees: 50.0,
             distance_to_water: 80.0,
+            distance_to_river: f32::MAX,
             cave_depth: 0.0,
             moisture: 0.5,
+            effective_moisture: 0.5,
             transition_noise: 0.5,
             temperature: 0.5,
+            continentalness: 0.5,
+            coast_humidity: 0.1,
+            rain_shadow: 0.0,
         };
         let mat = surface_material_for(&catalog, BiomeKind::Grassland, &ctx);
         assert_eq!(mat.0, 2);
@@ -134,10 +141,15 @@ mod tests {
             elevation: 10.0,
             slope_degrees: 5.0,
             distance_to_water: 80.0,
+            distance_to_river: f32::MAX,
             cave_depth: 0.0,
             moisture: 0.5,
+            effective_moisture: 0.5,
             transition_noise: 0.5,
             temperature: 0.5,
+            continentalness: 0.5,
+            coast_humidity: 0.1,
+            rain_shadow: 0.0,
         };
         let mat = surface_material_for(&catalog, BiomeKind::Grassland, &ctx);
         assert_eq!(mat.0, 0);

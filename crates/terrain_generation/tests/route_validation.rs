@@ -1,7 +1,7 @@
 use game_data::load_registry_from_directory;
 use std::path::PathBuf;
 use terrain_generation::{
-    default_vertical_slice_recipe, RecipeDensitySource, RecipeOp, TerrainRecipe,
+    default_vertical_slice_recipe, CoastModifierKind, RecipeDensitySource, RecipeOp, TerrainRecipe,
 };
 use voxel_core::CHUNK_CELLS;
 
@@ -54,6 +54,12 @@ fn convert_op(def: &game_data::TerrainOperationDefinition) -> RecipeOp {
             detail_frequency,
             detail_amplitude,
             detail_octaves,
+            regional_frequency,
+            regional_amplitude,
+            local_frequency,
+            local_amplitude,
+            ridged_amplitude,
+            domain_warp,
         } => RecipeOp::CoastalSurface {
             origin: *origin,
             scale: *scale,
@@ -65,6 +71,36 @@ fn convert_op(def: &game_data::TerrainOperationDefinition) -> RecipeOp {
             detail_frequency: *detail_frequency,
             detail_amplitude: *detail_amplitude,
             detail_octaves: *detail_octaves,
+            regional_frequency: *regional_frequency,
+            regional_amplitude: *regional_amplitude,
+            local_frequency: *local_frequency,
+            local_amplitude: *local_amplitude,
+            ridged_amplitude: *ridged_amplitude,
+            domain_warp: *domain_warp,
+        },
+        TerrainOperationDefinition::ValleyBasin {
+            origin,
+            scale,
+            depth_m,
+        } => RecipeOp::ValleyBasin {
+            origin: *origin,
+            scale: *scale,
+            depth_m: *depth_m,
+        },
+        TerrainOperationDefinition::CoastModifier {
+            kind,
+            center,
+            radius_m,
+            depth_m,
+            min_land_factor,
+            max_land_factor,
+        } => RecipeOp::CoastModifier {
+            kind: parse_coast_kind(kind),
+            center: *center,
+            radius_m: *radius_m,
+            depth_m: *depth_m,
+            min_land_factor: *min_land_factor,
+            max_land_factor: *max_land_factor,
         },
         TerrainOperationDefinition::Ellipsoid {
             center,
@@ -112,11 +148,13 @@ fn convert_op(def: &game_data::TerrainOperationDefinition) -> RecipeOp {
             radius_m,
             falloff_m,
             ocean_floor_y,
+            domain_warp,
         } => RecipeOp::IslandMask {
             center: *center,
             radius_m: *radius_m,
             falloff_m: *falloff_m,
             ocean_floor_y: *ocean_floor_y,
+            domain_warp: *domain_warp,
         },
         TerrainOperationDefinition::OceanFloor {
             origin,
@@ -184,6 +222,21 @@ fn load_expanded_recipe() -> TerrainRecipe {
         coord_offset: world.coord_offset,
         ops,
     }
+}
+
+fn parse_coast_kind(value: &str) -> CoastModifierKind {
+    match value.to_ascii_lowercase().as_str() {
+        "harbor" => CoastModifierKind::Harbor,
+        "cliff_shelf" | "cliff" => CoastModifierKind::CliffShelf,
+        _ => CoastModifierKind::Cove,
+    }
+}
+
+fn recipe_xz(source: &RecipeDensitySource, rx: f32, rz: f32) -> (f32, f32) {
+    (
+        rx - source.recipe().coord_offset[0],
+        rz - source.recipe().coord_offset[2],
+    )
 }
 
 fn assert_route_traversable(source: &RecipeDensitySource, waypoints: &[[f32; 2]]) {
@@ -602,13 +655,93 @@ fn expanded_offshore_is_submerged() {
 #[test]
 fn expanded_fort_pad_has_floor_support() {
     let source = RecipeDensitySource::new(load_expanded_recipe());
+    let (wx, wz) = recipe_xz(&source, 48.0, 185.0);
     let floor = source
-        .walkable_floor_at(48.0, 185.0, 32.0)
+        .walkable_floor_at(wx, wz, 32.0)
         .expect("fort pad should have walkable floor");
     assert!(
-        source.has_support_below(48.0, floor, 185.0, 2.5),
+        source.has_support_below(wx, floor, wz, 2.5),
         "fort pad lacks support"
     );
+}
+
+#[test]
+fn expanded_inland_has_no_shallow_void_shafts() {
+    use terrain_generation::outside_declared_cavities;
+
+    let source = RecipeDensitySource::new(load_expanded_recipe());
+    let recipe = source.recipe();
+    let noise = terrain_generation::ValueNoise::new(recipe.seed);
+    let mut violations = 0usize;
+
+    for rx in (60..=190).step_by(4) {
+        for rz in (60..=190).step_by(4) {
+            let rxf = rx as f32;
+            let rzf = rz as f32;
+            let land = terrain_generation::island_land_factor_warped(recipe, rxf, rzf, &noise);
+            if land < 0.5 {
+                continue;
+            }
+            if !outside_declared_cavities(recipe, rxf, 3.0, rzf) {
+                continue;
+            }
+            let (wx, wz) = recipe_xz(&source, rxf, rzf);
+            if source.column_is_void(wx, wz, 0.0, 6.0) {
+                violations += 1;
+                if violations <= 5 {
+                    eprintln!("outdoor void shaft at recipe ({rxf},{rzf})");
+                }
+            }
+        }
+    }
+
+    assert_eq!(
+        violations, 0,
+        "found {violations} shallow outdoor void shafts on expanded island inland"
+    );
+}
+
+#[test]
+fn expanded_cave_entrance_is_traversable() {
+    let source = RecipeDensitySource::new(load_expanded_recipe());
+    let probes = [
+        (56.0, 116.0, "cave entrance center"),
+        (58.0, 114.0, "cave mouth"),
+        (54.0, 118.0, "approach"),
+    ];
+
+    for (rx, rz, label) in probes {
+        let (x, z) = recipe_xz(&source, rx, rz);
+        assert!(
+            !source.column_is_void(x, z, 0.0, 8.0),
+            "{label} at recipe ({rx},{rz}) is void from y=0..8"
+        );
+        let floor = source
+            .walkable_floor_with_clearance(x, z, 20.0, 2.0)
+            .unwrap_or_else(|| panic!("{label} at recipe ({rx},{rz}) has no walkable floor"));
+        assert!(
+            floor < 14.0,
+            "{label} at recipe ({rx},{rz}) floor too high at y={floor}"
+        );
+        assert!(
+            source.has_support_below(x, floor, z, 3.0),
+            "{label} at recipe ({rx},{rz}) lacks support below floor y={floor}"
+        );
+    }
+}
+
+#[test]
+fn expanded_orphan_subtract_probes_have_support() {
+    let source = RecipeDensitySource::new(load_expanded_recipe());
+    for (rx, rz) in [(82.0, 196.0), (56.0, 116.0)] {
+        let (x, z) = recipe_xz(&source, rx, rz);
+        if let Some(floor) = source.walkable_floor_at(x, z, 32.0) {
+            assert!(
+                source.has_support_below(x, floor, z, 3.0),
+                "unsupported floor at recipe ({rx},{rz}) y={floor}"
+            );
+        }
+    }
 }
 
 #[test]

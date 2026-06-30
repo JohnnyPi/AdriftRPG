@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use terrain_meshing::TerrainMeshData;
 use voxel_core::{ChunkCoord, CHUNK_CELLS};
 
-pub fn mesh_from_terrain_data(data: &TerrainMeshData) -> Mesh {
+pub fn mesh_from_terrain_data(data: &TerrainMeshData, cell_size_m: f32) -> Mesh {
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::default(),
@@ -12,7 +12,19 @@ pub fn mesh_from_terrain_data(data: &TerrainMeshData) -> Mesh {
     if data.positions.is_empty() {
         return mesh;
     }
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, data.positions.clone());
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_POSITION,
+        data.positions
+            .iter()
+            .map(|p| {
+                [
+                    p[0] * cell_size_m,
+                    p[1] * cell_size_m,
+                    p[2] * cell_size_m,
+                ]
+            })
+            .collect::<Vec<_>>(),
+    );
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, data.normals.clone());
     if !data.material_ids.is_empty() {
         mesh.insert_attribute(
@@ -41,10 +53,11 @@ pub fn mesh_from_terrain_data(data: &TerrainMeshData) -> Mesh {
     mesh
 }
 
-pub fn chunk_world_transform(coord: ChunkCoord) -> Transform {
+pub fn chunk_world_transform(coord: ChunkCoord, cell_size_m: f32) -> Transform {
+    let extent = CHUNK_CELLS as f32 * cell_size_m;
     Transform::from_translation(Vec3::new(
-        coord.x as f32 * CHUNK_CELLS as f32,
-        coord.y as f32 * CHUNK_CELLS as f32,
-        coord.z as f32 * CHUNK_CELLS as f32,
+        coord.x as f32 * extent,
+        coord.y as f32 * extent,
+        coord.z as f32 * extent,
     ))
 }

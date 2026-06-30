@@ -1,0 +1,39 @@
+﻿schema_version: 1
+id: materials.expanded_slice
+description: Island surface materials including forest and scrub
+materials:
+  - id: 0
+    name: grass
+    albedo: [0.34, 0.52, 0.28]
+    triplanar_scale: 0.5
+    roughness: 0.9
+  - id: 1
+    name: sand
+    albedo: [0.86, 0.78, 0.58]
+    triplanar_scale: 0.35
+    roughness: 0.95
+  - id: 2
+    name: rock
+    albedo: [0.45, 0.44, 0.42]
+    triplanar_scale: 0.25
+    roughness: 0.85
+  - id: 3
+    name: cave_stone
+    albedo: [0.28, 0.26, 0.30]
+    triplanar_scale: 0.2
+    roughness: 0.95
+  - id: 4
+    name: wet_rock
+    albedo: [0.32, 0.38, 0.36]
+    triplanar_scale: 0.25
+    roughness: 0.4
+  - id: 5
+    name: forest_floor
+    albedo: [0.22, 0.42, 0.20]
+    triplanar_scale: 0.45
+    roughness: 0.92
+  - id: 6
+    name: scrub
+    albedo: [0.48, 0.52, 0.28]
+    triplanar_scale: 0.4
+    roughness: 0.88

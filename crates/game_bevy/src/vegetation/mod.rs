@@ -7,7 +7,8 @@ use crate::physics::SpawnTerrainReleased;
 use crate::player::Player;
 use crate::state::AppState;
 use crate::terrain::{
-    world_position_in_decoration_radius, ChunkState, TerrainPipelineState, TerrainWorldRuntime,
+    world_position_in_decoration_radius, world_position_in_high_detail_radius, ChunkState,
+    TerrainPipelineState, TerrainWorldRuntime,
 };
 use crate::ui::{EcologyTweaks, WorldTweaks};
 use game_data::VegetationRuleDefinition;
@@ -171,7 +172,6 @@ fn spawn_vegetation_and_props(
     let mut rng_state = seed;
     let mut occupied: Vec<(f32, f32)> = Vec::new();
 
-    let high_detail_m = world_tweaks.high_detail_radius as f32 * CHUNK_CELLS as f32;
     let decoration_m = world_tweaks.decoration_radius as f32 * CHUNK_CELLS as f32;
 
     for x in (-48..48).step_by(2) {
@@ -185,7 +185,15 @@ fn spawn_vegetation_and_props(
             if dist_from_player > decoration_m {
                 continue;
             }
-            let detail_scale = if dist_from_player <= high_detail_m { 1.0 } else { 0.55 };
+            let detail_scale = if world_position_in_high_detail_radius(
+                interest_center,
+                Vec3::new(wx, 0.0, wz),
+                world_tweaks,
+            ) {
+                1.0
+            } else {
+                0.55
+            };
             if (wx * wx + wz * wz).sqrt() > max_dist {
                 continue;
             }
@@ -265,6 +273,12 @@ fn biome_id(kind: BiomeKind) -> &'static str {
         BiomeKind::ShallowWater => "shallow_water",
         BiomeKind::Wetland => "wetland",
         BiomeKind::Riverbank => "riverbank",
+        BiomeKind::Forest => "forest",
+        BiomeKind::Scrub => "scrub",
+        BiomeKind::Alpine => "mountain_alpine",
+        BiomeKind::CoastalScrub => "coastal_scrub",
+        BiomeKind::DeepWater => "deep_water",
+        BiomeKind::OffshoreShelf => "offshore_shelf",
     }
 }
 

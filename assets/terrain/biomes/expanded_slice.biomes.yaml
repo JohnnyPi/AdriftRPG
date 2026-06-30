@@ -1,0 +1,72 @@
+﻿schema_version: 1
+id: biomes.expanded_slice
+description: Varied island biomes with forest, scrub, alpine, and coastal zones
+rules:
+  - id: shallow_water
+    material_id: 1
+    color: [0.18, 0.62, 0.58]
+    elevation_max: 3.5
+  - id: deep_water
+    material_id: 1
+    color: [0.08, 0.28, 0.42]
+    elevation_max: -5.0
+  - id: offshore_shelf
+    material_id: 1
+    color: [0.12, 0.45, 0.52]
+    elevation_min: -15.0
+    elevation_max: 2.0
+  - id: cave
+    material_id: 3
+    color: [0.28, 0.26, 0.30]
+    cave_depth_min: 2.0
+    elevation_max: 30.0
+  - id: beach
+    material_id: 1
+    color: [0.86, 0.78, 0.58]
+    elevation_min: -1.0
+    elevation_max: 14.0
+    water_distance_max: 35.0
+  - id: wetland
+    material_id: 4
+    color: [0.28, 0.42, 0.22]
+    elevation_max: 5.0
+    moisture_min: 0.60
+  - id: riverbank
+    material_id: 4
+    color: [0.32, 0.48, 0.26]
+    elevation_max: 12.0
+    river_distance_max: 8.0
+  - id: mountain_alpine
+    material_id: 2
+    color: [0.58, 0.56, 0.54]
+    elevation_min: 28.0
+    slope_min: 12.0
+  - id: rocky_upland
+    material_id: 2
+    color: [0.45, 0.44, 0.42]
+    elevation_min: 12.0
+    slope_min: 18.0
+  - id: coastal_scrub
+    material_id: 6
+    color: [0.52, 0.54, 0.32]
+    elevation_min: 2.0
+    elevation_max: 16.0
+    water_distance_max: 80.0
+    moisture_min: 0.30
+  - id: forest
+    material_id: 5
+    color: [0.22, 0.42, 0.20]
+    elevation_min: 4.0
+    elevation_max: 18.0
+    slope_max: 25.0
+    moisture_min: 0.55
+  - id: scrub
+    material_id: 6
+    color: [0.48, 0.52, 0.28]
+    elevation_min: 4.0
+    elevation_max: 14.0
+    moisture_min: 0.38
+  - id: grassland
+    material_id: 0
+    color: [0.34, 0.52, 0.28]
+    moisture_min: 0.15

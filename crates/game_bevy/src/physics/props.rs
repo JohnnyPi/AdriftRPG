@@ -149,12 +149,12 @@ fn animate_moving_platform(
     tweaks: Res<PhysicsTweaks>,
     mut platforms: Query<(&MovingPlatform, &mut Transform, &mut LinearVelocity)>,
 ) {
-    let speed = if tweaks.use_overrides {
-        tweaks.platform_speed
-    } else {
-        2.5
-    };
     for (platform, mut transform, mut velocity) in &mut platforms {
+        let speed = if tweaks.use_overrides {
+            tweaks.platform_speed
+        } else {
+            platform.speed
+        };
         let t = (time.elapsed_secs() * speed + platform.phase).sin() * 0.5 + 0.5;
         let pos = platform.start.lerp(platform.end, t);
         let prev = transform.translation;

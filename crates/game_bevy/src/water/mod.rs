@@ -41,6 +41,7 @@ pub struct RiverWaterSurface;
 pub struct WaterPlugin;
 
 /// VS2 §20 render-side water surfaces.
+#[allow(dead_code)]
 pub type WaterRenderingPlugin = WaterPlugin;
 
 impl Plugin for WaterPlugin {
@@ -86,6 +87,7 @@ fn spawn_water_bodies(
         water_def,
         registry.0.water_body_material(&shared::StableId::new("waterbody.sea")),
         sea_level,
+        &tweaks,
     );
     commands.spawn((
         WaterSurface,
@@ -110,6 +112,7 @@ fn spawn_water_bodies(
         water_def,
         registry.0.water_body_material(&shared::StableId::new("waterbody.upland_pool")),
         pool_elevation,
+        &tweaks,
     );
     commands.spawn((
         WaterSurface,
@@ -125,6 +128,7 @@ fn spawn_water_bodies(
                 water_def,
                 registry.0.water_body_material(&shared::StableId::new("waterbody.river")),
                 sea_level,
+                &tweaks,
             );
             commands.spawn((
                 RiverWaterSurface,
@@ -184,13 +188,18 @@ fn make_water_material(
     water_def: &game_data::CompiledWater,
     body_material: Option<&game_data::CompiledWaterBodyMaterial>,
     elevation: f32,
+    tweaks: &WaterTweaks,
 ) -> Handle<WaterMaterial> {
-    let shallow = body_material
+    let mut shallow = body_material
         .map(|m| m.shallow_color)
         .unwrap_or(water_def.shallow_color);
-    let deep = body_material
+    let mut deep = body_material
         .map(|m| m.deep_color)
         .unwrap_or(water_def.deep_color);
+    if tweaks.use_overrides {
+        shallow = tweaks.shallow_color;
+        deep = tweaks.deep_color;
+    }
     let transparency = body_material
         .map(|m| m.transparency)
         .unwrap_or(water_def.transparency);

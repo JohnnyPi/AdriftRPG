@@ -2,6 +2,7 @@
 
 mod chunk_gen;
 mod density_ops;
+pub mod surface_height;
 pub mod field_stack;
 pub mod hydrology;
 pub mod noise;
@@ -16,9 +17,11 @@ pub use chunk_gen::{chunk_axis_range, generate_chunk, generate_padded_samples, i
 pub use density_ops::{capsule_sdf, ellipsoid_sdf, plane_density, solid_subtract, solid_union, sphere_density};
 pub use noise::ValueNoise;
 pub use recipe::{
-    coastal_inland_factor, default_vertical_slice_recipe, distance_to_water_m, CombineOp,
-    RecipeDensitySource, RecipeOp, RiverCarveContext, TerrainRecipe,
+    coastal_inland_factor, default_vertical_slice_recipe, distance_to_river_m, distance_to_water_m,
+    CombineOp, RecipeDensitySource, RecipeOp, RiverCarveContext, TerrainRecipe,
 };
+pub use surface_height::{island_land_factor_warped, land_surface_height};
+pub use surface_height::CoastModifierKind;
 pub use topology::{
     apply_foundation_seal, cavity_sdf_at, coastal_surface_height, count_outdoor_void_columns,
     outside_declared_cavities, CAVITY_EXTERIOR_MARGIN, FOUNDATION_DEPTH_M,

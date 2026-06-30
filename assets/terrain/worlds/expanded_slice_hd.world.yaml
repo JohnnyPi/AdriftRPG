@@ -1,10 +1,10 @@
 ﻿schema_version: 1
-id: world.expanded_slice
+id: world.expanded_slice_hd
 
 seed: 48129
 
 voxel:
-  cell_size_m: 1.0
+  cell_size_m: 0.5
 
 chunks:
   cells: [16, 16, 16]

@@ -1,9 +1,9 @@
 ﻿schema_version: 1
 id: terrain.expanded_slice
-description: Bounded tropical island with peak, trench, river basin, and fort pad
+description: Bounded tropical island with peak, trench, river basin, fort pad, and west-coast cave
 spawn: [70.0, 0.0, 160.0]
 includes:
-  - cave.demo_cave
+  - cave.expanded_overhang
   - cave.expanded_cave
 operations:
   - type: island_mask
@@ -11,6 +11,7 @@ operations:
     radius_m: 92.0
     falloff_m: 24.0
     ocean_floor_y: -28.0
+    domain_warp: 0.012
   - type: ocean_floor
     origin: [128.0, 128.0]
     scale: [256.0, 256.0]
@@ -27,8 +28,39 @@ operations:
     ridge_scale: [48.0, 56.0]
     ridge_amplitude: 12.0
     detail_frequency: 0.025
-    detail_amplitude: 3.0
+    detail_amplitude: 2.5
     detail_octaves: 4
+    regional_frequency: 0.006
+    regional_amplitude: 5.0
+    local_frequency: 0.035
+    local_amplitude: 2.0
+    ridged_amplitude: 2.5
+    domain_warp: 0.008
+  - type: valley_basin
+    origin: [105.0, 165.0]
+    scale: [70.0, 90.0]
+    depth_m: 6.0
+  - type: coast_modifier
+    kind: cove
+    center: [62.0, 145.0]
+    radius_m: 22.0
+    depth_m: 4.0
+    min_land_factor: 0.35
+    max_land_factor: 0.9
+  - type: coast_modifier
+    kind: cove
+    center: [78.0, 95.0]
+    radius_m: 18.0
+    depth_m: 3.5
+    min_land_factor: 0.3
+    max_land_factor: 0.85
+  - type: coast_modifier
+    kind: harbor
+    center: [68.0, 168.0]
+    radius_m: 28.0
+    depth_m: 5.0
+    min_land_factor: 0.25
+    max_land_factor: 0.75
   - type: mountain_peak
     center: [188.0, 178.0]
     base_elevation_m: 18.0
@@ -37,12 +69,12 @@ operations:
     steepness: 1.7
     peak_noise: [0.06, 3.0]
   - type: ellipsoid
-    center: [82.0, 31.5, 196.0]
-    radii: [22.0, 4.0, 22.0]
-    combine: subtract
+    center: [82.0, 30.0, 196.0]
+    radii: [20.0, 3.5, 20.0]
+    combine: union
   - type: ellipsoid
-    center: [140.0, 12.0, 120.0]
-    radii: [8.0, 5.0, 10.0]
+    center: [82.0, 28.0, 196.0]
+    radii: [8.0, 2.0, 8.0]
     combine: subtract
   - type: underwater_trench
     points:

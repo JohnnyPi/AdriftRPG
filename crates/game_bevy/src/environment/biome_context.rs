@@ -4,12 +4,15 @@ use terrain_generation::{RecipeDensitySource, ValueNoise};
 pub const ROCK_SLOPE_DEG: f32 = 35.0;
 
 const MOISTURE_SCALE: f32 = 0.001;
+const CONTINENTAL_SCALE: f32 = 0.0004;
 const TRANSITION_NOISE_SCALE: f32 = 0.0015;
 const SLOPE_SAMPLE_EPS: f32 = 4.0;
 const ELEVATION_COOLING: f32 = 0.02;
 const BASE_TEMPERATURE: f32 = 0.65;
 const CAVE_DEPTH_THRESHOLD: f32 = 2.0;
 const SHALLOW_WATER_MARGIN: f32 = 1.5;
+const COAST_HUMIDITY_SCALE: f32 = 60.0;
+const RAIN_SHADOW_RIDGE: [f32; 2] = [180.0, 196.0];
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BiomeSampleContext {
@@ -17,10 +20,15 @@ pub struct BiomeSampleContext {
     pub elevation: f32,
     pub slope_degrees: f32,
     pub distance_to_water: f32,
+    pub distance_to_river: f32,
     pub cave_depth: f32,
     pub moisture: f32,
+    pub effective_moisture: f32,
     pub transition_noise: f32,
     pub temperature: f32,
+    pub continentalness: f32,
+    pub coast_humidity: f32,
+    pub rain_shadow: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -28,8 +36,14 @@ pub struct ColumnClimate {
     pub surface_y: f32,
     pub slope_degrees: f32,
     pub distance_to_water: f32,
+    pub distance_to_river: f32,
     pub moisture: f32,
+    pub effective_moisture: f32,
     pub transition_noise: f32,
+    pub temperature: f32,
+    pub continentalness: f32,
+    pub coast_humidity: f32,
+    pub rain_shadow: f32,
 }
 
 /// Per-chunk XZ cache so voxel material assignment does not call `surface_height_at` per voxel.
@@ -61,20 +75,18 @@ impl ChunkColumnCache {
                 let surface_y = heights[lz * side + lx];
                 let slope_degrees = slope_from_height_grid(&heights, side, lx, lz);
                 let distance_to_water = source.distance_to_water_m(wx as f32, wz as f32);
-                let moisture =
-                    noise.fbm(wx as f32 * MOISTURE_SCALE, 0.0, wz as f32 * MOISTURE_SCALE, 3, 2.0, 0.5);
-                let transition_noise = noise.sample(
-                    wx as f32 * TRANSITION_NOISE_SCALE,
-                    0.0,
-                    wz as f32 * TRANSITION_NOISE_SCALE,
-                );
-                columns.push(ColumnClimate {
+                let distance_to_river = source.distance_to_river_m(wx as f32, wz as f32);
+                let climate = sample_climate(
+                    source,
+                    &noise,
+                    wx as f32,
+                    wz as f32,
                     surface_y,
                     slope_degrees,
                     distance_to_water,
-                    moisture,
-                    transition_noise,
-                });
+                    distance_to_river,
+                );
+                columns.push(climate);
             }
         }
 
@@ -100,19 +112,21 @@ impl ChunkColumnCache {
 
 impl BiomeSampleContext {
     pub fn sample(source: &RecipeDensitySource, x: f32, y: f32, z: f32) -> Self {
-        let column = ColumnClimate {
-            surface_y: source.surface_height_at(x, z),
-            slope_degrees: estimate_slope_deg(source, x, z),
-            distance_to_water: source.distance_to_water_m(x, z),
-            moisture: {
-                let noise = ValueNoise::new(source.recipe().seed);
-                noise.fbm(x * MOISTURE_SCALE, 0.0, z * MOISTURE_SCALE, 3, 2.0, 0.5)
-            },
-            transition_noise: {
-                let noise = ValueNoise::new(source.recipe().seed);
-                noise.sample(x * TRANSITION_NOISE_SCALE, 0.0, z * TRANSITION_NOISE_SCALE)
-            },
-        };
+        let surface_y = source.surface_height_at(x, z);
+        let slope_degrees = estimate_slope_deg(source, x, z);
+        let distance_to_water = source.distance_to_water_m(x, z);
+        let distance_to_river = source.distance_to_river_m(x, z);
+        let noise = ValueNoise::new(source.recipe().seed);
+        let column = sample_climate(
+            source,
+            &noise,
+            x,
+            z,
+            surface_y,
+            slope_degrees,
+            distance_to_water,
+            distance_to_river,
+        );
         context_from_column(source, &column, y)
     }
 
@@ -125,22 +139,92 @@ impl BiomeSampleContext {
     }
 }
 
+fn sample_climate(
+    source: &RecipeDensitySource,
+    noise: &ValueNoise,
+    x: f32,
+    z: f32,
+    surface_y: f32,
+    slope_degrees: f32,
+    distance_to_water: f32,
+    distance_to_river: f32,
+) -> ColumnClimate {
+    let recipe_x = x + source.recipe().coord_offset[0];
+    let recipe_z = z + source.recipe().coord_offset[2];
+    let moisture = noise.fbm(
+        recipe_x * MOISTURE_SCALE,
+        0.0,
+        recipe_z * MOISTURE_SCALE,
+        3,
+        2.0,
+        0.5,
+    );
+    let continentalness = noise.fbm(
+        recipe_x * CONTINENTAL_SCALE,
+        0.0,
+        recipe_z * CONTINENTAL_SCALE,
+        2,
+        2.0,
+        0.5,
+    );
+    let transition_noise = noise.sample(
+        recipe_x * TRANSITION_NOISE_SCALE,
+        0.0,
+        recipe_z * TRANSITION_NOISE_SCALE,
+    );
+    let coast_humidity = (-distance_to_water / COAST_HUMIDITY_SCALE).exp() * 0.22;
+    let rain_shadow = rain_shadow_at(recipe_x, recipe_z);
+    let effective_moisture =
+        (moisture + coast_humidity - rain_shadow + continentalness * 0.08).clamp(0.0, 1.0);
+    let elevation = surface_y - source.recipe().sea_level;
+    let temperature = (BASE_TEMPERATURE - elevation * ELEVATION_COOLING + transition_noise * 0.08
+        - rain_shadow * 0.15)
+        .clamp(0.0, 1.0);
+
+    ColumnClimate {
+        surface_y,
+        slope_degrees,
+        distance_to_water,
+        distance_to_river,
+        moisture,
+        effective_moisture,
+        transition_noise,
+        temperature,
+        continentalness,
+        coast_humidity,
+        rain_shadow,
+    }
+}
+
+fn rain_shadow_at(x: f32, z: f32) -> f32 {
+    let dx = RAIN_SHADOW_RIDGE[0] - x;
+    let dz = RAIN_SHADOW_RIDGE[1] - z;
+    if dx <= 0.0 || dz <= 0.0 {
+        return 0.0;
+    }
+    let dist = (dx * dx + dz * dz).sqrt();
+    (1.0 - (dist / 80.0).min(1.0)) * 0.28
+}
+
 fn context_from_column(source: &RecipeDensitySource, column: &ColumnClimate, y: f32) -> BiomeSampleContext {
     let sea_level = source.recipe().sea_level;
     let elevation = y - sea_level;
     let cave_depth = (column.surface_y - y).max(0.0);
-    let temperature = (BASE_TEMPERATURE - elevation * ELEVATION_COOLING + column.transition_noise * 0.08)
-        .clamp(0.0, 1.0);
 
     BiomeSampleContext {
         world_y: y,
         elevation,
         slope_degrees: column.slope_degrees,
         distance_to_water: column.distance_to_water,
+        distance_to_river: column.distance_to_river,
         cave_depth,
         moisture: column.moisture,
+        effective_moisture: column.effective_moisture,
         transition_noise: column.transition_noise,
-        temperature,
+        temperature: column.temperature,
+        continentalness: column.continentalness,
+        coast_humidity: column.coast_humidity,
+        rain_shadow: column.rain_shadow,
     }
 }
 

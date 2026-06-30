@@ -13,12 +13,6 @@ use crate::terrain::{
 };
 use crate::ui::{TerrainTweaks, WorldTweaks};
 
-#[derive(Resource, Debug, Default)]
-pub struct WorldProfileOverride {
-    pub pending: bool,
-    pub target_world_id: Option<StableId>,
-}
-
 pub struct WorldProfilePlugin;
 
 impl Plugin for WorldProfilePlugin {

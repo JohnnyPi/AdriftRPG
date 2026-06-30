@@ -1,9 +1,11 @@
 use crate::density_ops::{capsule_sdf, ellipsoid_sdf, plane_density, solid_subtract, solid_union};
 use crate::noise::ValueNoise;
 use crate::river::{river_carve_offset, river_channel_at};
+use crate::surface_height::{island_land_factor_warped, land_surface_height};
 use crate::topology::apply_foundation_seal;
 use crate::water_body::RiverSpline;
 use crate::DensitySource;
+use crate::surface_height::CoastModifierKind;
 
 /// Portable terrain recipe evaluated at runtime (may originate from YAML).
 #[derive(Clone, Debug)]
@@ -30,6 +32,25 @@ pub enum RecipeOp {
         detail_frequency: f32,
         detail_amplitude: f32,
         detail_octaves: u32,
+        regional_frequency: f32,
+        regional_amplitude: f32,
+        local_frequency: f32,
+        local_amplitude: f32,
+        ridged_amplitude: f32,
+        domain_warp: f32,
+    },
+    ValleyBasin {
+        origin: [f32; 2],
+        scale: [f32; 2],
+        depth_m: f32,
+    },
+    CoastModifier {
+        kind: CoastModifierKind,
+        center: [f32; 2],
+        radius_m: f32,
+        depth_m: f32,
+        min_land_factor: f32,
+        max_land_factor: f32,
     },
     Ellipsoid {
         center: [f32; 3],
@@ -54,6 +75,7 @@ pub enum RecipeOp {
         radius_m: f32,
         falloff_m: f32,
         ocean_floor_y: f32,
+        domain_warp: f32,
     },
     OceanFloor {
         origin: [f32; 2],
@@ -125,6 +147,16 @@ pub fn distance_to_water_m(recipe: &TerrainRecipe, x: f32, z: f32) -> f32 {
     (1.0 - inland) * max_distance
 }
 
+/// Horizontal distance to the nearest river channel centerline in recipe space.
+pub fn distance_to_river_m(source: &RecipeDensitySource, x: f32, z: f32) -> f32 {
+    if let Some(ref river) = source.river_carve {
+        let (dist, _, _) = river_channel_at(&river.spline, x, z);
+        dist
+    } else {
+        f32::MAX
+    }
+}
+
 impl RecipeDensitySource {
     pub fn new(recipe: TerrainRecipe) -> Self {
         Self {
@@ -162,6 +194,14 @@ impl RecipeDensitySource {
         )
     }
 
+    pub fn distance_to_river_m(&self, world_x: f32, world_z: f32) -> f32 {
+        distance_to_river_m(
+            self,
+            world_x + self.recipe.coord_offset[0],
+            world_z + self.recipe.coord_offset[2],
+        )
+    }
+
     pub fn density_at(&self, world_x: f32, world_y: f32, world_z: f32) -> f32 {
         self.density_at_recipe(
             world_x + self.recipe.coord_offset[0],
@@ -183,9 +223,10 @@ impl RecipeDensitySource {
                     radius_m,
                     falloff_m,
                     ocean_floor_y,
+                    domain_warp,
                 } = op
                 {
-                    Some((*center, *radius_m, *falloff_m, *ocean_floor_y))
+                    Some((*center, *radius_m, *falloff_m, *domain_warp, *ocean_floor_y))
                 } else {
                     None
                 }
@@ -213,41 +254,26 @@ impl RecipeDensitySource {
             }
         });
 
-        let land_factor = island.map(|(center, radius, falloff, _)| {
-            island_land_factor(x, z, center, radius, falloff)
+        let land_factor = island.as_ref().map(|(center, radius, falloff, domain_warp, _)| {
+            let (wx, wz) = if *domain_warp > 0.0 {
+                let ox = noise.fbm(x * domain_warp, 0.0, z * domain_warp, 2, 2.0, 0.5) - 0.5;
+                let oz = noise.fbm(x * domain_warp + 100.0, 0.0, z * domain_warp, 2, 2.0, 0.5) - 0.5;
+                (
+                    x + ox * 30.0 * domain_warp,
+                    z + oz * 30.0 * domain_warp,
+                )
+            } else {
+                (x, z)
+            };
+            island_land_factor(wx, wz, *center, *radius, *falloff)
         });
 
         let mut density = f32::MAX;
 
         for op in &self.recipe.ops {
             match op {
-                RecipeOp::CoastalSurface {
-                    origin: _,
-                    scale: _,
-                    base_height,
-                    height_range,
-                    ridge_origin,
-                    ridge_scale,
-                    ridge_amplitude,
-                    detail_frequency,
-                    detail_amplitude,
-                    detail_octaves,
-                } => {
-                    let coast = coastal_inland_factor(&self.recipe, x, z);
-                    let broad = *base_height + coast * *height_range;
-                    let ridge_bump = ((x - ridge_origin[0]) / ridge_scale[0]).clamp(0.0, 1.0)
-                        * ((z + ridge_origin[1]) / ridge_scale[1]).clamp(0.0, 1.0)
-                        * *ridge_amplitude;
-                    let detail = (noise.fbm(
-                        x * detail_frequency,
-                        0.0,
-                        z * detail_frequency,
-                        *detail_octaves,
-                        2.0,
-                        0.5,
-                    ) - 0.5)
-                        * *detail_amplitude;
-                    let land_surface = broad + ridge_bump + detail;
+                RecipeOp::CoastalSurface { .. } => {
+                    let land_surface = land_surface_height(&self.recipe, x, z);
                     let surface_y = match land_factor {
                         Some(f) if f >= 1.0 => land_surface,
                         Some(f) if f <= 0.0 => {
@@ -257,9 +283,9 @@ impl RecipeDensitySource {
                                 &noise,
                                 self.recipe.sea_level,
                                 ocean_floor,
-                                island.map(|(_, _, _, floor_y)| floor_y),
+                                island.map(|(_, _, _, _, floor_y)| floor_y),
                             );
-                            if let Some((_, _, _, floor_y)) = island {
+                            if let Some((_, _, _, _, floor_y)) = island {
                                 ocean_y = ocean_y.min(floor_y);
                             }
                             ocean_y
@@ -271,9 +297,9 @@ impl RecipeDensitySource {
                                 &noise,
                                 self.recipe.sea_level,
                                 ocean_floor,
-                                island.map(|(_, _, _, floor_y)| floor_y),
+                                island.map(|(_, _, _, _, floor_y)| floor_y),
                             );
-                            if let Some((_, _, _, floor_y)) = island {
+                            if let Some((_, _, _, _, floor_y)) = island {
                                 ocean_y = ocean_y.min(floor_y);
                             }
                             land_surface * f + ocean_y * (1.0 - f)
@@ -282,7 +308,7 @@ impl RecipeDensitySource {
                     };
                     density = plane_density(y, surface_y);
                 }
-                RecipeOp::IslandMask { .. } | RecipeOp::OceanFloor { .. } => {}
+                RecipeOp::IslandMask { .. } | RecipeOp::OceanFloor { .. } | RecipeOp::ValleyBasin { .. } | RecipeOp::CoastModifier { .. } => {}
                 RecipeOp::MountainPeak {
                     center,
                     base_elevation_m,
@@ -515,19 +541,16 @@ pub fn island_land_factor(x: f32, z: f32, center: [f32; 2], radius_m: f32, fallo
 }
 
 pub(crate) fn island_land_factor_from_recipe(recipe: &TerrainRecipe, x: f32, z: f32) -> Option<f32> {
-    recipe.ops.iter().find_map(|op| {
-        if let RecipeOp::IslandMask {
-            center,
-            radius_m,
-            falloff_m,
-            ..
-        } = op
-        {
-            Some(island_land_factor(x, z, *center, *radius_m, *falloff_m))
-        } else {
-            None
-        }
-    })
+    let noise = ValueNoise::new(recipe.seed);
+    if recipe
+        .ops
+        .iter()
+        .any(|op| matches!(op, RecipeOp::IslandMask { .. }))
+    {
+        Some(island_land_factor_warped(recipe, x, z, &noise))
+    } else {
+        None
+    }
 }
 
 fn ocean_surface_y(
@@ -578,6 +601,12 @@ pub fn default_vertical_slice_recipe(seed: u64, sea_level: f32) -> TerrainRecipe
                 detail_frequency: 0.04,
                 detail_amplitude: 4.0,
                 detail_octaves: 4,
+                regional_frequency: 0.0,
+                regional_amplitude: 0.0,
+                local_frequency: 0.0,
+                local_amplitude: 0.0,
+                ridged_amplitude: 0.0,
+                domain_warp: 0.0,
             },
             RecipeOp::Ellipsoid {
                 center: [35.0, 11.0, 15.0],

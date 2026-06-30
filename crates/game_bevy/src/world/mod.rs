@@ -67,12 +67,14 @@ fn spawn_landmark_props(
         }
         commands.spawn((
             LandmarkSign,
+            Name::new(fact.label.clone()),
             Mesh3d(meshes.add(Cylinder::new(0.12, 2.4))),
             MeshMaterial3d(pole_mat.clone()),
             Transform::from_translation(fact.position + Vec3::Y * 1.2),
         ));
         commands.spawn((
             LandmarkSign,
+            Name::new(fact.label.clone()),
             Mesh3d(meshes.add(Cuboid::new(1.2, 0.6, 0.08))),
             MeshMaterial3d(sign_mat.clone()),
             Transform::from_translation(fact.position + Vec3::new(0.0, 2.6, 0.0)),

@@ -2,6 +2,7 @@
 
 use bevy::prelude::*;
 
+use crate::player::Player;
 use crate::state::AppState;
 use crate::terrain::CameraWaterState;
 
@@ -42,11 +43,27 @@ fn spawn_audio_stubs(mut commands: Commands) {
 
 fn update_audio_state(
     water: Res<CameraWaterState>,
+    player: Query<&Transform, With<Player>>,
+    emitters: Query<(&AudioEmitterStub, &Transform)>,
     mut audio: ResMut<EnvironmentAudioState>,
 ) {
-    audio.zone = if water.submerged_depth > 0.3 {
-        "underwater"
-    } else {
-        "outdoor"
+    if water.submerged_depth > 0.3 {
+        audio.zone = "underwater";
+        return;
+    }
+    let Ok(player_tf) = player.single() else {
+        audio.zone = "outdoor";
+        return;
     };
+    let listener = player_tf.translation;
+    let mut nearest_label = "outdoor";
+    let mut nearest_dist_sq = f32::MAX;
+    for (stub, tf) in &emitters {
+        let dist_sq = listener.distance_squared(tf.translation);
+        if dist_sq < nearest_dist_sq {
+            nearest_dist_sq = dist_sq;
+            nearest_label = stub.label;
+        }
+    }
+    audio.zone = nearest_label;
 }

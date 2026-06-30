@@ -4,8 +4,8 @@ use game_data::{
 use shared::StableId;
 use sha2::{Digest, Sha256};
 use terrain_generation::{
-    default_vertical_slice_recipe, generate_river_spline, CombineOp, RecipeDensitySource,
-    RecipeOp, RiverCarveContext, RiverGenConfig, TerrainRecipe,
+    default_vertical_slice_recipe, generate_river_spline, CoastModifierKind, CombineOp,
+    RecipeDensitySource, RecipeOp, RiverCarveContext, RiverGenConfig, TerrainRecipe,
 };
 
 pub fn build_density_source(
@@ -148,6 +148,12 @@ fn convert_op(def: &TerrainOperationDefinition) -> RecipeOp {
             detail_frequency,
             detail_amplitude,
             detail_octaves,
+            regional_frequency,
+            regional_amplitude,
+            local_frequency,
+            local_amplitude,
+            ridged_amplitude,
+            domain_warp,
         } => RecipeOp::CoastalSurface {
             origin: *origin,
             scale: *scale,
@@ -159,6 +165,36 @@ fn convert_op(def: &TerrainOperationDefinition) -> RecipeOp {
             detail_frequency: *detail_frequency,
             detail_amplitude: *detail_amplitude,
             detail_octaves: *detail_octaves,
+            regional_frequency: *regional_frequency,
+            regional_amplitude: *regional_amplitude,
+            local_frequency: *local_frequency,
+            local_amplitude: *local_amplitude,
+            ridged_amplitude: *ridged_amplitude,
+            domain_warp: *domain_warp,
+        },
+        TerrainOperationDefinition::ValleyBasin {
+            origin,
+            scale,
+            depth_m,
+        } => RecipeOp::ValleyBasin {
+            origin: *origin,
+            scale: *scale,
+            depth_m: *depth_m,
+        },
+        TerrainOperationDefinition::CoastModifier {
+            kind,
+            center,
+            radius_m,
+            depth_m,
+            min_land_factor,
+            max_land_factor,
+        } => RecipeOp::CoastModifier {
+            kind: parse_coast_modifier_kind(kind),
+            center: *center,
+            radius_m: *radius_m,
+            depth_m: *depth_m,
+            min_land_factor: *min_land_factor,
+            max_land_factor: *max_land_factor,
         },
         TerrainOperationDefinition::Ellipsoid {
             center,
@@ -198,11 +234,13 @@ fn convert_op(def: &TerrainOperationDefinition) -> RecipeOp {
             radius_m,
             falloff_m,
             ocean_floor_y,
+            domain_warp,
         } => RecipeOp::IslandMask {
             center: *center,
             radius_m: *radius_m,
             falloff_m: *falloff_m,
             ocean_floor_y: *ocean_floor_y,
+            domain_warp: *domain_warp,
         },
         TerrainOperationDefinition::OceanFloor {
             origin,
@@ -247,5 +285,13 @@ fn parse_combine(value: &str) -> CombineOp {
     match value.to_ascii_lowercase().as_str() {
         "subtract" => CombineOp::Subtract,
         _ => CombineOp::Union,
+    }
+}
+
+fn parse_coast_modifier_kind(value: &str) -> CoastModifierKind {
+    match value.to_ascii_lowercase().as_str() {
+        "harbor" => CoastModifierKind::Harbor,
+        "cliff_shelf" | "cliff" => CoastModifierKind::CliffShelf,
+        _ => CoastModifierKind::Cove,
     }
 }

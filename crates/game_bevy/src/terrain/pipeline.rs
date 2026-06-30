@@ -218,6 +218,7 @@ fn init_terrain_world(
         .expect("world");
     seed_override.seed = world.seed;
     runtime.seed = world.seed;
+    runtime.cell_size_m = world.cell_size_m;
     runtime.revision = revision.value;
     let override_seed = seed_override_active(&seed_override, world.seed);
     let source = build_density_source(
@@ -425,13 +426,20 @@ fn dispatch_density_jobs(
 
     let catalog_for_jobs = biome_catalog.clone();
     let edits = edit_store.clone();
+    let cell_size_m = runtime.cell_size_m;
     for (coord, rev) in to_start {
         let src = source.clone();
         let catalog = catalog_for_jobs.clone();
         let edit_overlay = edits.clone();
         let started = Instant::now();
         let task = AsyncComputeTaskPool::get().spawn(async move {
-            generate_padded_samples_with_biomes(&src, &catalog, &edit_overlay, coord)
+            generate_padded_samples_with_biomes(
+                &src,
+                &catalog,
+                &edit_overlay,
+                coord,
+                cell_size_m,
+            )
         });
         pipeline.pending_density.push(PendingDensityJob {
             coord,
@@ -550,6 +558,7 @@ fn poll_mesh_jobs(
 fn upload_chunk_meshes(
     mut commands: Commands,
     registry: Res<ConfigRegistryResource>,
+    runtime: Res<TerrainWorldRuntime>,
     mut pipeline: ResMut<TerrainPipelineState>,
     mut metrics: ResMut<TerrainPipelineMetrics>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -585,12 +594,13 @@ fn upload_chunk_meshes(
             continue;
         }
 
-        let mesh = mesh_from_terrain_data(&item.mesh_data);
+        let cell_size_m = runtime.cell_size_m;
+        let mesh = mesh_from_terrain_data(&item.mesh_data, cell_size_m);
         let positions: Vec<Vec3> = item
             .mesh_data
             .positions
             .iter()
-            .map(|p| Vec3::from_array(*p))
+            .map(|p| Vec3::from_array(*p) * cell_size_m)
             .collect();
         let indices = item.mesh_data.indices.clone();
         let tri_indices: Vec<[u32; 3]> = indices
@@ -608,7 +618,7 @@ fn upload_chunk_meshes(
                 TerrainChunkEntity { coord: item.coord },
                 Mesh3d(meshes.add(mesh)),
                 MeshMaterial3d(material.clone()),
-                chunk_world_transform(item.coord),
+                chunk_world_transform(item.coord, cell_size_m),
                 RigidBody::Static,
                 Visibility::default(),
             ))
@@ -674,6 +684,7 @@ fn generate_padded_samples_with_biomes(
     biomes: &BiomeCatalog,
     edits: &TerrainEditStore,
     coord: ChunkCoord,
+    cell_size_m: f32,
 ) -> Vec<voxel_core::TerrainSample> {
     let cells = voxel_core::CHUNK_CELLS;
     let (ox, oy, oz) = voxel_core::TerrainChunk::new(coord).sample_origin();
@@ -683,6 +694,9 @@ fn generate_padded_samples_with_biomes(
     for pz in -1..=(cells as i32 + 1) {
         for py in -1..=(cells as i32 + 1) {
             for px in -1..=(cells as i32 + 1) {
+                let wx_m = (ox + px) as f32 * cell_size_m;
+                let wy_m = (oy + py) as f32 * cell_size_m;
+                let wz_m = (oz + pz) as f32 * cell_size_m;
                 let wx = ox + px;
                 let wy = oy + py;
                 let wz = oz + pz;
@@ -691,14 +705,14 @@ fn generate_padded_samples_with_biomes(
                 {
                     (override_sample.density, override_sample.material)
                 } else {
-                    let density = source.density_at(wx as f32, wy as f32, wz as f32);
+                    let density = source.density_at(wx_m, wy_m, wz_m);
                     let material = material_for_world_with_cache(
                         biomes,
                         source,
                         Some(&column_cache),
-                        wx as f32,
-                        wy as f32,
-                        wz as f32,
+                        wx_m,
+                        wy_m,
+                        wz_m,
                         density,
                     );
                     (density, material)
@@ -740,6 +754,7 @@ mod pipeline_tests {
             &test_catalog(),
             &TerrainEditStore::default(),
             coord,
+            1.0,
         );
         let mesher = SurfaceNetsMesher;
         let mesh = mesher

@@ -268,6 +268,34 @@ pub enum TerrainOperationDefinition {
         detail_frequency: f32,
         detail_amplitude: f32,
         detail_octaves: u32,
+        #[serde(default)]
+        regional_frequency: f32,
+        #[serde(default)]
+        regional_amplitude: f32,
+        #[serde(default)]
+        local_frequency: f32,
+        #[serde(default)]
+        local_amplitude: f32,
+        #[serde(default)]
+        ridged_amplitude: f32,
+        #[serde(default)]
+        domain_warp: f32,
+    },
+    ValleyBasin {
+        origin: [f32; 2],
+        scale: [f32; 2],
+        depth_m: f32,
+    },
+    CoastModifier {
+        #[serde(default = "default_coast_modifier_kind")]
+        kind: String,
+        center: [f32; 2],
+        radius_m: f32,
+        depth_m: f32,
+        #[serde(default = "default_min_land_factor")]
+        min_land_factor: f32,
+        #[serde(default = "default_max_land_factor")]
+        max_land_factor: f32,
     },
     Ellipsoid {
         center: [f32; 3],
@@ -295,6 +323,8 @@ pub enum TerrainOperationDefinition {
         radius_m: f32,
         falloff_m: f32,
         ocean_floor_y: f32,
+        #[serde(default)]
+        domain_warp: f32,
     },
     OceanFloor {
         origin: [f32; 2],
@@ -338,6 +368,18 @@ fn default_combine_union() -> String {
     "union".to_string()
 }
 
+fn default_coast_modifier_kind() -> String {
+    "cove".to_string()
+}
+
+fn default_min_land_factor() -> f32 {
+    0.3
+}
+
+fn default_max_land_factor() -> f32 {
+    0.95
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BiomesDefinition {
@@ -369,6 +411,14 @@ pub struct BiomeRuleDefinition {
     pub cave_depth_min: Option<f32>,
     #[serde(default)]
     pub moisture_min: Option<f32>,
+    #[serde(default)]
+    pub moisture_max: Option<f32>,
+    #[serde(default)]
+    pub temperature_min: Option<f32>,
+    #[serde(default)]
+    pub temperature_max: Option<f32>,
+    #[serde(default)]
+    pub river_distance_max: Option<f32>,
     #[serde(default)]
     pub vegetation_profile_id: Option<StableId>,
     #[serde(default)]
@@ -404,6 +454,10 @@ impl BiomeRuleDefinition {
             water_distance_max: None,
             cave_depth_min: None,
             moisture_min: None,
+            moisture_max: None,
+            temperature_min: None,
+            temperature_max: None,
+            river_distance_max: None,
             vegetation_profile_id: None,
             ambient_audio_profile_id: None,
             weather_profile_id: None,

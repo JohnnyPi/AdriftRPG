@@ -28,7 +28,11 @@ pub enum LocomotionState {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum FacingMode {
     Movement,
+    /// Explicit camera-facing mode (VS2 §9.7); distinct from Movement + steering.
+    #[allow(dead_code)]
     Camera,
+    /// Fixed heading for scripted actors (VS2 §9.7).
+    #[allow(dead_code)]
     LockedYaw(f32),
 }
 
@@ -91,6 +95,12 @@ mod tests {
     fn camera_mode_follows_camera_while_steering() {
         let yaw = resolve_facing_yaw(FacingMode::Camera, true, 1.2, Vec2::ZERO);
         assert!((yaw - 1.2).abs() < 1e-5);
+    }
+
+    #[test]
+    fn locked_yaw_mode_returns_fixed_heading() {
+        let yaw = resolve_facing_yaw(FacingMode::LockedYaw(0.75), false, 0.0, Vec2::ZERO);
+        assert!((yaw - 0.75).abs() < 1e-5);
     }
 
     #[test]

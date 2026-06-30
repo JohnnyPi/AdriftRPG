@@ -11,6 +11,7 @@ pub struct TerrainWorldRuntime {
     pub seed: u64,
     pub revision: u64,
     pub interest_center: ChunkCoord,
+    pub cell_size_m: f32,
 }
 
 impl Default for TerrainWorldRuntime {
@@ -19,6 +20,7 @@ impl Default for TerrainWorldRuntime {
             seed: 0,
             revision: 1,
             interest_center: ChunkCoord::new(0, 0, 0),
+            cell_size_m: 1.0,
         }
     }
 }
@@ -69,6 +71,20 @@ pub fn within_decoration_radius(center: ChunkCoord, coord: ChunkCoord, tweaks: &
 
 pub fn within_high_detail_radius(center: ChunkCoord, coord: ChunkCoord, tweaks: &WorldTweaks) -> bool {
     chunk_chebyshev_distance(center, coord) <= tweaks.high_detail_radius
+}
+
+pub fn world_position_in_high_detail_radius(
+    center: ChunkCoord,
+    position: Vec3,
+    tweaks: &WorldTweaks,
+) -> bool {
+    use voxel_core::WorldCell;
+    let cell = WorldCell::new(
+        position.x.floor() as i32,
+        position.y.floor() as i32,
+        position.z.floor() as i32,
+    );
+    within_high_detail_radius(center, cell.chunk_coord(), tweaks)
 }
 
 pub fn world_position_in_decoration_radius(
@@ -132,6 +148,16 @@ mod residency_tests {
         let far = ChunkCoord::new(tweaks.render_radius + 1, 0, 0);
         assert!(!within_render_radius(center, far, &tweaks));
         assert!(!within_physics_radius(center, far, &tweaks));
+    }
+
+    #[test]
+    fn high_detail_radius_matches_chebyshev_threshold() {
+        let tweaks = WorldTweaks::default();
+        let center = ChunkCoord::new(0, 0, 0);
+        let near = ChunkCoord::new(tweaks.high_detail_radius, 0, 0);
+        assert!(within_high_detail_radius(center, near, &tweaks));
+        let far = ChunkCoord::new(tweaks.high_detail_radius + 1, 0, 0);
+        assert!(!within_high_detail_radius(center, far, &tweaks));
     }
 
     #[test]

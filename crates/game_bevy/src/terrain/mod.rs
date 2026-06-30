@@ -10,18 +10,22 @@ mod residency;
 pub use editing::TerrainEditingPlugin;
 pub use features::{CameraWaterState, TerrainFeaturePlugin, TerrainFeatureRegistry};
 /// VS2 §20 — river spline generation lives in [`TerrainFeaturePlugin`].
+#[allow(dead_code)]
 pub type RiverGenerationPlugin = TerrainFeaturePlugin;
 /// VS2 §20 — water occupancy registry lives in [`TerrainFeaturePlugin`].
+#[allow(dead_code)]
 pub type WaterBodyPlugin = TerrainFeaturePlugin;
 pub use material::{TerrainMaterialHandle, TerrainMaterialPlugin, TerrainTriplanarMaterial};
 pub use metrics::{TerrainPipelineMetrics, WorldSeedOverride};
+#[cfg(test)]
+pub use recipe::build_density_source;
 pub use pipeline::{
     regen_terrain_with_seed, TerrainPipelineState, TerrainPlugin, TerrainRecipeRevision,
     TerrainRegenPending, TerrainSpawnPoint, TerrainWorldInitSet,
 };
 pub use residency::{
-    draw_residency_rings, world_position_in_decoration_radius, ChunkResidencyPlugin,
-    TerrainWorldRuntime,
+    draw_residency_rings, world_position_in_decoration_radius, world_position_in_high_detail_radius,
+    ChunkResidencyPlugin, TerrainWorldRuntime,
 };
 
 use bevy::prelude::*;

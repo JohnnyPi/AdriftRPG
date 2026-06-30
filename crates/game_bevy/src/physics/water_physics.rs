@@ -34,13 +34,13 @@ fn apply_buoyancy(
     tweaks: Res<WaterPhysicsTweaks>,
     mut bodies: Query<(&Transform, &mut LinearVelocity), With<DynamicCrate>>,
 ) {
-    let Some(hydro) = features.hydrology.as_ref() else {
+    let Some(water) = features.water_registry() else {
         return;
     };
     let gravity = 18.0;
     for (tf, mut vel) in &mut bodies {
         let point = [tf.translation.x, tf.translation.y, tf.translation.z];
-        if let Some(sample) = hydro.water.water_at(point) {
+        if let Some(sample) = water.water_at(point) {
             if sample.depth > 0.05 {
                 let submerged = sample.depth.min(1.0);
                 vel.y += gravity * submerged * tweaks.buoyancy_strength * 0.08;
