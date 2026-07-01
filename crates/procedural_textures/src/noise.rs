@@ -21,7 +21,7 @@ impl SeamlessNoise {
         h ^= h >> 27;
         h = h.wrapping_mul(0x94d0_49bb_1331_11eb);
         h ^= h >> 31;
-        (h as f32) / u32::MAX as f32
+        (h as u32 as f32) / u32::MAX as f32
     }
 
     fn smooth(t: f32) -> f32 {

@@ -45,7 +45,7 @@ materials:
     generator:
       Ground:
         seed: 2001
-        macro_scale: 2.2
+        macro_scale: 2.0
         macro_octaves: 5
         micro_scale: 10.0
         micro_octaves: 4
@@ -63,7 +63,7 @@ materials:
     generator:
       Ground:
         seed: 2002
-        macro_scale: 2.2
+        macro_scale: 2.0
         macro_octaves: 5
         micro_scale: 10.0
         micro_octaves: 4
@@ -81,7 +81,7 @@ materials:
     generator:
       Ground:
         seed: 2003
-        macro_scale: 2.2
+        macro_scale: 2.0
         macro_octaves: 5
         micro_scale: 10.0
         micro_octaves: 4
