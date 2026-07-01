@@ -26,7 +26,7 @@ impl Default for GroundConfig {
     fn default() -> Self {
         Self {
             seed: 2001,
-            macro_scale: 2.2,
+            macro_scale: 2.0,
             macro_octaves: 5,
             micro_scale: 10.0,
             micro_octaves: 4,
