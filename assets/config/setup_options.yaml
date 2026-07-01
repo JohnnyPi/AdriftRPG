@@ -1,0 +1,149 @@
+﻿schema_version: 1
+id: setup.default
+
+groups:
+  - id: island
+    label: Island
+    parameters:
+      - id: diameter
+        label: Playable diameter (m)
+        bind: island.playable_diameter_m
+        min: 800
+        max: 3200
+        step: 50
+        default: 2200
+      - id: max_height
+        label: Maximum height (m)
+        bind: island.maximum_height_m
+        min: 120
+        max: 600
+        step: 10
+        default: 360
+      - id: sea_level
+        label: Sea level (m)
+        bind: island.sea_level_m
+        min: -5
+        max: 5
+        step: 0.5
+        default: 0
+      - id: lobe_count
+        label: Geological lobes
+        bind: island.lobe_count
+        min: 1
+        max: 5
+        step: 1
+        default: 3
+      - id: warp
+        label: Coast warp amplitude (m)
+        bind: island.warp_amplitude
+        min: 0
+        max: 40
+        step: 1
+        default: 18
+
+  - id: volcano
+    label: Volcano
+    parameters:
+      - id: shield_radius
+        label: Shield radius (m)
+        bind: volcano.shield_radius_m
+        min: 200
+        max: 1400
+        step: 25
+        default: 950
+      - id: shield_height
+        label: Shield height (m)
+        bind: volcano.shield_height_m
+        min: 80
+        max: 400
+        step: 5
+        default: 230
+      - id: summit_height
+        label: Summit height (m)
+        bind: volcano.summit_height_m
+        min: 40
+        max: 250
+        step: 5
+        default: 135
+      - id: caldera_depth
+        label: Caldera depth (m)
+        bind: volcano.caldera_depth_m
+        min: 0
+        max: 80
+        step: 2
+        default: 38
+      - id: collapse_depth
+        label: Flank collapse depth (m)
+        bind: volcano.collapse_depth_m
+        min: 0
+        max: 120
+        step: 5
+        default: 45
+
+  - id: hydrology
+    label: Hydrology
+    parameters:
+      - id: stream_threshold
+        label: Stream threshold
+        bind: hydrology.stream_threshold
+        min: 50
+        max: 800
+        step: 10
+        default: 220
+      - id: river_threshold
+        label: Permanent river threshold
+        bind: hydrology.permanent_river_threshold
+        min: 200
+        max: 2000
+        step: 50
+        default: 900
+
+  - id: erosion
+    label: Erosion & Coast
+    parameters:
+      - id: erosion_iters
+        label: Stream-power iterations
+        bind: erosion.stream_power_iterations
+        min: 0
+        max: 40
+        step: 1
+        default: 22
+      - id: erosion_step
+        label: Max erosion step (m)
+        bind: erosion.maximum_step_m
+        min: 0.05
+        max: 1.0
+        step: 0.05
+        default: 0.2
+      - id: shelf_width
+        label: Max shelf width (m)
+        bind: coast.shelf_width_max_m
+        min: 40
+        max: 500
+        step: 10
+        default: 300
+      - id: beach_slope
+        label: Max beach slope (deg)
+        bind: beaches.maximum_slope_deg
+        min: 5
+        max: 25
+        step: 1
+        default: 13
+
+preview_modes:
+  - id: elevation
+    label: Elevation
+  - id: island_mask
+    label: Island mask
+  - id: flow_accumulation
+    label: Flow accumulation
+  - id: river_mask
+    label: River mask
+  - id: beach_suitability
+    label: Beach suitability
+  - id: cliff_suitability
+    label: Cliff suitability
+  - id: elevation_regional
+    label: Regional elevation
+  - id: elevation_local
+    label: Local elevation residual

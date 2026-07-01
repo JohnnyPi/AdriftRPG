@@ -4,9 +4,12 @@ use game_data::{
 use shared::StableId;
 use sha2::{Digest, Sha256};
 use terrain_generation::{
-    default_vertical_slice_recipe, generate_river_spline, CoastModifierKind, CombineOp,
-    RecipeDensitySource, RecipeOp, RiverCarveContext, RiverGenConfig, TerrainRecipe,
+    build_island_atlas, default_vertical_slice_recipe, generate_river_spline, CoastModifierKind,
+    CombineOp, RecipeDensitySource, RecipeOp, RiverCarveContext, RiverGenConfig, TerrainRecipe,
 };
+
+use crate::data::UserSetupPrefs;
+use super::island_params::island_params_from_compiled;
 
 pub fn build_density_source(
     registry: &ConfigRegistry,
@@ -20,6 +23,35 @@ pub fn build_density_source(
     let mut source = RecipeDensitySource::new(recipe);
     if let Some(ctx) = build_river_carve(registry, world, seed_override, field_stack) {
         source = source.with_river_carve(ctx);
+    }
+    source
+}
+
+pub fn build_density_source_from_prefs(
+    registry: &ConfigRegistry,
+    prefs: &UserSetupPrefs,
+    field_stack: terrain_generation::FieldStackParams,
+) -> RecipeDensitySource {
+    let world_id = prefs.world_stable_id();
+    let seed = Some(prefs.seed);
+    let world = registry
+        .world_by_id(&world_id)
+        .or_else(|_| registry.active_world())
+        .expect("world");
+    let has_island_gen = registry.island_generation_for_world(world).is_some();
+    let mut source = if has_island_gen {
+        let water = registry.water.get(&world.water).expect("water");
+        let recipe = compile_terrain_recipe(registry, world, water, seed);
+        RecipeDensitySource::new(recipe)
+    } else {
+        build_density_source(registry, Some(&world_id), seed, field_stack)
+    };
+    if let Some(base) = registry.island_generation_for_world(world) {
+        let merged = prefs.apply_overrides(base);
+        let water = registry.water.get(&world.water).expect("water");
+        let params = island_params_from_compiled(&merged, world, prefs.seed, water.sea_level_m);
+        let atlas = build_island_atlas(&params);
+        source = source.with_atlas(atlas);
     }
     source
 }

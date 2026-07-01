@@ -45,6 +45,7 @@ rules:
     material_id: 2
     color: [0.45, 0.44, 0.42]
     elevation_min: 12.0
+    elevation_max: 27.0
     slope_min: 18.0
   - id: coastal_scrub
     material_id: 6

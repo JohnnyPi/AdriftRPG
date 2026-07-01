@@ -1,6 +1,6 @@
 use super::collision::resolve_collision_distance;
 use super::components::{self, wrap_angle};
-use super::{desired_camera_position, smooth_angle};
+use super::{camera_view_direction, desired_camera_position, smooth_angle};
 use bevy::prelude::*;
 
 #[test]
@@ -28,6 +28,21 @@ fn desired_camera_position_behind_focus() {
 }
 
 #[test]
+fn camera_view_direction_points_into_scene_at_yaw_zero() {
+    let view = camera_view_direction(0.0, 0.0);
+    assert!((view - Vec3::NEG_Z).length() < 1e-5);
+}
+
+#[test]
+fn camera_view_direction_matches_planar_forward_at_zero_pitch() {
+    use super::camera_forward_xz;
+    let yaw = 0.7;
+    let view = camera_view_direction(yaw, 0.0);
+    let forward = camera_forward_xz(yaw);
+    assert!((view - forward).length() < 1e-5);
+}
+
+#[test]
 fn resolve_collision_distance_contracts_faster_than_release() {
     let dt = 0.016;
     let contracted = resolve_collision_distance(8.0, 8.0, 3.0, 40.0, 8.0, dt);
@@ -36,8 +51,7 @@ fn resolve_collision_distance_contracts_faster_than_release() {
 }
 
 #[test]
-fn intent_yaw_combines_character_and_offset() {
-    let camera = components::MmoCamera {
+fn intent_yaw_combines_character_and_offset() {    let camera = components::MmoCamera {
         target: Entity::PLACEHOLDER,
         player: Entity::PLACEHOLDER,
         character_yaw: 1.0,

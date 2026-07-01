@@ -108,21 +108,7 @@ mod tests {
                 [0.34, 0.52, 0.28],
             )],
         };
-        let ctx = BiomeSampleContext {
-            world_y: 20.0,
-            elevation: 18.0,
-            slope_degrees: 50.0,
-            distance_to_water: 80.0,
-            distance_to_river: f32::MAX,
-            cave_depth: 0.0,
-            moisture: 0.5,
-            effective_moisture: 0.5,
-            transition_noise: 0.5,
-            temperature: 0.5,
-            continentalness: 0.5,
-            coast_humidity: 0.1,
-            rain_shadow: 0.0,
-        };
+        let ctx = BiomeSampleContext::for_test(20.0, 18.0, 50.0, 80.0);
         let mat = surface_material_for(&catalog, BiomeKind::Grassland, &ctx);
         assert_eq!(mat.0, 2);
     }
@@ -136,21 +122,7 @@ mod tests {
                 [0.34, 0.52, 0.28],
             )],
         };
-        let ctx = BiomeSampleContext {
-            world_y: 12.0,
-            elevation: 10.0,
-            slope_degrees: 5.0,
-            distance_to_water: 80.0,
-            distance_to_river: f32::MAX,
-            cave_depth: 0.0,
-            moisture: 0.5,
-            effective_moisture: 0.5,
-            transition_noise: 0.5,
-            temperature: 0.5,
-            continentalness: 0.5,
-            coast_humidity: 0.1,
-            rain_shadow: 0.0,
-        };
+        let ctx = BiomeSampleContext::for_test(12.0, 10.0, 5.0, 80.0);
         let mat = surface_material_for(&catalog, BiomeKind::Grassland, &ctx);
         assert_eq!(mat.0, 0);
     }

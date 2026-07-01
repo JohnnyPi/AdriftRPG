@@ -1,18 +1,26 @@
-use terrain_generation::{iter_world_chunk_coords, VerticalSliceDensitySource};
+use terrain_generation::{
+    default_vertical_slice_recipe, generate_padded_samples, iter_world_chunk_coords,
+    RecipeDensitySource,
+};
 use terrain_meshing::{ChunkMeshingInput, SurfaceNetsMesher, TerrainMesher};
 use voxel_core::{ChunkCoord, MaterialId, CHUNK_CELLS};
 
+fn test_density_source(seed: u64) -> RecipeDensitySource {
+    RecipeDensitySource::new(default_vertical_slice_recipe(seed, 2.0))
+}
+
 #[test]
 fn integration_generate_and_mesh_all_chunks() {
-    let source = VerticalSliceDensitySource::new(48129, 2.0);
+    let source = test_density_source(48129);
     let extent = [6i32, 3, 6];
     let mesher = SurfaceNetsMesher;
     let mut meshed = 0usize;
     for coord in iter_world_chunk_coords(extent) {
-        let samples = terrain_generation::generate_padded_samples(&source, coord, MaterialId(0));
+        let samples = generate_padded_samples(&source, coord, MaterialId(0));
         let input = ChunkMeshingInput {
             samples: &samples,
             chunk_cells: CHUNK_CELLS,
+            surface_resolver: None,
         };
         let mesh = mesher.build_mesh(&input).expect("mesh");
         if !mesh.positions.is_empty() {
@@ -24,13 +32,14 @@ fn integration_generate_and_mesh_all_chunks() {
 
 #[test]
 fn cave_region_produces_hollow_mesh() {
-    let source = VerticalSliceDensitySource::new(48129, 2.0);
+    let source = test_density_source(48129);
     let coord = ChunkCoord::new(1, 0, 0);
-    let samples = terrain_generation::generate_padded_samples(&source, coord, MaterialId(0));
+    let samples = generate_padded_samples(&source, coord, MaterialId(0));
     let mesh = SurfaceNetsMesher
         .build_mesh(&ChunkMeshingInput {
             samples: &samples,
             chunk_cells: CHUNK_CELLS,
+            surface_resolver: None,
         })
         .expect("mesh");
     assert!(!mesh.positions.is_empty(), "cave chunk should have surface geometry");
@@ -39,13 +48,14 @@ fn cave_region_produces_hollow_mesh() {
 
 #[test]
 fn overhang_region_produces_geometry() {
-    let source = VerticalSliceDensitySource::new(48129, 2.0);
+    let source = test_density_source(48129);
     let coord = ChunkCoord::new(1, 1, 0);
-    let samples = terrain_generation::generate_padded_samples(&source, coord, MaterialId(0));
+    let samples = generate_padded_samples(&source, coord, MaterialId(0));
     let mesh = SurfaceNetsMesher
         .build_mesh(&ChunkMeshingInput {
             samples: &samples,
             chunk_cells: CHUNK_CELLS,
+            surface_resolver: None,
         })
         .expect("mesh");
     assert!(!mesh.positions.is_empty(), "overhang chunk should have geometry");
@@ -53,22 +63,24 @@ fn overhang_region_produces_geometry() {
 
 #[test]
 fn neighbor_chunk_boundary_vertices_align() {
-    let source = VerticalSliceDensitySource::new(48129, 2.0);
+    let source = test_density_source(48129);
     let mesher = SurfaceNetsMesher;
     let left_samples =
-        terrain_generation::generate_padded_samples(&source, ChunkCoord::new(0, 1, 0), MaterialId(0));
+        generate_padded_samples(&source, ChunkCoord::new(0, 1, 0), MaterialId(0));
     let right_samples =
-        terrain_generation::generate_padded_samples(&source, ChunkCoord::new(1, 1, 0), MaterialId(0));
+        generate_padded_samples(&source, ChunkCoord::new(1, 1, 0), MaterialId(0));
     let left = mesher
         .build_mesh(&ChunkMeshingInput {
             samples: &left_samples,
             chunk_cells: CHUNK_CELLS,
+            surface_resolver: None,
         })
         .expect("left");
     let right = mesher
         .build_mesh(&ChunkMeshingInput {
             samples: &right_samples,
             chunk_cells: CHUNK_CELLS,
+            surface_resolver: None,
         })
         .expect("right");
 
@@ -101,7 +113,7 @@ fn neighbor_chunk_boundary_vertices_align() {
 
 #[test]
 fn all_adjacent_chunk_pairs_have_boundary_vertex_correspondence() {
-    let source = VerticalSliceDensitySource::new(48129, 2.0);
+    let source = test_density_source(48129);
     let mesher = SurfaceNetsMesher;
     let extent = [6i32, 3, 6];
     let coords: Vec<_> = iter_world_chunk_coords(extent).collect();
@@ -127,25 +139,25 @@ fn all_adjacent_chunk_pairs_have_boundary_vertex_correspondence() {
 
 /// Returns true when the pair was checked and passed; false when skipped (no surface on seam).
 fn assert_chunk_x_seam(
-    source: &VerticalSliceDensitySource,
+    source: &RecipeDensitySource,
     mesher: &SurfaceNetsMesher,
     left: ChunkCoord,
     right: ChunkCoord,
 ) -> bool {
-    let left_samples =
-        terrain_generation::generate_padded_samples(source, left, MaterialId(0));
-    let right_samples =
-        terrain_generation::generate_padded_samples(source, right, MaterialId(0));
+    let left_samples = generate_padded_samples(source, left, MaterialId(0));
+    let right_samples = generate_padded_samples(source, right, MaterialId(0));
     let left = mesher
         .build_mesh(&ChunkMeshingInput {
             samples: &left_samples,
             chunk_cells: CHUNK_CELLS,
+            surface_resolver: None,
         })
         .expect("left mesh");
     let right = mesher
         .build_mesh(&ChunkMeshingInput {
             samples: &right_samples,
             chunk_cells: CHUNK_CELLS,
+            surface_resolver: None,
         })
         .expect("right mesh");
 

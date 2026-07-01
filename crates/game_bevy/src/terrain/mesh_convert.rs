@@ -61,3 +61,21 @@ pub fn chunk_world_transform(coord: ChunkCoord, cell_size_m: f32) -> Transform {
         coord.z as f32 * extent,
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::prelude::Vec3;
+
+    #[test]
+    fn chunk_transform_places_local_vertex_in_world_meters() {
+        let coord = ChunkCoord::new(2, -1, 0);
+        let cell_size_m = 1.0;
+        let transform = chunk_world_transform(coord, cell_size_m);
+        let local = [4.0, 8.0, 12.0];
+        let world = transform.translation + Vec3::new(local[0], local[1], local[2]) * cell_size_m;
+        assert!((world.x - 36.0).abs() < f32::EPSILON);
+        assert!((world.y - (-8.0)).abs() < f32::EPSILON);
+        assert!((world.z - 12.0).abs() < f32::EPSILON);
+    }
+}

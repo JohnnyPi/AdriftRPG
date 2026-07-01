@@ -4,9 +4,9 @@ use shared::{DataError, DataResult, StableId};
 
 use crate::compile::{
     CompiledApp, CompiledAtmosphere, CompiledBiomes, CompiledCamera, CompiledCave, CompiledDebug,
-    CompiledFog, CompiledHydrology, CompiledLandmarks, CompiledLighting, CompiledOptions,
-    CompiledPerformance, CompiledPhysics, CompiledPlayer, CompiledRiver, CompiledRoutes,
-    CompiledSky, CompiledStructure, CompiledTerrain, CompiledTerrainMaterials, CompiledVegetation,
+    CompiledFog, CompiledHydrology, CompiledIslandGeneration, CompiledLandmarks, CompiledLighting,
+    CompiledOptions, CompiledPerformance, CompiledPhysics, CompiledPlayer, CompiledRiver,
+    CompiledRoutes, CompiledSetupSchema, CompiledSky, CompiledStructure, CompiledTerrain, CompiledTerrainMaterials, CompiledVegetation,
     CompiledWater, CompiledWaterBodyMaterial, CompiledWorld,
 };
 use crate::definitions::RawDefinition;
@@ -40,6 +40,8 @@ pub struct ConfigRegistry {
     pub landmarks: BTreeMap<StableId, CompiledLandmarks>,
     pub routes: BTreeMap<StableId, CompiledRoutes>,
     pub structures: BTreeMap<StableId, CompiledStructure>,
+    pub island_gen: BTreeMap<StableId, CompiledIslandGeneration>,
+    pub setup_schemas: BTreeMap<StableId, CompiledSetupSchema>,
     pub hash: String,
 }
 
@@ -71,6 +73,8 @@ impl ConfigRegistry {
         let mut landmarks = BTreeMap::new();
         let mut routes = BTreeMap::new();
         let mut structures = BTreeMap::new();
+        let mut island_gen = BTreeMap::new();
+        let mut setup_schemas = BTreeMap::new();
         let mut app: Option<CompiledApp> = None;
 
         for definition in &definitions {
@@ -147,6 +151,12 @@ impl ConfigRegistry {
                 RawDefinition::Structure(def) => {
                     structures.insert(def.header.id.clone(), def.into());
                 }
+                RawDefinition::IslandGeneration(def) => {
+                    island_gen.insert(def.header.id.clone(), def.into());
+                }
+                RawDefinition::SetupSchema(def) => {
+                    setup_schemas.insert(def.header.id.clone(), def.into());
+                }
             }
         }
 
@@ -182,6 +192,8 @@ impl ConfigRegistry {
             landmarks,
             routes,
             structures,
+            island_gen,
+            setup_schemas,
             hash: String::new(),
         };
         registry.hash = registry_hash(&registry);
@@ -218,6 +230,27 @@ impl ConfigRegistry {
                 reference: StableId::new("options.default"),
                 context: "active options".to_string(),
             })
+    }
+
+    pub fn active_setup_schema(&self) -> DataResult<&CompiledSetupSchema> {
+        self.setup_schemas
+            .get(&StableId::new("setup.default"))
+            .or_else(|| self.setup_schemas.values().next())
+            .ok_or_else(|| DataError::UnknownReference {
+                reference: StableId::new("setup.default"),
+                context: "active setup schema".to_string(),
+            })
+    }
+
+    pub fn island_generation_for_world(&self, world: &CompiledWorld) -> Option<&CompiledIslandGeneration> {
+        world
+            .island_gen
+            .as_ref()
+            .and_then(|id| self.island_gen.get(id))
+    }
+
+    pub fn world_profiles(&self) -> impl Iterator<Item = &CompiledWorld> {
+        self.worlds.values()
     }
 
     pub fn active_physics(&self) -> DataResult<&CompiledPhysics> {

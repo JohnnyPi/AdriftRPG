@@ -1,0 +1,183 @@
+use serde::{Deserialize, Serialize};
+
+use crate::recipe::{texture_recipe_from_yaml_value, TextureRecipe};
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "PascalCase")]
+pub enum TerrainMaterialIdName {
+    FreshBasalt,
+    WeatheredBasalt,
+    CaveBasalt,
+    TropicalRedSoil,
+    JungleLoam,
+    JungleMoss,
+    LeafLitter,
+    CoralSand,
+    BlackSand,
+    CoralRubble,
+    RiverGravel,
+    RiverSilt,
+    Mud,
+    Limestone,
+    Flowstone,
+    VolcanicAsh,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TerrainMaterialRecipe {
+    pub id: TerrainMaterialIdName,
+    pub resolution: u32,
+    pub meters_per_repeat: f32,
+    #[serde(deserialize_with = "deserialize_generator")]
+    pub generator: TextureRecipe,
+    #[serde(default = "default_normal_strength")]
+    pub normal_strength: f32,
+    #[serde(default)]
+    pub tint: [f32; 3],
+}
+
+fn deserialize_generator<'de, D>(deserializer: D) -> Result<TextureRecipe, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_yaml::Value::deserialize(deserializer)?;
+    texture_recipe_from_yaml_value(&value).map_err(serde::de::Error::custom)
+}
+
+fn default_normal_strength() -> f32 {
+    1.0
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ProceduralMaterialsDocument {
+    pub schema_version: u32,
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub description: String,
+    pub materials: Vec<TerrainMaterialRecipe>,
+}
+
+pub fn default_island_recipes() -> Vec<TerrainMaterialRecipe> {
+    vec![
+        TerrainMaterialRecipe {
+            id: TerrainMaterialIdName::FreshBasalt,
+            resolution: 512,
+            meters_per_repeat: 2.5,
+            generator: TextureRecipe::Rock(RockConfig {
+                seed: 1001,
+                color_light: [0.18, 0.17, 0.16],
+                color_dark: [0.05, 0.05, 0.055],
+                ..RockConfig::default()
+            }),
+            normal_strength: 1.15,
+            tint: [1.0, 1.0, 1.0],
+        },
+        TerrainMaterialRecipe {
+            id: TerrainMaterialIdName::WeatheredBasalt,
+            resolution: 512,
+            meters_per_repeat: 3.5,
+            generator: TextureRecipe::Rock(RockConfig {
+                seed: 1002,
+                color_light: [0.25, 0.22, 0.18],
+                color_dark: [0.07, 0.06, 0.055],
+                ..RockConfig::default()
+            }),
+            normal_strength: 1.15,
+            tint: [1.0, 1.0, 1.0],
+        },
+        TerrainMaterialRecipe {
+            id: TerrainMaterialIdName::TropicalRedSoil,
+            resolution: 512,
+            meters_per_repeat: 2.0,
+            generator: TextureRecipe::Ground(GroundConfig {
+                seed: 2001,
+                color_dry: [0.48, 0.17, 0.07],
+                color_moist: [0.32, 0.12, 0.05],
+                ..GroundConfig::default()
+            }),
+            normal_strength: 0.9,
+            tint: [1.0, 1.0, 1.0],
+        },
+        TerrainMaterialRecipe {
+            id: TerrainMaterialIdName::JungleLoam,
+            resolution: 512,
+            meters_per_repeat: 2.0,
+            generator: TextureRecipe::Ground(GroundConfig {
+                seed: 2002,
+                color_dry: [0.22, 0.14, 0.06],
+                color_moist: [0.10, 0.08, 0.04],
+                ..GroundConfig::default()
+            }),
+            normal_strength: 0.95,
+            tint: [1.0, 1.0, 1.0],
+        },
+        TerrainMaterialRecipe {
+            id: TerrainMaterialIdName::JungleMoss,
+            resolution: 512,
+            meters_per_repeat: 1.8,
+            generator: TextureRecipe::Ground(GroundConfig {
+                seed: 2003,
+                color_dry: [0.18, 0.28, 0.10],
+                color_moist: [0.08, 0.18, 0.06],
+                ..GroundConfig::default()
+            }),
+            normal_strength: 1.0,
+            tint: [0.9, 1.05, 0.85],
+        },
+        TerrainMaterialRecipe {
+            id: TerrainMaterialIdName::CoralSand,
+            resolution: 512,
+            meters_per_repeat: 1.2,
+            generator: TextureRecipe::Sand(SandConfig {
+                seed: 3001,
+                color_light: [0.92, 0.86, 0.72],
+                color_dark: [0.78, 0.70, 0.55],
+                ..SandConfig::default()
+            }),
+            normal_strength: 0.8,
+            tint: [1.0, 1.0, 1.0],
+        },
+        TerrainMaterialRecipe {
+            id: TerrainMaterialIdName::RiverGravel,
+            resolution: 512,
+            meters_per_repeat: 1.5,
+            generator: TextureRecipe::Cobblestone(CobblestoneConfig {
+                seed: 4001,
+                ..CobblestoneConfig::default()
+            }),
+            normal_strength: 1.2,
+            tint: [1.0, 1.0, 1.0],
+        },
+        TerrainMaterialRecipe {
+            id: TerrainMaterialIdName::RiverSilt,
+            resolution: 512,
+            meters_per_repeat: 1.0,
+            generator: TextureRecipe::Sand(SandConfig {
+                seed: 3002,
+                ripple_scale: 4.0,
+                grain_scale: 24.0,
+                color_light: [0.42, 0.38, 0.28],
+                color_dark: [0.28, 0.24, 0.18],
+                roughness: 0.75,
+                ..SandConfig::default()
+            }),
+            normal_strength: 0.6,
+            tint: [0.95, 0.92, 0.88],
+        },
+    ]
+}
+
+use crate::generators::{
+    CobblestoneConfig, GroundConfig, RockConfig, SandConfig,
+};
+
+pub fn document_fingerprint(doc: &ProceduralMaterialsDocument) -> [u8; 32] {
+    let json = serde_json::to_string(doc).unwrap_or_default();
+    *blake3::hash(json.as_bytes()).as_bytes()
+}
+
+/// Strip UTF-8 BOM sometimes added by Windows editors.
+pub fn strip_utf8_bom(text: &str) -> &str {
+    text.strip_prefix('\u{FEFF}').unwrap_or(text)
+}

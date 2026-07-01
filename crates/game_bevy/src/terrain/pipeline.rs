@@ -8,6 +8,7 @@ use tracing::info;
 use voxel_core::{ChunkCoord, WorldCell, CHUNK_CELLS};
 
 use crate::data::ConfigRegistryResource;
+use crate::data::{sync_world_tweaks_from_prefs, UserSetupPrefs};
 use crate::terrain::residency::{
     within_density_radius, within_physics_radius, within_render_radius, TerrainWorldRuntime,
 };
@@ -17,10 +18,11 @@ use crate::environment::biome_context::ChunkColumnCache;
 use crate::environment::materials::material_for_world_with_cache;
 use crate::environment::{BiomeCatalog, BiomeInitSet};
 use crate::state::AppState;
-use crate::terrain::material::TerrainTriplanarMaterial;
+use crate::environment::surface::ChunkSurfaceResolver;
+use crate::terrain::material::TerrainMaterialHandle;
 use crate::terrain::mesh_convert::{chunk_world_transform, mesh_from_terrain_data};
 use crate::terrain::metrics::{TerrainPipelineMetrics, WorldSeedOverride};
-use crate::terrain::recipe::{build_density_source, terrain_recipe_hash};
+use crate::terrain::recipe::{build_density_source_from_prefs, terrain_recipe_hash};
 use crate::terrain::{ChunkState, TerrainChunkEntity, TerrainEditStore, TerrainRevision};
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
@@ -184,12 +186,8 @@ struct PendingCollider {
     collider: Collider,
 }
 
-fn density_world_override(tweaks: &WorldTweaks) -> Option<shared::StableId> {
-    if tweaks.use_expanded_profile {
-        Some(shared::StableId::new("world.expanded_slice"))
-    } else {
-        None
-    }
+fn density_world_override(prefs: &UserSetupPrefs) -> Option<shared::StableId> {
+    Some(prefs.world_stable_id())
 }
 
 fn seed_override_active(seed_override: &WorldSeedOverride, world_seed: u64) -> Option<u64> {
@@ -202,7 +200,8 @@ fn seed_override_active(seed_override: &WorldSeedOverride, world_seed: u64) -> O
 
 fn init_terrain_world(
     registry: Res<ConfigRegistryResource>,
-    world_tweaks: Res<WorldTweaks>,
+    prefs: Res<UserSetupPrefs>,
+    mut world_tweaks: ResMut<WorldTweaks>,
     terrain_tweaks: Res<TerrainTweaks>,
     mut pipeline: ResMut<TerrainPipelineState>,
     mut spawn_point: ResMut<TerrainSpawnPoint>,
@@ -211,23 +210,26 @@ fn init_terrain_world(
     mut runtime: ResMut<TerrainWorldRuntime>,
     revision: Res<TerrainRevision>,
 ) {
-    let world_override = density_world_override(&world_tweaks);
+    sync_world_tweaks_from_prefs(&prefs, &mut world_tweaks);
+    let world_override = density_world_override(&prefs);
     let world = registry
         .0
         .effective_world(world_override.as_ref())
         .expect("world");
-    seed_override.seed = world.seed;
-    runtime.seed = world.seed;
+    seed_override.seed = prefs.seed;
+    runtime.seed = prefs.seed;
     runtime.cell_size_m = world.cell_size_m;
     runtime.revision = revision.value;
     let override_seed = seed_override_active(&seed_override, world.seed);
-    let source = build_density_source(
+    let source = build_density_source_from_prefs(
         &registry.0,
-        world_override.as_ref(),
-        override_seed,
+        &prefs,
         terrain_tweaks.field_stack_params(),
     );
-    let (sx, sy, sz) = source.spawn_position();
+    let (sx, sy, sz, spawn_report) = source.resolve_player_spawn(
+        terrain_generation::PLAYER_SPAWN_MIN_CLEARANCE_M,
+        48.0,
+    );
     spawn_point.0 = Vec3::new(sx, sy, sz);
     let spawn_cell = WorldCell::new(sx.floor() as i32, sy.floor() as i32, sz.floor() as i32);
     pipeline.spawn_chunk = Some(spawn_cell.chunk_coord());
@@ -253,18 +255,21 @@ fn init_terrain_world(
     info!(
         chunk_count = pipeline.chunks.len(),
         world = %world.id.as_str(),
+        spawn = ?spawn_point.0,
+        spawn_valid = spawn_report.passed,
+        spawn_notes = ?spawn_report.messages,
         "terrain world initialized"
     );
 }
 
 fn sync_terrain_on_recipe_change(
     registry: Res<ConfigRegistryResource>,
-    world_tweaks: Res<WorldTweaks>,
+    prefs: Res<UserSetupPrefs>,
     recipe_revision: Res<TerrainRecipeRevision>,
     mut pending: ResMut<TerrainRegenPending>,
     seed_override: Res<WorldSeedOverride>,
 ) {
-    let world_override = density_world_override(&world_tweaks);
+    let world_override = density_world_override(&prefs);
     let world = registry
         .0
         .effective_world(world_override.as_ref())
@@ -283,7 +288,7 @@ fn sync_terrain_on_recipe_change(
 pub fn regen_terrain_with_seed(
     commands: &mut Commands,
     registry: &ConfigRegistryResource,
-    world_tweaks: &WorldTweaks,
+    prefs: &UserSetupPrefs,
     terrain_tweaks: &TerrainTweaks,
     pipeline: &mut TerrainPipelineState,
     recipe_revision: &mut TerrainRecipeRevision,
@@ -294,17 +299,16 @@ pub fn regen_terrain_with_seed(
     edit_store: &mut TerrainEditStore,
     runtime: &mut TerrainWorldRuntime,
 ) {
-    let world_override = density_world_override(world_tweaks);
+    let world_override = density_world_override(prefs);
     let world = registry
         .0
         .effective_world(world_override.as_ref())
         .expect("world");
     let override_seed = seed_override_active(seed_override, world.seed);
     revision.value += 1;
-    let source = build_density_source(
+    let source = build_density_source_from_prefs(
         &registry.0,
-        world_override.as_ref(),
-        override_seed,
+        prefs,
         terrain_tweaks.field_stack_params(),
     );
     let (sx, sy, sz) = source.spawn_position();
@@ -458,6 +462,7 @@ fn dispatch_density_jobs(
 fn poll_density_jobs(
     mut pipeline: ResMut<TerrainPipelineState>,
     mut metrics: ResMut<TerrainPipelineMetrics>,
+    runtime: Res<TerrainWorldRuntime>,
 ) {
     if pipeline.frozen {
         return;
@@ -484,11 +489,21 @@ fn poll_density_jobs(
         }
         chunk.state = ChunkState::Meshing;
         let mesh_started = Instant::now();
+        let source = pipeline
+            .density_source
+            .clone()
+            .expect("density source must be initialized before meshing");
+        let cell_size_m = runtime.cell_size_m;
+        let (ox, oy, oz) = voxel_core::TerrainChunk::new(coord).sample_origin();
+        let padded_side = CHUNK_CELLS + 3;
         let mesh_task = AsyncComputeTaskPool::get().spawn(async move {
+            let resolver =
+                ChunkSurfaceResolver::new(source, ox, oy, oz, padded_side, cell_size_m);
             let mesher = SurfaceNetsMesher;
             let input = ChunkMeshingInput {
                 samples: &samples,
                 chunk_cells: CHUNK_CELLS,
+                surface_resolver: Some(&resolver),
             };
             mesher.build_mesh(&input)
         });
@@ -562,8 +577,7 @@ fn upload_chunk_meshes(
     mut pipeline: ResMut<TerrainPipelineState>,
     mut metrics: ResMut<TerrainPipelineMetrics>,
     mut meshes: ResMut<Assets<Mesh>>,
-    triplanar_handle: Option<Res<crate::terrain::material::TerrainMaterialHandle>>,
-    mut triplanar_materials: ResMut<Assets<TerrainTriplanarMaterial>>,
+    triplanar_handle: Res<TerrainMaterialHandle>,
 ) {
     if pipeline.frozen {
         return;
@@ -574,13 +588,11 @@ fn upload_chunk_meshes(
 
     let mut queue = std::mem::take(&mut pipeline.upload_queue);
     if let Some(spawn_chunk) = pipeline.spawn_chunk {
-        queue.sort_by_key(|item| item.coord != spawn_chunk);
+        // pop() takes from the back, so keep the spawn chunk at the end.
+        queue.sort_by_key(|item| item.coord == spawn_chunk);
     }
 
-    let material = triplanar_handle
-        .as_ref()
-        .map(|h| h.0.clone())
-        .unwrap_or_else(|| triplanar_materials.add(TerrainTriplanarMaterial::default_catalog()));
+    let material = triplanar_handle.0.clone();
 
     let mut uploaded = 0usize;
     for _ in 0..mesh_budget {
@@ -761,6 +773,7 @@ mod pipeline_tests {
             .build_mesh(&ChunkMeshingInput {
                 samples: &samples,
                 chunk_cells: voxel_core::CHUNK_CELLS,
+                surface_resolver: None,
             })
             .expect("mesh");
         assert!(

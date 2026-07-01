@@ -223,6 +223,24 @@ pub struct WorldDefinition {
     /// Recipe-space XZ origin mapped to world (0,0). For 256 m centered worlds use 128.
     #[serde(default)]
     pub coord_offset: Option<[f32; 3]>,
+    #[serde(default)]
+    pub island_gen: Option<StableId>,
+    #[serde(default)]
+    pub resolution: Option<GenerationResolutionDefinition>,
+}
+
+/// Multi-tier generation spacing (PhasedExpansionPlan §2.2).
+#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct GenerationResolutionDefinition {
+    #[serde(default)]
+    pub world_control_m: Option<f32>,
+    #[serde(default)]
+    pub regional_m: Option<f32>,
+    #[serde(default)]
+    pub local_m: Option<f32>,
+    #[serde(default)]
+    pub voxel_m: Option<f32>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -587,6 +605,210 @@ fn default_digit3() -> String {
 
 fn default_normals_key() -> String {
     "KeyN".to_string()
+}
+
+/// Options panel config (not compiled into gameplay registry).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IslandGenerationDefinition {
+    #[serde(flatten)]
+    pub header: DefinitionHeader,
+    #[serde(default)]
+    pub description: String,
+    pub island: IslandShapeDefinition,
+    pub volcano: VolcanoDefinition,
+    #[serde(default)]
+    pub surface_noise: SurfaceNoiseDefinition,
+    pub hydrology: IslandHydrologyDefinition,
+    pub erosion: IslandErosionDefinition,
+    pub coast: IslandCoastDefinition,
+    #[serde(default)]
+    pub beaches: BeachDefinition,
+    #[serde(default)]
+    pub caves: IslandCaveDefinition,
+    #[serde(default)]
+    pub resolution: Option<GenerationResolutionDefinition>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct IslandShapeDefinition {
+    pub playable_diameter_m: f32,
+    pub maximum_height_m: f32,
+    pub sea_level_m: f32,
+    #[serde(default = "default_lobe_count")]
+    pub lobe_count: u32,
+    #[serde(default = "default_warp_frequency")]
+    pub warp_frequency: f32,
+    #[serde(default = "default_warp_amplitude")]
+    pub warp_amplitude: f32,
+}
+
+fn default_lobe_count() -> u32 {
+    3
+}
+fn default_warp_frequency() -> f32 {
+    0.004
+}
+fn default_warp_amplitude() -> f32 {
+    18.0
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct VolcanoDefinition {
+    pub center: [f32; 2],
+    pub shield_radius_m: f32,
+    pub shield_exponent: f32,
+    pub shield_height_m: f32,
+    pub summit_radius_m: f32,
+    pub summit_exponent: f32,
+    pub summit_height_m: f32,
+    pub caldera_radius_m: f32,
+    pub caldera_depth_m: f32,
+    pub caldera_rim_height_m: f32,
+    #[serde(default = "default_ridge_count")]
+    pub radial_ridge_count: u32,
+    #[serde(default)]
+    pub collapse_direction_deg: f32,
+    #[serde(default = "default_collapse_depth")]
+    pub collapse_depth_m: f32,
+}
+
+fn default_ridge_count() -> u32 {
+    7
+}
+fn default_collapse_depth() -> f32 {
+    45.0
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct SurfaceNoiseDefinition {
+    #[serde(default = "default_regional_amplitude")]
+    pub regional_amplitude_m: f32,
+    #[serde(default = "default_local_amplitude")]
+    pub local_amplitude_m: f32,
+    #[serde(default = "default_voxel_amplitude")]
+    pub voxel_amplitude_m: f32,
+}
+
+fn default_regional_amplitude() -> f32 {
+    14.0
+}
+fn default_local_amplitude() -> f32 {
+    3.5
+}
+fn default_voxel_amplitude() -> f32 {
+    0.35
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct IslandHydrologyDefinition {
+    #[serde(default = "default_routing")]
+    pub routing: String,
+    pub rainfall_base: f32,
+    pub stream_threshold: f32,
+    pub permanent_river_threshold: f32,
+    pub minimum_stream_length_m: f32,
+}
+
+fn default_routing() -> String {
+    "d8".to_string()
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct IslandErosionDefinition {
+    pub stream_power_iterations: u32,
+    pub m: f32,
+    pub n: f32,
+    pub maximum_step_m: f32,
+    pub thermal_iterations: u32,
+    pub thermal_transfer_rate: f32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct IslandCoastDefinition {
+    pub shelf_width_min_m: f32,
+    pub shelf_width_max_m: f32,
+    pub shelf_depth_min_m: f32,
+    pub shelf_depth_max_m: f32,
+    pub deep_slope_min: f32,
+    pub deep_slope_max: f32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct BeachDefinition {
+    pub maximum_slope_deg: f32,
+    pub width_min_m: f32,
+    pub width_max_m: f32,
+    pub berm_height_min_m: f32,
+    pub berm_height_max_m: f32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct IslandCaveDefinition {
+    pub chamber_count_min: u32,
+    pub chamber_count_max: u32,
+    pub passage_radius_min_m: f32,
+    pub passage_radius_max_m: f32,
+    pub minimum_cover_m: f32,
+    pub maximum_depth_m: f32,
+    #[serde(default = "default_overhang_enabled")]
+    pub overhang_enabled: bool,
+}
+
+fn default_overhang_enabled() -> bool {
+    true
+}
+
+/// Schema driving the setup/options UI sliders.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetupSchemaDefinition {
+    #[serde(flatten)]
+    pub header: DefinitionHeader,
+    pub groups: Vec<SetupGroupDefinition>,
+    #[serde(default)]
+    pub preview_modes: Vec<SetupPreviewModeDefinition>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetupGroupDefinition {
+    pub id: String,
+    pub label: String,
+    pub parameters: Vec<SetupParameterDefinition>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetupParameterDefinition {
+    pub id: String,
+    pub label: String,
+    pub bind: String,
+    pub min: f32,
+    pub max: f32,
+    #[serde(default = "default_param_step")]
+    pub step: f32,
+    #[serde(default)]
+    pub default: f32,
+}
+
+fn default_param_step() -> f32 {
+    0.1
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetupPreviewModeDefinition {
+    pub id: String,
+    pub label: String,
 }
 
 /// Options panel config (not compiled into gameplay registry).
@@ -992,6 +1214,8 @@ pub enum RawDefinition {
     Landmarks(LandmarksDefinition),
     Routes(RoutesDefinition),
     Structure(StructureDefinition),
+    IslandGeneration(IslandGenerationDefinition),
+    SetupSchema(SetupSchemaDefinition),
 }
 
 impl RawDefinition {
@@ -1021,6 +1245,8 @@ impl RawDefinition {
             Self::Landmarks(def) => &def.header.id,
             Self::Routes(def) => &def.header.id,
             Self::Structure(def) => &def.header.id,
+            Self::IslandGeneration(def) => &def.header.id,
+            Self::SetupSchema(def) => &def.header.id,
         }
     }
 
@@ -1050,6 +1276,8 @@ impl RawDefinition {
             Self::Landmarks(def) => def.header.validate(),
             Self::Routes(def) => def.header.validate(),
             Self::Structure(def) => def.header.validate(),
+            Self::IslandGeneration(def) => def.header.validate(),
+            Self::SetupSchema(def) => def.header.validate(),
         }
     }
 }

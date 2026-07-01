@@ -118,6 +118,8 @@ pub struct CompiledWorld {
     pub structures: Vec<StableId>,
     pub ocean_extent_m: Option<f32>,
     pub coord_offset: [f32; 3],
+    pub island_gen: Option<StableId>,
+    pub resolution: Option<GenerationResolutionDefinition>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -294,6 +296,8 @@ impl From<&WorldDefinition> for CompiledWorld {
             structures: def.structures.clone(),
             ocean_extent_m: def.ocean_extent_m,
             coord_offset: def.coord_offset.unwrap_or([0.0, 0.0, 0.0]),
+            island_gen: def.island_gen.clone(),
+            resolution: def.resolution.clone(),
         }
     }
 }
@@ -370,6 +374,102 @@ pub struct CompiledOptions {
     pub toggle_key: String,
     pub default_tab: String,
     pub stubs: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompiledSetupParameter {
+    pub id: String,
+    pub label: String,
+    pub bind: String,
+    pub min: f32,
+    pub max: f32,
+    pub step: f32,
+    pub default: f32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompiledSetupGroup {
+    pub id: String,
+    pub label: String,
+    pub parameters: Vec<CompiledSetupParameter>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompiledSetupPreviewMode {
+    pub id: String,
+    pub label: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompiledSetupSchema {
+    pub id: StableId,
+    pub groups: Vec<CompiledSetupGroup>,
+    pub preview_modes: Vec<CompiledSetupPreviewMode>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompiledIslandGeneration {
+    pub id: StableId,
+    pub seed: u64,
+    pub island: IslandShapeDefinition,
+    pub volcano: VolcanoDefinition,
+    pub surface_noise: SurfaceNoiseDefinition,
+    pub hydrology: IslandHydrologyDefinition,
+    pub erosion: IslandErosionDefinition,
+    pub coast: IslandCoastDefinition,
+    pub beaches: BeachDefinition,
+    pub caves: IslandCaveDefinition,
+    pub resolution: Option<GenerationResolutionDefinition>,
+}
+
+impl CompiledIslandGeneration {
+    pub fn set_param(&mut self, bind: &str, value: f32) {
+        match bind {
+            "island.playable_diameter_m" => self.island.playable_diameter_m = value,
+            "island.maximum_height_m" => self.island.maximum_height_m = value,
+            "island.sea_level_m" => self.island.sea_level_m = value,
+            "island.lobe_count" => self.island.lobe_count = value.round().max(1.0) as u32,
+            "island.warp_amplitude" => self.island.warp_amplitude = value,
+            "volcano.shield_radius_m" => self.volcano.shield_radius_m = value,
+            "volcano.shield_height_m" => self.volcano.shield_height_m = value,
+            "volcano.summit_height_m" => self.volcano.summit_height_m = value,
+            "volcano.caldera_depth_m" => self.volcano.caldera_depth_m = value,
+            "volcano.collapse_depth_m" => self.volcano.collapse_depth_m = value,
+            "surface_noise.regional_amplitude_m" => self.surface_noise.regional_amplitude_m = value,
+            "hydrology.stream_threshold" => self.hydrology.stream_threshold = value,
+            "hydrology.permanent_river_threshold" => self.hydrology.permanent_river_threshold = value,
+            "erosion.stream_power_iterations" => {
+                self.erosion.stream_power_iterations = value.round().max(0.0) as u32
+            }
+            "erosion.maximum_step_m" => self.erosion.maximum_step_m = value,
+            "coast.shelf_width_max_m" => self.coast.shelf_width_max_m = value,
+            "beaches.maximum_slope_deg" => self.beaches.maximum_slope_deg = value,
+            _ => {}
+        }
+    }
+
+    pub fn param_value(&self, bind: &str) -> Option<f32> {
+        Some(match bind {
+            "island.playable_diameter_m" => self.island.playable_diameter_m,
+            "island.maximum_height_m" => self.island.maximum_height_m,
+            "island.sea_level_m" => self.island.sea_level_m,
+            "island.lobe_count" => self.island.lobe_count as f32,
+            "island.warp_amplitude" => self.island.warp_amplitude,
+            "volcano.shield_radius_m" => self.volcano.shield_radius_m,
+            "volcano.shield_height_m" => self.volcano.shield_height_m,
+            "volcano.summit_height_m" => self.volcano.summit_height_m,
+            "volcano.caldera_depth_m" => self.volcano.caldera_depth_m,
+            "volcano.collapse_depth_m" => self.volcano.collapse_depth_m,
+            "surface_noise.regional_amplitude_m" => self.surface_noise.regional_amplitude_m,
+            "hydrology.stream_threshold" => self.hydrology.stream_threshold,
+            "hydrology.permanent_river_threshold" => self.hydrology.permanent_river_threshold,
+            "erosion.stream_power_iterations" => self.erosion.stream_power_iterations as f32,
+            "erosion.maximum_step_m" => self.erosion.maximum_step_m,
+            "coast.shelf_width_max_m" => self.coast.shelf_width_max_m,
+            "beaches.maximum_slope_deg" => self.beaches.maximum_slope_deg,
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -755,6 +855,61 @@ impl From<&StructureDefinition> for CompiledStructure {
                 })
                 .collect(),
             collision: def.collision.clone(),
+        }
+    }
+}
+
+impl From<&IslandGenerationDefinition> for CompiledIslandGeneration {
+    fn from(def: &IslandGenerationDefinition) -> Self {
+        Self {
+            id: def.header.id.clone(),
+            seed: 0,
+            island: def.island.clone(),
+            volcano: def.volcano.clone(),
+            surface_noise: def.surface_noise.clone(),
+            hydrology: def.hydrology.clone(),
+            erosion: def.erosion.clone(),
+            coast: def.coast.clone(),
+            beaches: def.beaches.clone(),
+            caves: def.caves.clone(),
+            resolution: def.resolution.clone(),
+        }
+    }
+}
+
+impl From<&SetupSchemaDefinition> for CompiledSetupSchema {
+    fn from(def: &SetupSchemaDefinition) -> Self {
+        Self {
+            id: def.header.id.clone(),
+            groups: def
+                .groups
+                .iter()
+                .map(|g| CompiledSetupGroup {
+                    id: g.id.clone(),
+                    label: g.label.clone(),
+                    parameters: g
+                        .parameters
+                        .iter()
+                        .map(|p| CompiledSetupParameter {
+                            id: p.id.clone(),
+                            label: p.label.clone(),
+                            bind: p.bind.clone(),
+                            min: p.min,
+                            max: p.max,
+                            step: p.step,
+                            default: p.default,
+                        })
+                        .collect(),
+                })
+                .collect(),
+            preview_modes: def
+                .preview_modes
+                .iter()
+                .map(|m| CompiledSetupPreviewMode {
+                    id: m.id.clone(),
+                    label: m.label.clone(),
+                })
+                .collect(),
         }
     }
 }

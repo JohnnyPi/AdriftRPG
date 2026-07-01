@@ -5,10 +5,22 @@ members = [
     "crates/voxel_core",
     "crates/terrain_generation",
     "crates/terrain_meshing",
+    "crates/terrain_surface",
+    "crates/procedural_textures",
+    "crates/terrain_material_bevy",
+    "crates/terrain_tools",
     "crates/game_data",
     "crates/physics_bridge",
     "crates/game_bevy",
 ]
+
+[workspace.dependencies]
+bevy = "=0.19.0"
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+rayon = "1"
+blake3 = "1"
+bytemuck = { version = "1", features = ["derive"] }
 
 [package]
 name = "rpg_adrift"

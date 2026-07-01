@@ -27,6 +27,7 @@ fn profile_world(label: &str, source: RecipeDensitySource, extent: [i32; 3]) -> 
             .build_mesh(&ChunkMeshingInput {
                 samples: &samples,
                 chunk_cells: CHUNK_CELLS,
+                surface_resolver: None,
             })
             .expect("mesh");
         if !mesh.positions.is_empty() {

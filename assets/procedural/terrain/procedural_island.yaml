@@ -1,0 +1,137 @@
+﻿schema_version: 1
+id: procedural_materials.island
+description: Eight-layer procedural PBR palette for tropical island terrain
+
+materials:
+  - id: FreshBasalt
+    resolution: 512
+    meters_per_repeat: 2.5
+    normal_strength: 1.15
+    tint: [1.0, 1.0, 1.0]
+    generator:
+      Rock:
+        seed: 1001
+        scale: 3.0
+        octaves: 7
+        attenuation: 2.0
+        color_light: [0.18, 0.17, 0.16]
+        color_dark: [0.05, 0.05, 0.055]
+        normal_strength: 3.7
+        roughness: 0.85
+        metallic: 0.0
+
+  - id: WeatheredBasalt
+    resolution: 512
+    meters_per_repeat: 3.5
+    normal_strength: 1.15
+    tint: [1.0, 1.0, 1.0]
+    generator:
+      Rock:
+        seed: 1002
+        scale: 3.0
+        octaves: 7
+        attenuation: 2.0
+        color_light: [0.25, 0.22, 0.18]
+        color_dark: [0.07, 0.06, 0.055]
+        normal_strength: 3.7
+        roughness: 0.85
+        metallic: 0.0
+
+  - id: TropicalRedSoil
+    resolution: 512
+    meters_per_repeat: 2.0
+    normal_strength: 0.9
+    tint: [1.0, 1.0, 1.0]
+    generator:
+      Ground:
+        seed: 2001
+        macro_scale: 2.2
+        macro_octaves: 5
+        micro_scale: 10.0
+        micro_octaves: 4
+        micro_weight: 0.38
+        color_dry: [0.48, 0.17, 0.07]
+        color_moist: [0.32, 0.12, 0.05]
+        normal_strength: 2.0
+        roughness: 0.92
+
+  - id: JungleLoam
+    resolution: 512
+    meters_per_repeat: 2.0
+    normal_strength: 0.95
+    tint: [1.0, 1.0, 1.0]
+    generator:
+      Ground:
+        seed: 2002
+        macro_scale: 2.2
+        macro_octaves: 5
+        micro_scale: 10.0
+        micro_octaves: 4
+        micro_weight: 0.38
+        color_dry: [0.22, 0.14, 0.06]
+        color_moist: [0.10, 0.08, 0.04]
+        normal_strength: 2.0
+        roughness: 0.92
+
+  - id: JungleMoss
+    resolution: 512
+    meters_per_repeat: 1.8
+    normal_strength: 1.0
+    tint: [0.9, 1.05, 0.85]
+    generator:
+      Ground:
+        seed: 2003
+        macro_scale: 2.2
+        macro_octaves: 5
+        micro_scale: 10.0
+        micro_octaves: 4
+        micro_weight: 0.38
+        color_dry: [0.18, 0.28, 0.10]
+        color_moist: [0.08, 0.18, 0.06]
+        normal_strength: 2.0
+        roughness: 0.92
+
+  - id: CoralSand
+    resolution: 512
+    meters_per_repeat: 1.2
+    normal_strength: 0.8
+    tint: [1.0, 1.0, 1.0]
+    generator:
+      Sand:
+        seed: 3001
+        ripple_scale: 8.0
+        grain_scale: 32.0
+        color_light: [0.92, 0.86, 0.72]
+        color_dark: [0.78, 0.70, 0.55]
+        normal_strength: 1.5
+        roughness: 0.95
+
+  - id: RiverGravel
+    resolution: 512
+    meters_per_repeat: 1.5
+    normal_strength: 1.2
+    tint: [1.0, 1.0, 1.0]
+    generator:
+      Cobblestone:
+        seed: 4001
+        scale: 5.0
+        octaves: 5
+        color_light: [0.42, 0.40, 0.36]
+        color_dark: [0.22, 0.20, 0.18]
+        normal_strength: 4.0
+        roughness: 0.88
+
+  - id: RiverSilt
+    resolution: 512
+    meters_per_repeat: 1.0
+    normal_strength: 0.6
+    tint: [0.95, 0.92, 0.88]
+    generator:
+      Sand:
+        seed: 3002
+        ripple_scale: 4.0
+        grain_scale: 24.0
+        color_light: [0.42, 0.38, 0.28]
+        color_dark: [0.28, 0.24, 0.18]
+        normal_strength: 1.2
+        roughness: 0.75

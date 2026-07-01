@@ -731,6 +731,32 @@ fn expanded_cave_entrance_is_traversable() {
 }
 
 #[test]
+fn expanded_spawn_uses_natural_terrain_not_recipe_pads() {
+    use terrain_generation::{PLAYER_SPAWN_MIN_CLEARANCE_M, SPAWN_FLOOR_EPSILON_M};
+
+    let source = RecipeDensitySource::new(load_expanded_recipe());
+    let wx = source.recipe().spawn_x - source.recipe().coord_offset[0];
+    let wz = source.recipe().spawn_z - source.recipe().coord_offset[2];
+    let terrain = source.terrain_surface_height_at(wx, wz);
+    let composite = source.surface_height_at(wx, wz);
+
+        let (_x, foot_y, _z, report) = source.resolve_player_spawn(PLAYER_SPAWN_MIN_CLEARANCE_M, 48.0);
+    assert!(
+        report.passed,
+        "spawn validation failed: {:?}",
+        report.messages
+    );
+    assert!(
+        foot_y <= terrain + SPAWN_FLOOR_EPSILON_M + 1.5,
+        "foot y={foot_y} should sit on terrain y={terrain}, not composite pad y={composite}"
+    );
+    assert!(
+        composite >= terrain,
+        "composite surface should not be below terrain"
+    );
+}
+
+#[test]
 fn expanded_orphan_subtract_probes_have_support() {
     let source = RecipeDensitySource::new(load_expanded_recipe());
     for (rx, rz) in [(82.0, 196.0), (56.0, 116.0)] {

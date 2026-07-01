@@ -17,12 +17,14 @@ var<uniform> params: WaterParams;
 @vertex
 fn vertex(vertex: Vertex) -> VertexOutput {
     var out: VertexOutput;
+    let world_from_local = mesh_functions::get_world_from_local(vertex.instance_index);
     let wave = sin((vertex.position.x + vertex.position.z) * 0.15 + params.animation.x * params.wave.y)
         * params.wave.z;
     var pos = vertex.position;
     pos.y += wave;
-    out.position = position_world_to_clip(pos);
-    out.world_position = vec4<f32>(pos, 1.0);
+    let world_position = mesh_functions::mesh_position_local_to_world(world_from_local, vec4<f32>(pos, 1.0));
+    out.position = position_world_to_clip(world_position.xyz);
+    out.world_position = world_position;
     out.world_normal = vec3<f32>(0.0, 1.0, 0.0);
 #ifdef VERTEX_UVS_A
     out.uv = vertex.uv;

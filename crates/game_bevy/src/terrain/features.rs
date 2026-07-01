@@ -12,8 +12,9 @@ use terrain_generation::{
 use crate::data::ConfigRegistryResource;
 use crate::state::AppState;
 use crate::terrain::recipe::river_gen_config;
-use crate::terrain::{TerrainRegenPending, TerrainRecipeRevision};
+use crate::terrain::{TerrainRegenPending, TerrainRecipeRevision, TerrainWorldInitSet};
 use crate::ui::{RiverTweaks, TerrainTweaks, WorldTweaks};
+use crate::data::UserSetupPrefs;
 use crate::world::requested_world_id;
 
 #[derive(Resource, Clone, Debug, Default)]
@@ -41,7 +42,7 @@ impl Plugin for TerrainFeaturePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TerrainFeatureRegistry>()
             .init_resource::<CameraWaterState>()
-            .add_systems(OnEnter(AppState::Running), init_terrain_features)
+            .add_systems(OnEnter(AppState::Running), init_terrain_features.after(TerrainWorldInitSet))
             .add_systems(
                 Update,
                 (sync_hydrology_from_tweaks, update_camera_water_state)
@@ -64,6 +65,7 @@ struct HydrologyTweakKey {
 
 fn sync_hydrology_from_tweaks(
     registry: Res<ConfigRegistryResource>,
+    prefs: Res<UserSetupPrefs>,
     world_tweaks: Res<WorldTweaks>,
     river_tweaks: Res<RiverTweaks>,
     terrain_tweaks: Res<TerrainTweaks>,
@@ -87,7 +89,7 @@ fn sync_hydrology_from_tweaks(
     let changed = last.is_some();
     *last = Some(key.clone());
 
-    let world_id = requested_world_id(&registry, &world_tweaks);
+    let world_id = requested_world_id(&prefs);
     let world = registry.0.world_by_id(&world_id).expect("world profile");
     let sea = registry
         .0
@@ -125,12 +127,13 @@ fn sync_hydrology_from_tweaks(
 
 fn init_terrain_features(
     registry: Res<ConfigRegistryResource>,
-    world_tweaks: Res<WorldTweaks>,
+    prefs: Res<UserSetupPrefs>,
     river_tweaks: Res<RiverTweaks>,
     terrain_tweaks: Res<TerrainTweaks>,
+    pipeline: Res<crate::terrain::TerrainPipelineState>,
     mut features: ResMut<TerrainFeatureRegistry>,
 ) {
-    let world_id = requested_world_id(&registry, &world_tweaks);
+    let world_id = requested_world_id(&prefs);
     let world = registry.0.world_by_id(&world_id).expect("world profile");
     let sea = registry
         .0
@@ -144,7 +147,7 @@ fn init_terrain_features(
         .map(|h| h.elevation_m)
         .unwrap_or(31.5);
 
-    let hydrology = build_hydrology(
+    let mut hydrology = build_hydrology(
         &registry.0,
         world,
         sea,
@@ -152,6 +155,31 @@ fn init_terrain_features(
         &river_tweaks,
         terrain_tweaks.field_stack_params(),
     );
+
+    // Island atlas rivers are already in world space; prefer them over legacy demo routing.
+    if let Some(source) = pipeline.density_source.as_ref() {
+        if let Some(atlas) = source.atlas() {
+            if let Some(ref atlas_river) = atlas.river_graph {
+                hydrology.river = Some(atlas_river.clone());
+                use terrain_generation::water_body::{
+                    WaterBody, WaterBodyId, WaterBodyKind, WaterSurfaceDefinition,
+                };
+                hydrology.water.bodies.insert(
+                    WaterBodyId(3),
+                    WaterBody {
+                        id: WaterBodyId(3),
+                        stable_id: StableId::new("water.river.demo"),
+                        kind: WaterBodyKind::River,
+                        surface: WaterSurfaceDefinition::SplineRibbon {
+                            control_points: atlas_river.points.clone(),
+                        },
+                        material_id: StableId::new("water.river"),
+                    },
+                );
+            }
+        }
+    }
+
     if let Some(river) = hydrology.river.clone() {
         features.rivers.insert(1, river);
     }
@@ -181,15 +209,8 @@ pub fn build_hydrology(
         config.source_radius_m = river_tweaks.source_radius_m;
         config.mouth_width_m = river_tweaks.mouth_width_m;
     }
-    let mut river = generate_river_spline(&config, sea_level);
-    if let Some(ref mut spline) = river {
-        if world.coord_offset != [0.0, 0.0, 0.0] {
-            for pt in &mut spline.points {
-                pt.position_xz[0] -= world.coord_offset[0];
-                pt.position_xz[1] -= world.coord_offset[2];
-            }
-        }
-    }
+    let river = generate_river_spline(&config, sea_level);
+    // Path points are already in world space when source_center was converted above.
     let mut water = WaterBodyRegistry::demo_registry(sea_level, pool_elevation);
     if let Some(ref spline) = river {
         use terrain_generation::water_body::{

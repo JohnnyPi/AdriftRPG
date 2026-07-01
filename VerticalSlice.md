@@ -146,6 +146,8 @@ Chunk Z: -3 through 2
 
 # 4. Core terrain representation
 
+See [docs/coordinate-system.md](docs/coordinate-system.md) for the canonical world/recipe/chunk coordinate conventions.
+
 ## 4.1 Signed-density field
 
 The authoritative terrain representation is a scalar density field:

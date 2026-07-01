@@ -40,6 +40,8 @@ fn initial_load(
     mut status: ResMut<ConfigLoadStatus>,
     mut next_state: ResMut<NextState<AppState>>,
 ) {
+    let prefs = crate::data::load_user_prefs();
+    commands.insert_resource(prefs);
     match load_registry_from_directory(&status.assets_root) {
         Ok(registry) => {
             info!(

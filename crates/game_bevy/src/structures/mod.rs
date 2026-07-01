@@ -2,10 +2,12 @@
 
 use avian3d::prelude::{Collider, CollisionLayers, RigidBody};
 use bevy::prelude::*;
-use crate::data::ConfigRegistryResource;
+use tracing::warn;
+
+use crate::data::{ConfigRegistryResource, UserSetupPrefs};
 use crate::state::AppState;
+use crate::terrain::{TerrainPipelineState, TerrainWorldInitSet};
 use crate::world::{requested_world_id, WorldSemanticRegistry, WorldSemanticTag};
-use crate::ui::WorldTweaks;
 use physics_bridge::{layers_for_profile, CollisionProfileId};
 
 #[derive(Component)]
@@ -15,19 +17,23 @@ pub struct StructurePlugin;
 
 impl Plugin for StructurePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(OnEnter(AppState::Running), spawn_structures);
+        app.add_systems(
+            OnEnter(AppState::Running),
+            spawn_structures.after(TerrainWorldInitSet),
+        );
     }
 }
 
 fn spawn_structures(
     mut commands: Commands,
     registry: Res<ConfigRegistryResource>,
-    world_tweaks: Res<WorldTweaks>,
+    prefs: Res<UserSetupPrefs>,
+    pipeline: Res<TerrainPipelineState>,
     mut semantic: ResMut<WorldSemanticRegistry>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let world_id = requested_world_id(&registry, &world_tweaks);
+    let world_id = requested_world_id(&prefs);
     let Ok(world) = registry.0.effective_world(Some(&world_id)) else {
         return;
     };
@@ -35,6 +41,9 @@ fn spawn_structures(
     if structures.is_empty() {
         return;
     }
+    let Some(source) = pipeline.density_source.as_ref() else {
+        return;
+    };
 
     let stone = materials.add(StandardMaterial {
         base_color: Color::srgb(0.48, 0.46, 0.42),
@@ -57,8 +66,10 @@ fn spawn_structures(
             tag: WorldSemanticTag::Shelter,
             position: anchor,
             label: structure.id.as_str().to_string(),
+            physical_marker: false,
         });
 
+        let mut skipped_parts = 0u32;
         for part in &structure.parts {
             let mat = match part.material.as_deref() {
                 Some("fort_wood") => wood.clone(),
@@ -66,6 +77,32 @@ fn spawn_structures(
             };
             let local = rotated_offset(part.offset, yaw);
             let pos = anchor + local;
+
+            let (half_extents, spawn_pos) = match part.kind.as_str() {
+                "box" => {
+                    let size = part.size.unwrap_or([1.0, 1.0, 1.0]);
+                    (
+                        [size[0] * 0.5, size[1] * 0.5, size[2] * 0.5],
+                        pos,
+                    )
+                }
+                "cylinder" => {
+                    let radius = part.radius.unwrap_or(1.0);
+                    let height = part.height.unwrap_or(2.0);
+                    ([radius, height * 0.5, radius], pos)
+                }
+                _ => continue,
+            };
+
+            if source.is_aabb_fully_embedded_in_terrain(
+                spawn_pos.x,
+                spawn_pos.y,
+                spawn_pos.z,
+                half_extents,
+            ) {
+                skipped_parts += 1;
+                continue;
+            }
 
             match part.kind.as_str() {
                 "box" => {
@@ -75,7 +112,7 @@ fn spawn_structures(
                         StructurePart,
                         Mesh3d(mesh.clone()),
                         MeshMaterial3d(mat),
-                        Transform::from_translation(pos)
+                        Transform::from_translation(spawn_pos)
                             .with_rotation(Quat::from_rotation_y(yaw)),
                         RigidBody::Static,
                         Collider::cuboid(size[0] * 0.5, size[1] * 0.5, size[2] * 0.5),
@@ -90,7 +127,7 @@ fn spawn_structures(
                         StructurePart,
                         Mesh3d(mesh),
                         MeshMaterial3d(mat),
-                        Transform::from_translation(pos)
+                        Transform::from_translation(spawn_pos)
                             .with_rotation(Quat::from_rotation_y(yaw)),
                         RigidBody::Static,
                         Collider::cylinder(radius, height * 0.5),
@@ -99,6 +136,14 @@ fn spawn_structures(
                 }
                 _ => {}
             }
+        }
+
+        if skipped_parts > 0 {
+            warn!(
+                structure = %structure.id.as_str(),
+                skipped_parts,
+                "skipped structure parts fully embedded in terrain"
+            );
         }
     }
 }
@@ -119,7 +164,6 @@ fn parse_collision(value: &str) -> CollisionProfileId {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use game_data::load_registry_from_directory;
     use std::path::PathBuf;
 

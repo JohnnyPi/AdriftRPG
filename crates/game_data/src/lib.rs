@@ -9,14 +9,15 @@ mod validate;
 
 pub use compile::{
     CompiledApp, CompiledAtmosphere, CompiledBiomes, CompiledCamera, CompiledCave, CompiledDebug,
-    CompiledFog, CompiledFogLocalVolume, CompiledHydrology, CompiledLandmarkFact,
-    CompiledLandmarks, CompiledLandmarkSign, CompiledLighting, CompiledOptions, CompiledPerformance,
-    CompiledPhysics, CompiledPlayer, CompiledRiver, CompiledRoute, CompiledRoutes, CompiledSky,
-    CompiledStructure, CompiledStructurePart, CompiledTerrain, CompiledTerrainMaterials,
+    CompiledFog, CompiledFogLocalVolume, CompiledHydrology, CompiledIslandGeneration,
+    CompiledLandmarkFact, CompiledLandmarks, CompiledLandmarkSign, CompiledLighting,
+    CompiledOptions, CompiledPerformance, CompiledPhysics, CompiledPlayer, CompiledRiver,
+    CompiledRoute, CompiledRoutes, CompiledSetupGroup, CompiledSetupParameter,
+    CompiledSetupPreviewMode, CompiledSetupSchema, CompiledSky, CompiledStructure, CompiledStructurePart, CompiledTerrain, CompiledTerrainMaterials,
     CompiledVegetation, CompiledWater, CompiledWaterBodyMaterial, CompiledWorld,
 };
 pub use definitions::*;
 pub use hash::registry_hash;
 pub use load::{load_registry_from_directory, LoadedFile};
 pub use registry::ConfigRegistry;
-pub use validate::ValidationReport;
+pub use validate::{validate_definitions, ValidationReport};

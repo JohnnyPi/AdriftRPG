@@ -53,6 +53,37 @@ pub fn chunk_chebyshev_distance(a: ChunkCoord, b: ChunkCoord) -> i32 {
     (a.x - b.x).abs().max((a.y - b.y).abs()).max((a.z - b.z).abs())
 }
 
+/// True when a chunk has finished mesh upload and is visible in the world.
+pub fn chunk_has_uploaded_mesh(
+    pipeline: &crate::terrain::TerrainPipelineState,
+    coord: ChunkCoord,
+) -> bool {
+    use crate::terrain::ChunkState;
+    pipeline.chunks.iter().any(|chunk| {
+        chunk.coord == coord && chunk.state == ChunkState::Ready && chunk.entity.is_some()
+    })
+}
+
+/// Spawn terrain is ready when the spawn chunk or an adjacent vertical neighbor has uploaded geometry.
+pub fn spawn_terrain_uploaded(
+    pipeline: &crate::terrain::TerrainPipelineState,
+    spawn: ChunkCoord,
+) -> bool {
+    if chunk_has_uploaded_mesh(pipeline, spawn) {
+        return true;
+    }
+    for dy in -1..=1i32 {
+        if dy == 0 {
+            continue;
+        }
+        let neighbor = ChunkCoord::new(spawn.x, spawn.y + dy, spawn.z);
+        if chunk_has_uploaded_mesh(pipeline, neighbor) {
+            return true;
+        }
+    }
+    false
+}
+
 pub fn within_density_radius(center: ChunkCoord, coord: ChunkCoord, tweaks: &WorldTweaks) -> bool {
     chunk_chebyshev_distance(center, coord) <= tweaks.density_radius
 }
@@ -101,6 +132,7 @@ pub fn world_position_in_decoration_radius(
     within_decoration_radius(center, cell.chunk_coord(), tweaks)
 }
 
+/// Chunk center in world meters. Assumes `cell_size_m == 1.0`.
 pub fn chunk_world_center(coord: ChunkCoord) -> Vec3 {
     let cells = CHUNK_CELLS as f32;
     Vec3::new(

@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use tracing::info;
 use voxel_core::{MaterialId, TerrainEditCommand};
 
-use crate::camera::{MainGameCamera, MmoCamera};
+use crate::camera::{camera_view_direction, MainGameCamera, MmoCamera};
 use crate::debug_tools::DebugKeyBindings;
 use crate::environment::biomes::BiomeCatalog;
 use crate::environment::materials::material_for_world;
@@ -124,14 +124,9 @@ fn edit_target_world(
     player_entity: Entity,
 ) -> Vec3 {
     let focus = camera.current_focus;
-    let yaw = camera.current_yaw;
+    let yaw = camera.intent_yaw();
     let pitch = camera.current_pitch;
-    let direction = Vec3::new(
-        yaw.sin() * pitch.cos(),
-        pitch.sin(),
-        yaw.cos() * pitch.cos(),
-    )
-    .normalize_or_zero();
+    let direction = camera_view_direction(yaw, pitch);
 
     let filter = SpatialQueryFilter::default().with_excluded_entities([player_entity]);
     if let Some(hit) = spatial.cast_ray(

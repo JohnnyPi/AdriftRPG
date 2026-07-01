@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
+use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 
 use crate::data::ConfigRegistryResource;
 use crate::state::AppState;
@@ -55,8 +55,7 @@ pub struct OptionsPanelPlugin;
 
 impl Plugin for OptionsPanelPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(EguiPlugin::default())
-            .init_resource::<OptionsPanelState>()
+        app.init_resource::<OptionsPanelState>()
             .init_resource::<LightingTweaks>()
             .init_resource::<MovementTweaks>()
             .init_resource::<PhysicsTweaks>()
@@ -430,4 +429,5 @@ fn draw_debug_tab(
     );
     ui.checkbox(&mut ecology.show_wetness_heatmap, "Wetness heatmap");
     ui.add(egui::Slider::new(&mut ecology.biome_debug_mode, 0..=3).text("biome debug mode"));
+    ui.label("Ctrl+F6 — cycle VS3 island field gizmo overlay");
 }

@@ -22,8 +22,10 @@ use crate::player::{
     classify_locomotion, resolve_facing_yaw, Player, PlayerCapsuleVisual, PlayerMovementState,
 };
 use crate::state::AppState;
-use crate::terrain::{ChunkState, TerrainPipelineState};
+use crate::terrain::spawn_terrain_uploaded;
+use crate::terrain::{TerrainFeatureRegistry, TerrainPipelineState};
 use crate::ui::MovementTweaks;
+use terrain_generation::WaterQuery;
 use voxel_core::ChunkCoord;
 
 pub struct GamePhysicsPlugin;
@@ -53,6 +55,7 @@ impl Plugin for GamePhysicsPlugin {
                     tag_player_awaiting_terrain,
                     hold_player_until_spawn_terrain,
                     gather_player_movement,
+                    detect_player_water,
                     apply_character_movement,
                     props::inherit_platform_velocity,
                     water_physics::apply_shallow_water_movement,
@@ -65,7 +68,7 @@ impl Plugin for GamePhysicsPlugin {
                 FixedUpdate,
                 (
                     update_character_facing,
-                    enforce_water_depth,
+                    apply_player_water_physics,
                     snapshot_player_interpolation,
                 )
                     .chain()
@@ -122,9 +125,7 @@ fn tag_player_awaiting_terrain(
     let Some(chunk) = pipeline.spawn_chunk else {
         return;
     };
-    let spawn_ready = pipeline.chunks.iter().any(|c| {
-        c.coord == chunk && c.state == ChunkState::Ready && c.entity.is_some()
-    });
+    let spawn_ready = spawn_terrain_uploaded(&pipeline, chunk);
     if spawn_ready {
         return;
     }
@@ -136,16 +137,38 @@ fn tag_player_awaiting_terrain(
 fn hold_player_until_spawn_terrain(
     mut commands: Commands,
     pipeline: Res<TerrainPipelineState>,
-    mut players: Query<(Entity, &AwaitingSpawnTerrain, &mut LinearVelocity), With<Player>>,
+    registry: Res<ConfigRegistryResource>,
+    mut players: Query<
+        (Entity, &AwaitingSpawnTerrain, &mut Transform, &mut LinearVelocity),
+        With<Player>,
+    >,
 ) {
-    for (entity, awaiting, mut velocity) in &mut players {
+    let Some(source) = pipeline.density_source.as_ref() else {
+        return;
+    };
+    let Ok(player) = registry.0.active_player() else {
+        return;
+    };
+    let capsule_center_y = player.capsule_half_height_m + player.capsule_radius_m;
+
+    for (entity, awaiting, mut transform, mut velocity) in &mut players {
         velocity.0 = Vec3::ZERO;
-        let ready = pipeline.chunks.iter().any(|chunk| {
-            chunk.coord == awaiting.chunk
-                && chunk.state == ChunkState::Ready
-                && chunk.entity.is_some()
-        });
+        let ready = spawn_terrain_uploaded(&pipeline, awaiting.chunk);
         if ready {
+            let floor = source
+                .walkable_terrain_floor_at(
+                    transform.translation.x,
+                    transform.translation.z,
+                    transform.translation.y + 6.0,
+                    terrain_generation::PLAYER_SPAWN_MIN_CLEARANCE_M,
+                )
+                .unwrap_or_else(|| {
+                    source.terrain_surface_height_at(
+                        transform.translation.x,
+                        transform.translation.z,
+                    )
+                });
+            transform.translation.y = floor + terrain_generation::SPAWN_FLOOR_EPSILON_M + capsule_center_y;
             commands.entity(entity).remove::<AwaitingSpawnTerrain>();
             commands.entity(entity).insert(SpawnTerrainReleased);
         }
@@ -316,7 +339,7 @@ fn apply_character_movement(
         movement.coyote_remaining_s = (movement.coyote_remaining_s - dt).max(0.0);
     }
 
-    let can_jump = grounded.grounded || movement.coyote_remaining_s > 0.0;
+    let can_jump = (grounded.grounded || movement.coyote_remaining_s > 0.0) && !movement.in_water;
     if movement.jump_buffer_remaining_s > 0.0 && can_jump {
         velocity.y = controller.jump_speed;
         movement.jump_buffer_remaining_s = 0.0;
@@ -340,9 +363,49 @@ fn apply_character_movement(
 }
 
 const SHALLOW_WATER_DEPTH_M: f32 = 1.5;
+const SWIM_UP_SPEED_MPS: f32 = 3.2;
+const WATER_SINK_GRAVITY_SCALE: f32 = 0.35;
 
-fn enforce_water_depth(
+fn capsule_bottom_offset(player: &CompiledPlayer) -> f32 {
+    player.capsule_half_height_m + player.capsule_radius_m
+}
+
+fn detect_player_water(
     registry: Res<ConfigRegistryResource>,
+    features: Res<TerrainFeatureRegistry>,
+    mut players: Query<(&Transform, &mut PlayerMovementState), With<Player>>,
+) {
+    let Ok(world) = registry.0.active_world() else {
+        return;
+    };
+    let Some(water) = registry.0.water.get(&world.water) else {
+        return;
+    };
+    let Ok(player) = registry.0.active_player() else {
+        return;
+    };
+    let sea = water.sea_level_m;
+    let feet_offset = capsule_bottom_offset(&player);
+
+    for (transform, mut movement) in &mut players {
+        let center = transform.translation;
+        let feet_y = center.y - feet_offset;
+        let sample = features
+            .hydrology
+            .as_ref()
+            .and_then(|hydro| hydro.water.water_at([center.x, center.y, center.z]));
+        movement.submerged_depth = sample.map(|s| s.depth).unwrap_or(0.0);
+        movement.in_water = feet_y < sea + 0.05 || movement.submerged_depth > 0.05;
+        movement.in_shallow_water = movement.in_water
+            && (feet_y > sea - SHALLOW_WATER_DEPTH_M || movement.submerged_depth < SHALLOW_WATER_DEPTH_M);
+    }
+}
+
+fn apply_player_water_physics(
+    time: Res<Time<Fixed>>,
+    registry: Res<ConfigRegistryResource>,
+    pipeline: Res<TerrainPipelineState>,
+    intent: Query<&PlayerMoveIntent, With<Player>>,
     mut players: Query<
         (&mut Transform, &mut LinearVelocity, &mut PlayerMovementState),
         With<Player>,
@@ -354,18 +417,48 @@ fn enforce_water_depth(
     let Some(water) = registry.0.water.get(&world.water) else {
         return;
     };
+    let Ok(player) = registry.0.active_player() else {
+        return;
+    };
+    let Ok(intent) = intent.single() else {
+        return;
+    };
     let sea = water.sea_level_m;
-    let deep_floor = sea - SHALLOW_WATER_DEPTH_M;
+    let feet_offset = capsule_bottom_offset(&player);
+    let dt = time.delta_secs();
+    let gravity = player.gravity_mps2;
 
     for (mut transform, mut velocity, mut movement) in &mut players {
-        let y = transform.translation.y;
-        movement.in_shallow_water = y < sea && y > deep_floor;
-        if y < deep_floor {
-            transform.translation.y = deep_floor;
-            if velocity.y < 0.0 {
-                velocity.y = 0.0;
+        if !movement.in_water {
+            continue;
+        }
+
+        let center_y = transform.translation.y;
+        let feet_y = center_y - feet_offset;
+
+        if intent.jump_held {
+            velocity.y = velocity.y.max(SWIM_UP_SPEED_MPS);
+        } else if center_y < sea + 0.15 && velocity.y < 0.0 {
+            velocity.y += gravity * (1.0 - WATER_SINK_GRAVITY_SCALE) * dt;
+        }
+
+        if let Some(source) = pipeline.density_source.as_ref() {
+            let floor = source.terrain_surface_height_at(
+                transform.translation.x,
+                transform.translation.z,
+            );
+            let min_center_y = floor + feet_offset + terrain_generation::SPAWN_FLOOR_EPSILON_M;
+            if transform.translation.y < min_center_y {
+                transform.translation.y = min_center_y;
+                if velocity.y < 0.0 {
+                    velocity.y = 0.0;
+                }
             }
         }
+
+        movement.in_shallow_water = feet_y > sea - SHALLOW_WATER_DEPTH_M
+            && feet_y < sea + 0.25
+            && movement.submerged_depth < SHALLOW_WATER_DEPTH_M;
     }
 }
 

@@ -6,7 +6,6 @@ pub const ROCK_SLOPE_DEG: f32 = 35.0;
 const MOISTURE_SCALE: f32 = 0.001;
 const CONTINENTAL_SCALE: f32 = 0.0004;
 const TRANSITION_NOISE_SCALE: f32 = 0.0015;
-const SLOPE_SAMPLE_EPS: f32 = 4.0;
 const ELEVATION_COOLING: f32 = 0.02;
 const BASE_TEMPERATURE: f32 = 0.65;
 const CAVE_DEPTH_THRESHOLD: f32 = 2.0;
@@ -17,6 +16,7 @@ const RAIN_SHADOW_RIDGE: [f32; 2] = [180.0, 196.0];
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BiomeSampleContext {
     pub world_y: f32,
+    /// Surface elevation above sea level at this XZ column (not sample `world_y`).
     pub elevation: f32,
     pub slope_degrees: f32,
     pub distance_to_water: f32,
@@ -29,6 +29,7 @@ pub struct BiomeSampleContext {
     pub continentalness: f32,
     pub coast_humidity: f32,
     pub rain_shadow: f32,
+    sea_level_m: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -62,7 +63,7 @@ impl ChunkColumnCache {
             for lx in 0..side {
                 let wx = origin_x + lx as i32 - 1;
                 let wz = origin_z + lz as i32 - 1;
-                heights[lz * side + lx] = source.surface_height_at(wx as f32, wz as f32);
+                heights[lz * side + lx] = source.terrain_surface_height_at(wx as f32, wz as f32);
             }
         }
 
@@ -73,7 +74,7 @@ impl ChunkColumnCache {
                 let wx = origin_x + lx as i32 - 1;
                 let wz = origin_z + lz as i32 - 1;
                 let surface_y = heights[lz * side + lx];
-                let slope_degrees = slope_from_height_grid(&heights, side, lx, lz);
+                let slope_degrees = source.terrain_slope_at(wx as f32, wz as f32);
                 let distance_to_water = source.distance_to_water_m(wx as f32, wz as f32);
                 let distance_to_river = source.distance_to_river_m(wx as f32, wz as f32);
                 let climate = sample_climate(
@@ -112,8 +113,8 @@ impl ChunkColumnCache {
 
 impl BiomeSampleContext {
     pub fn sample(source: &RecipeDensitySource, x: f32, y: f32, z: f32) -> Self {
-        let surface_y = source.surface_height_at(x, z);
-        let slope_degrees = estimate_slope_deg(source, x, z);
+        let surface_y = source.terrain_surface_height_at(x, z);
+        let slope_degrees = source.terrain_slope_at(x, z);
         let distance_to_water = source.distance_to_water_m(x, z);
         let distance_to_river = source.distance_to_river_m(x, z);
         let noise = ValueNoise::new(source.recipe().seed);
@@ -131,11 +132,36 @@ impl BiomeSampleContext {
     }
 
     pub fn is_underwater(&self) -> bool {
-        self.elevation < SHALLOW_WATER_MARGIN
+        self.world_y < self.sea_level_m + SHALLOW_WATER_MARGIN
     }
 
     pub fn is_cave(&self) -> bool {
         self.cave_depth >= CAVE_DEPTH_THRESHOLD
+    }
+
+    #[cfg(test)]
+    pub fn for_test(
+        world_y: f32,
+        elevation: f32,
+        slope_degrees: f32,
+        distance_to_water: f32,
+    ) -> Self {
+        Self {
+            world_y,
+            elevation,
+            slope_degrees,
+            distance_to_water,
+            distance_to_river: f32::MAX,
+            cave_depth: 0.0,
+            moisture: 0.5,
+            effective_moisture: 0.5,
+            transition_noise: 0.5,
+            temperature: 0.5,
+            continentalness: 0.5,
+            coast_humidity: 0.1,
+            rain_shadow: 0.0,
+            sea_level_m: 2.0,
+        }
     }
 }
 
@@ -208,7 +234,7 @@ fn rain_shadow_at(x: f32, z: f32) -> f32 {
 
 fn context_from_column(source: &RecipeDensitySource, column: &ColumnClimate, y: f32) -> BiomeSampleContext {
     let sea_level = source.recipe().sea_level;
-    let elevation = y - sea_level;
+    let elevation = column.surface_y - sea_level;
     let cave_depth = (column.surface_y - y).max(0.0);
 
     BiomeSampleContext {
@@ -225,27 +251,6 @@ fn context_from_column(source: &RecipeDensitySource, column: &ColumnClimate, y: 
         continentalness: column.continentalness,
         coast_humidity: column.coast_humidity,
         rain_shadow: column.rain_shadow,
+        sea_level_m: sea_level,
     }
-}
-
-fn slope_from_height_grid(heights: &[f32], side: usize, lx: usize, lz: usize) -> f32 {
-    let hx = sample_height(heights, side, lx + 1, lz) - sample_height(heights, side, lx.saturating_sub(1), lz);
-    let hz = sample_height(heights, side, lx, lz + 1) - sample_height(heights, side, lx, lz.saturating_sub(1));
-    let gradient = (hx * hx + hz * hz).sqrt() / 2.0;
-    gradient.atan().to_degrees()
-}
-
-fn sample_height(heights: &[f32], side: usize, lx: usize, lz: usize) -> f32 {
-    let lx = lx.min(side - 1);
-    let lz = lz.min(side - 1);
-    heights[lz * side + lx]
-}
-
-fn estimate_slope_deg(source: &RecipeDensitySource, x: f32, z: f32) -> f32 {
-    let hx = source.surface_height_at(x + SLOPE_SAMPLE_EPS, z)
-        - source.surface_height_at(x - SLOPE_SAMPLE_EPS, z);
-    let hz = source.surface_height_at(x, z + SLOPE_SAMPLE_EPS)
-        - source.surface_height_at(x, z - SLOPE_SAMPLE_EPS);
-    let gradient = (hx * hx + hz * hz).sqrt() / (2.0 * SLOPE_SAMPLE_EPS);
-    gradient.atan().to_degrees()
 }

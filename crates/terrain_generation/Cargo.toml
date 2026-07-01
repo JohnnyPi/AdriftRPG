@@ -10,3 +10,4 @@ voxel_core = { path = "../voxel_core" }
 
 [dev-dependencies]
 game_data = { path = "../game_data" }
+terrain_meshing = { path = "../terrain_meshing" }

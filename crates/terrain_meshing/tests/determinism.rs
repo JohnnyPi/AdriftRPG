@@ -1,14 +1,19 @@
-use terrain_generation::VerticalSliceDensitySource;
+use terrain_generation::{default_vertical_slice_recipe, generate_padded_samples, RecipeDensitySource};
 use terrain_meshing::{ChunkMeshingInput, SurfaceNetsMesher, TerrainMesher};
 use voxel_core::{ChunkCoord, MaterialId, CHUNK_CELLS};
 
-fn mesh_topology_hash(source: &VerticalSliceDensitySource, coord: ChunkCoord) -> u64 {
+fn test_density_source(seed: u64) -> RecipeDensitySource {
+    RecipeDensitySource::new(default_vertical_slice_recipe(seed, 2.0))
+}
+
+fn mesh_topology_hash(source: &RecipeDensitySource, coord: ChunkCoord) -> u64 {
     use std::hash::{Hash, Hasher};
-    let samples = terrain_generation::generate_padded_samples(source, coord, MaterialId(0));
+    let samples = generate_padded_samples(source, coord, MaterialId(0));
     let mesh = SurfaceNetsMesher
         .build_mesh(&ChunkMeshingInput {
             samples: &samples,
             chunk_cells: CHUNK_CELLS,
+            surface_resolver: None,
         })
         .expect("mesh");
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -23,8 +28,8 @@ fn mesh_topology_hash(source: &VerticalSliceDensitySource, coord: ChunkCoord) ->
 
 #[test]
 fn determinism_same_seed_same_mesh_topology() {
-    let a = VerticalSliceDensitySource::new(48129, 2.0);
-    let b = VerticalSliceDensitySource::new(48129, 2.0);
+    let a = test_density_source(48129);
+    let b = test_density_source(48129);
     let coord = ChunkCoord::new(0, 1, 0);
     assert_eq!(
         mesh_topology_hash(&a, coord),
@@ -35,8 +40,8 @@ fn determinism_same_seed_same_mesh_topology() {
 
 #[test]
 fn different_seeds_may_differ() {
-    let a = VerticalSliceDensitySource::new(48129, 2.0);
-    let b = VerticalSliceDensitySource::new(48130, 2.0);
+    let a = test_density_source(48129);
+    let b = test_density_source(48130);
     let coord = ChunkCoord::new(0, 1, 0);
     let ha = mesh_topology_hash(&a, coord);
     let hb = mesh_topology_hash(&b, coord);

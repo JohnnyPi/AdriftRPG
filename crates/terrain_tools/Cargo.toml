@@ -1,0 +1,16 @@
+[package]
+name = "terrain_tools"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "bake-materials"
+path = "src/bake_materials.rs"
+
+[dependencies]
+procedural_textures = { path = "../procedural_textures" }
+clap = { version = "4", features = ["derive"] }
+serde_yaml = "0.9"
+hex = "0.4"
+bincode = "1"

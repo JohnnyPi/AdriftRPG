@@ -49,7 +49,11 @@ fn build_surface_nets(input: &ChunkMeshingInput<'_>) -> Result<TerrainMeshData, 
                 let pos = cell_vertex_position(&corners, x as f32, y as f32, z as f32);
                 let normal = estimate_normal(input, pos, padded);
                 let idx = positions.len() as u32;
-                let (ids, weights) = cell_material_blend(input, x, y, z, padded);
+                let (ids, weights) = if let Some(resolver) = input.surface_resolver {
+                    resolver.vertex_blend(pos, normal)
+                } else {
+                    cell_material_blend(input, x, y, z, padded)
+                };
                 positions.push(pos);
                 normals.push(normal);
                 materials.push(ids[0]);
@@ -404,6 +408,7 @@ mod tests {
         let input = ChunkMeshingInput {
             samples: &samples,
             chunk_cells: CHUNK_CELLS,
+            surface_resolver: None,
         };
         let mesh = SurfaceNetsMesher.build_mesh(&input).unwrap();
         assert!(mesh.positions.is_empty());
@@ -415,6 +420,7 @@ mod tests {
         let input = ChunkMeshingInput {
             samples: &samples,
             chunk_cells: CHUNK_CELLS,
+            surface_resolver: None,
         };
         let mesh = SurfaceNetsMesher.build_mesh(&input).unwrap();
         assert!(mesh.positions.is_empty());
@@ -426,6 +432,7 @@ mod tests {
         let input = ChunkMeshingInput {
             samples: &samples,
             chunk_cells: CHUNK_CELLS,
+            surface_resolver: None,
         };
         let mesh = SurfaceNetsMesher.build_mesh(&input).unwrap();
         assert!(!mesh.indices.is_empty());
@@ -460,6 +467,7 @@ mod tests {
         let input = ChunkMeshingInput {
             samples: &samples,
             chunk_cells: CHUNK_CELLS,
+            surface_resolver: None,
         };
         let mesh = SurfaceNetsMesher.build_mesh(&input).unwrap();
         assert!(!mesh.positions.is_empty());
@@ -477,6 +485,7 @@ mod tests {
         let input = ChunkMeshingInput {
             samples: &samples,
             chunk_cells: CHUNK_CELLS,
+            surface_resolver: None,
         };
         let mesh = SurfaceNetsMesher.build_mesh(&input).unwrap();
         let center = [8.0f32, 8.0, 8.0];
@@ -519,6 +528,7 @@ mod tests {
         let input = ChunkMeshingInput {
             samples: &samples,
             chunk_cells: CHUNK_CELLS,
+            surface_resolver: None,
         };
         let mesh = SurfaceNetsMesher.build_mesh(&input).unwrap();
         assert!(!mesh.positions.is_empty());

@@ -34,8 +34,11 @@ fn terrain_color(idx: u32) -> vec4<f32> {
 @vertex
 fn vertex(vertex: Vertex) -> VertexOutput {
     var out: VertexOutput;
-    out.position = position_world_to_clip(vertex.position);
-    out.world_position = vec4<f32>(vertex.position, 1.0);
+    let world_from_local = mesh_functions::get_world_from_local(vertex.instance_index);
+    let world_position =
+        mesh_functions::mesh_position_local_to_world(world_from_local, vec4<f32>(vertex.position, 1.0));
+    out.position = position_world_to_clip(world_position.xyz);
+    out.world_position = world_position;
     out.world_normal = vertex.normal;
 #ifdef VERTEX_UVS_A
     out.uv = vertex.uv;

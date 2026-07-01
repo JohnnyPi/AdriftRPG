@@ -3,7 +3,7 @@
 use bevy::prelude::*;
 use shared::StableId;
 
-use crate::data::ConfigRegistryResource;
+use crate::data::{ConfigRegistryResource, UserSetupPrefs};
 use crate::environment::config_init::refresh_presentation_for_profile;
 use crate::environment::sky::SkyState;
 use crate::state::AppState;
@@ -24,22 +24,14 @@ impl Plugin for WorldProfilePlugin {
     }
 }
 
-pub fn requested_world_id(registry: &ConfigRegistryResource, tweaks: &WorldTweaks) -> StableId {
-    if tweaks.use_expanded_profile {
-        StableId::new("world.expanded_slice")
-    } else {
-        registry
-            .0
-            .active_world()
-            .map(|w| w.id.clone())
-            .unwrap_or_else(|_| StableId::new("world.vertical_slice"))
-    }
+pub fn requested_world_id(prefs: &UserSetupPrefs) -> StableId {
+    prefs.world_stable_id()
 }
 
 fn auto_regen_on_profile_switch(
     mut commands: Commands,
     registry: Res<ConfigRegistryResource>,
-    world_tweaks: Res<WorldTweaks>,
+    prefs: Res<UserSetupPrefs>,
     terrain_tweaks: Res<TerrainTweaks>,
     mut pipeline: ResMut<TerrainPipelineState>,
     mut recipe_revision: ResMut<TerrainRecipeRevision>,
@@ -51,28 +43,29 @@ fn auto_regen_on_profile_switch(
     mut runtime: ResMut<crate::terrain::TerrainWorldRuntime>,
     mut sky_state: ResMut<SkyState>,
     mut atmosphere: ResMut<crate::ui::AtmosphereTweaks>,
-    mut last: Local<Option<bool>>,
+    mut world_tweaks: ResMut<WorldTweaks>,
+    mut last: Local<Option<String>>,
 ) {
-    let expanded = world_tweaks.use_expanded_profile;
-    let Some(previous) = *last else {
-        *last = Some(expanded);
+    let Some(ref previous) = *last else {
+        *last = Some(prefs.world_id.clone());
         return;
     };
-    if previous == expanded {
+    if *previous == prefs.world_id {
         return;
     }
-    *last = Some(expanded);
+    *last = Some(prefs.world_id.clone());
 
+    crate::data::sync_world_tweaks_from_prefs(&prefs, &mut world_tweaks);
     refresh_presentation_for_profile(
         &registry,
-        &world_tweaks,
+        &prefs,
         &mut sky_state,
         &mut atmosphere,
     );
     regen_terrain_with_seed(
         &mut commands,
         &registry,
-        &world_tweaks,
+        &prefs,
         &terrain_tweaks,
         &mut pipeline,
         &mut recipe_revision,

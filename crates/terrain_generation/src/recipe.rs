@@ -1,9 +1,11 @@
 use crate::density_ops::{capsule_sdf, ellipsoid_sdf, plane_density, solid_subtract, solid_union};
+use crate::island_atlas::IslandAtlas;
+use crate::island_gen::sample_atlas_surface;
 use crate::noise::ValueNoise;
 use crate::river::{river_carve_offset, river_channel_at};
 use crate::surface_height::{island_land_factor_warped, land_surface_height};
 use crate::topology::apply_foundation_seal;
-use crate::water_body::RiverSpline;
+use crate::water_body::{RiverControlPoint, RiverSpline};
 use crate::DensitySource;
 use crate::surface_height::CoastModifierKind;
 
@@ -115,6 +117,7 @@ pub struct RiverCarveContext {
 pub struct RecipeDensitySource {
     recipe: TerrainRecipe,
     river_carve: Option<RiverCarveContext>,
+    atlas: Option<IslandAtlas>,
 }
 
 /// Coastal inland factor from the first `CoastalSurface` op: 0 at the shore, 1 inland.
@@ -148,12 +151,32 @@ pub fn distance_to_water_m(recipe: &TerrainRecipe, x: f32, z: f32) -> f32 {
 }
 
 /// Horizontal distance to the nearest river channel centerline in recipe space.
-pub fn distance_to_river_m(source: &RecipeDensitySource, x: f32, z: f32) -> f32 {
+pub fn distance_to_river_m(source: &RecipeDensitySource, recipe_x: f32, recipe_z: f32) -> f32 {
     if let Some(ref river) = source.river_carve {
-        let (dist, _, _) = river_channel_at(&river.spline, x, z);
+        let (dist, _, _) = river_channel_at(&river.spline, recipe_x, recipe_z);
         dist
     } else {
         f32::MAX
+    }
+}
+
+fn river_spline_to_recipe_space(spline: &RiverSpline, coord_offset: [f32; 3]) -> RiverSpline {
+    RiverSpline {
+        points: spline
+            .points
+            .iter()
+            .map(|pt| RiverControlPoint {
+                position_xz: [
+                    pt.position_xz[0] + coord_offset[0],
+                    pt.position_xz[1] + coord_offset[2],
+                ],
+                bed_elevation: pt.bed_elevation,
+                water_elevation: pt.water_elevation,
+                width: pt.width,
+                depth: pt.depth,
+                discharge: pt.discharge,
+            })
+            .collect(),
     }
 }
 
@@ -162,7 +185,23 @@ impl RecipeDensitySource {
         Self {
             recipe,
             river_carve: None,
+            atlas: None,
         }
+    }
+
+    pub fn with_atlas(mut self, atlas: IslandAtlas) -> Self {
+        if let Some(ref river) = atlas.river_graph {
+            self.river_carve = Some(RiverCarveContext {
+                spline: river_spline_to_recipe_space(river, self.recipe.coord_offset),
+                bank_width_m: 3.5,
+            });
+        }
+        self.atlas = Some(atlas);
+        self
+    }
+
+    pub fn atlas(&self) -> Option<&IslandAtlas> {
+        self.atlas.as_ref()
     }
 
     pub fn with_river_carve(mut self, ctx: RiverCarveContext) -> Self {
@@ -212,6 +251,29 @@ impl RecipeDensitySource {
 
     /// Sample density using authored recipe-space coordinates (for tests and tooling).
     pub fn density_at_recipe(&self, x: f32, y: f32, z: f32) -> f32 {
+        if let Some(ref atlas) = self.atlas {
+            return self.density_at_recipe_with_atlas(atlas, x, y, z, true);
+        }
+        self.density_at_recipe_without_atlas(x, y, z, true)
+    }
+
+    /// Natural terrain density excluding union recipe objects (pads, platforms).
+    pub fn terrain_density_at(&self, world_x: f32, world_y: f32, world_z: f32) -> f32 {
+        self.terrain_density_at_recipe(
+            world_x + self.recipe.coord_offset[0],
+            world_y + self.recipe.coord_offset[1],
+            world_z + self.recipe.coord_offset[2],
+        )
+    }
+
+    fn terrain_density_at_recipe(&self, x: f32, y: f32, z: f32) -> f32 {
+        if let Some(ref atlas) = self.atlas {
+            return self.density_at_recipe_with_atlas(atlas, x, y, z, false);
+        }
+        self.density_at_recipe_without_atlas(x, y, z, false)
+    }
+
+    fn density_at_recipe_without_atlas(&self, x: f32, y: f32, z: f32, include_union_objects: bool) -> f32 {
         let noise = ValueNoise::new(self.recipe.seed);
         let island = self
             .recipe
@@ -355,6 +417,9 @@ impl RecipeDensitySource {
                     peak_noise,
                     combine,
                 } => {
+                    if !include_union_objects && *combine == CombineOp::Union {
+                        continue;
+                    }
                     let mut cy = center[1];
                     if let Some((freq, amp)) = peak_noise {
                         cy += (noise.sample(x * freq, 0.0, z * freq) - 0.5) * amp;
@@ -368,6 +433,9 @@ impl RecipeDensitySource {
                     radius,
                     combine,
                 } => {
+                    if !include_union_objects && *combine == CombineOp::Union {
+                        continue;
+                    }
                     let sdf = capsule_sdf(
                         x,
                         y,
@@ -406,9 +474,106 @@ impl RecipeDensitySource {
         apply_foundation_seal(&self.recipe, x, y, z, density)
     }
 
+    fn density_at_recipe_with_atlas(
+        &self,
+        atlas: &IslandAtlas,
+        x: f32,
+        y: f32,
+        z: f32,
+        include_union_objects: bool,
+    ) -> f32 {
+        let noise = ValueNoise::new(self.recipe.seed);
+        let wx = x - self.recipe.coord_offset[0];
+        let wz = z - self.recipe.coord_offset[2];
+        let surface = sample_atlas_surface(atlas, wx, wz);
+        let mut density = y - surface;
+
+        for op in &self.recipe.ops {
+            match op {
+                RecipeOp::Ellipsoid {
+                    center,
+                    radii,
+                    peak_noise,
+                    combine,
+                } => {
+                    if !include_union_objects && *combine == CombineOp::Union {
+                        continue;
+                    }
+                    let mut cy = center[1];
+                    if let Some((freq, amp)) = peak_noise {
+                        cy += (noise.sample(x * freq, 0.0, z * freq) - 0.5) * amp;
+                    }
+                    let sdf = ellipsoid_sdf(
+                        x, y, z, center[0], cy, center[2], radii[0], radii[1], radii[2],
+                    );
+                    density = apply_combine(density, sdf, *combine);
+                }
+                RecipeOp::Capsule {
+                    start,
+                    end,
+                    radius,
+                    combine,
+                } => {
+                    if !include_union_objects && *combine == CombineOp::Union {
+                        continue;
+                    }
+                    let sdf = capsule_sdf(
+                        x, y, z, start[0], start[1], start[2], end[0], end[1], end[2], *radius,
+                    );
+                    density = apply_combine(density, sdf, *combine);
+                }
+                RecipeOp::NoisePerturb {
+                    scale,
+                    amplitude,
+                    density_min,
+                    density_max,
+                } => {
+                    let perturb =
+                        (noise.sample(x * scale, y * scale, z * scale) - 0.5) * amplitude;
+                    if density > *density_min && density < *density_max {
+                        density += perturb;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // River channels are already carved into the island atlas elevation field.
+
+        density
+    }
+
+    pub fn terrain_surface_height_at(&self, world_x: f32, world_z: f32) -> f32 {
+        let mut lo = self.recipe.sea_level - 10.0;
+        let mut hi = self.surface_search_upper_bound();
+        for _ in 0..32 {
+            let mid = (lo + hi) * 0.5;
+            if self.terrain_density_at(world_x, mid, world_z) <= 0.0 {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        hi
+    }
+
+    /// Surface slope in degrees; uses the local-tier atlas slope field when available.
+    pub fn terrain_slope_at(&self, world_x: f32, world_z: f32) -> f32 {
+        if let Some(atlas) = self.atlas.as_ref() {
+            return atlas.slope_at(world_x, world_z);
+        }
+        let eps = 4.0;
+        let hx = self.terrain_surface_height_at(world_x + eps, world_z)
+            - self.terrain_surface_height_at(world_x - eps, world_z);
+        let hz = self.terrain_surface_height_at(world_x, world_z + eps)
+            - self.terrain_surface_height_at(world_x, world_z - eps);
+        let gradient = (hx * hx + hz * hz).sqrt() / (2.0 * eps);
+        gradient.atan().to_degrees()
+    }
+
     pub fn surface_height_at(&self, world_x: f32, world_z: f32) -> f32 {
         let mut lo = self.recipe.sea_level - 10.0;
-        let mut hi = 85.0;
+        let mut hi = self.surface_search_upper_bound();
         for _ in 0..32 {
             let mid = (lo + hi) * 0.5;
             if self.density_at(world_x, mid, world_z) <= 0.0 {
@@ -418,6 +583,25 @@ impl RecipeDensitySource {
             }
         }
         hi
+    }
+
+    fn surface_search_upper_bound(&self) -> f32 {
+        if let Some(atlas) = self.atlas.as_ref() {
+            let regional_max = atlas
+                .elevation_regional
+                .samples
+                .iter()
+                .copied()
+                .fold(self.recipe.sea_level, f32::max);
+            let local_max = atlas
+                .elevation_local
+                .samples
+                .iter()
+                .copied()
+                .fold(0.0, f32::max);
+            return regional_max + local_max + 25.0;
+        }
+        self.recipe.sea_level + 85.0
     }
 
     pub fn surface_height_at_recipe(&self, recipe_x: f32, recipe_z: f32) -> f32 {
@@ -444,10 +628,57 @@ impl RecipeDensitySource {
     }
 
     pub fn spawn_position(&self) -> (f32, f32, f32) {
-        let world_x = self.recipe.spawn_x - self.recipe.coord_offset[0];
-        let world_z = self.recipe.spawn_z - self.recipe.coord_offset[2];
-        let surface_y = self.surface_height_at(world_x, world_z);
-        (world_x, surface_y + 0.05, world_z)
+        let (x, y, z, _) =
+            self.resolve_player_spawn(crate::spawn::PLAYER_SPAWN_MIN_CLEARANCE_M, 48.0);
+        (x, y, z)
+    }
+
+    /// Lowest walkable natural terrain floor with clearance above.
+    pub fn walkable_terrain_floor_at(
+        &self,
+        x: f32,
+        z: f32,
+        max_y: f32,
+        min_clearance: f32,
+    ) -> Option<f32> {
+        let mut lowest = None;
+        let mut y = max_y.floor();
+        while y >= self.recipe.sea_level - 32.0 {
+            let here = self.terrain_density_at(x, y, z);
+            let above = self.terrain_density_at(x, y + 0.5, z);
+            if here <= 0.0
+                && above > 0.0
+                && self.terrain_clearance_above_floor(x, y, z) >= min_clearance
+            {
+                lowest = Some(y);
+            }
+            y -= 0.5;
+        }
+        lowest
+    }
+
+    pub(crate) fn terrain_clearance_above_floor(&self, x: f32, floor_y: f32, z: f32) -> f32 {
+        let mut y = floor_y + 0.5;
+        while y < floor_y + 24.0 {
+            if self.terrain_density_at(x, y, z) <= 0.0 {
+                return y - floor_y - 0.5;
+            }
+            y += 0.5;
+        }
+        24.0
+    }
+
+    /// Whether natural terrain exists within `max_gap` meters below `foot_y`.
+    pub fn has_terrain_support_below(&self, x: f32, foot_y: f32, z: f32, max_gap: f32) -> bool {
+        let mut y = foot_y - 0.5;
+        let limit = foot_y - max_gap;
+        while y >= limit {
+            if self.terrain_density_at(x, y, z) <= 0.0 {
+                return true;
+            }
+            y -= 0.5;
+        }
+        false
     }
 
     /// Lowest walkable ground at `(x, z)` with at least `min_clearance` meters of air above.
@@ -516,7 +747,21 @@ impl RecipeDensitySource {
 
 impl DensitySource for RecipeDensitySource {
     fn sample_density(&self, world_x: f32, world_y: f32, world_z: f32) -> f32 {
-        self.density_at(world_x, world_y, world_z)
+        let mut density = self.density_at(world_x, world_y, world_z);
+        if let Some(atlas) = self.atlas.as_ref() {
+            if atlas.voxel_amplitude_m > 0.0 {
+                let wx = world_x;
+                let wz = world_z;
+                let land = atlas.island_mask.sample_bilinear(wx, wz);
+                if land > 0.01 && density.abs() < 2.0 {
+                    let noise = ValueNoise::new(self.recipe.seed);
+                    let micro = (noise.fbm_2d(wx * 0.35, wz * 0.35, 2) - 0.5)
+                        * atlas.voxel_amplitude_m;
+                    density += micro * land;
+                }
+            }
+        }
+        density
     }
 }
 

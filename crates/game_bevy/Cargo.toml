@@ -11,6 +11,9 @@ shared = { path = "../shared" }
 voxel_core = { path = "../voxel_core" }
 terrain_generation = { path = "../terrain_generation" }
 terrain_meshing = { path = "../terrain_meshing" }
+terrain_surface = { path = "../terrain_surface" }
+terrain_material_bevy = { path = "../terrain_material_bevy" }
+procedural_textures = { path = "../procedural_textures" }
 avian3d = "0.7"
 physics_bridge = { path = "../physics_bridge" }
 notify = "8"
@@ -19,6 +22,8 @@ sha2 = "0.10"
 hex = "0.4"
 tracing = "0.1"
 bevy_egui = "0.40.1"
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
 
 [features]
 default = []

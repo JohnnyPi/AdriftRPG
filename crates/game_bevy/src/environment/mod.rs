@@ -7,6 +7,7 @@ pub mod lighting;
 pub mod lighting_state;
 pub mod materials;
 pub mod sky;
+pub mod surface;
 
 pub use audio::EnvironmentAudioStubPlugin;
 pub use biomes::{BiomeCatalog, BiomeInitSet, BiomePlugin};

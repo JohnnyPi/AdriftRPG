@@ -18,9 +18,10 @@ use crate::state::AppState;
 use crate::terrain::{
     regen_terrain_with_seed, TerrainChunkEntity, TerrainEditStore, TerrainFeatureRegistry,
     TerrainMaterialHandle, TerrainPipelineMetrics, TerrainPipelineState, TerrainRecipeRevision,
-    TerrainRegenPending, TerrainRevision, TerrainSpawnPoint, TerrainTriplanarMaterial,
+    TerrainRegenPending, TerrainRevision, TerrainSpawnPoint,
     TerrainWorldRuntime, WorldSeedOverride,
 };
+use terrain_material_bevy::TerrainPbrMaterial;
 use crate::terrain::draw_residency_rings;
 use crate::environment::fog::FogStack;
 use crate::ui::{EcologyTweaks, RiverTweaks, TerrainTweaks, WorldTweaks};
@@ -43,6 +44,8 @@ pub struct DebugOverlayState {
     pub show_materials: bool,
     pub show_colliders: bool,
     pub show_density: bool,
+    /// VS3 island atlas field overlay: elevation, flow_accumulation, river_mask, beach_suitability, cliff_suitability
+    pub island_field_view: String,
     pub show_normals: bool,
     pub show_camera_cast: bool,
     pub debug_panel: bool,
@@ -71,6 +74,7 @@ impl Plugin for DebugToolsPlugin {
             .add_systems(Update, draw_camera_cast.run_if(in_state(AppState::Running)))
             .add_systems(Update, draw_residency_and_river.run_if(in_state(AppState::Running)))
             .add_systems(Update, draw_terrain_masks.run_if(in_state(AppState::Running)))
+            .add_systems(Update, draw_island_atlas_fields.run_if(in_state(AppState::Running)))
             .add_systems(Update, draw_fog_contributors.run_if(in_state(AppState::Running)))
             .add_systems(Update, update_debug_panel.run_if(in_state(AppState::Running)));
     }
@@ -90,7 +94,7 @@ fn handle_debug_keys(
     mut edit_store: ResMut<TerrainEditStore>,
     mut runtime: ResMut<crate::terrain::TerrainWorldRuntime>,
     registry: Res<ConfigRegistryResource>,
-    world_tweaks: Res<WorldTweaks>,
+    mut prefs: ResMut<crate::data::UserSetupPrefs>,
     terrain_tweaks: Res<TerrainTweaks>,
     ecology: Res<EcologyTweaks>,
 ) {
@@ -122,8 +126,8 @@ fn handle_debug_keys(
     if keyboard.just_pressed(bindings.normals) {
         debug.show_normals = !debug.show_normals;
     }
-    if keyboard.just_pressed(KeyCode::F5) && keyboard.pressed(KeyCode::ControlLeft) {
-        debug.show_fog_contributors = !debug.show_fog_contributors;
+    if keyboard.just_pressed(KeyCode::F6) && keyboard.pressed(KeyCode::ControlLeft) {
+        debug.island_field_view = cycle_island_field_view(&debug.island_field_view);
     }
     if ecology.show_wetness_heatmap {
         debug.biome_debug_view = BiomeDebugView::HeatmapGrayscale;
@@ -132,7 +136,7 @@ fn handle_debug_keys(
         regen_terrain_with_seed(
             &mut commands,
             &registry,
-            &world_tweaks,
+            &prefs,
             &terrain_tweaks,
             &mut pipeline,
             &mut recipe_revision,
@@ -146,10 +150,11 @@ fn handle_debug_keys(
     }
     if keyboard.just_pressed(bindings.next_seed) {
         seed_override.seed = seed_override.seed.wrapping_add(1);
+        prefs.seed = seed_override.seed;
         regen_terrain_with_seed(
             &mut commands,
             &registry,
-            &world_tweaks,
+            &prefs,
             &terrain_tweaks,
             &mut pipeline,
             &mut recipe_revision,
@@ -178,12 +183,13 @@ fn cycle_biome_debug_view(current: BiomeDebugView) -> BiomeDebugView {
 fn sync_terrain_debug_shader(
     debug: Res<DebugOverlayState>,
     handle: Res<TerrainMaterialHandle>,
-    mut materials: ResMut<Assets<TerrainTriplanarMaterial>>,
-    mut last_mode: Local<Option<f32>>,
+    mut materials: ResMut<Assets<TerrainPbrMaterial>>,
+    mut last_mode: Local<Option<u32>>,
 ) {
     let mode = match debug.biome_debug_view {
-        BiomeDebugView::ConstantGreen => 1.0,
-        _ => 0.0,
+        BiomeDebugView::ConstantGreen => 1u32,
+        BiomeDebugView::DiscreteRegions => 1u32,
+        _ => 0u32,
     };
     if last_mode.as_ref() == Some(&mode) {
         return;
@@ -192,7 +198,7 @@ fn sync_terrain_debug_shader(
     let Some(mut material) = materials.get_mut(&handle.0) else {
         return;
     };
-    material.params.debug = Vec4::new(mode, 0.0, 0.0, 0.0);
+    material.settings.debug_mode = mode;
 }
 
 fn draw_colliders(
@@ -502,6 +508,64 @@ fn draw_residency_and_river(
                     gizmos.arrow(mid, mid + dir * 2.0, Color::srgb(0.9, 0.9, 0.3));
                 }
             }
+        }
+    }
+}
+
+fn cycle_island_field_view(current: &str) -> String {
+    const MODES: &[&str] = &[
+        "",
+        "elevation",
+        "flow_accumulation",
+        "river_mask",
+        "beach_suitability",
+        "cliff_suitability",
+    ];
+    let idx = MODES.iter().position(|m| *m == current).unwrap_or(0);
+    MODES[(idx + 1) % MODES.len()].to_string()
+}
+
+fn draw_island_atlas_fields(
+    debug: Res<DebugOverlayState>,
+    pipeline: Res<TerrainPipelineState>,
+    mut gizmos: Gizmos,
+) {
+    if debug.island_field_view.is_empty() {
+        return;
+    }
+    let Some(source) = pipeline.density_source.as_ref() else {
+        return;
+    };
+    let Some(atlas) = source.atlas() else {
+        return;
+    };
+    let step = (atlas.width() / 32).max(1);
+    let spacing = atlas.spacing_m();
+    for z in (0..atlas.height()).step_by(step as usize) {
+        for x in (0..atlas.width()).step_by(step as usize) {
+            let wx = atlas.origin[0] + x as f32 * spacing;
+            let wz = atlas.origin[1] + z as f32 * spacing;
+            let v = match debug.island_field_view.as_str() {
+                "flow_accumulation" => atlas.flow_accumulation.sample_bilinear(wx, wz) / 2000.0,
+                "river_mask" => atlas.river_mask.sample_bilinear(wx, wz),
+                "beach_suitability" => atlas.beach_mask.get(x, z),
+                "cliff_suitability" => atlas.cliff_mask.get(x, z),
+                "elevation_regional" => {
+                    (atlas.elevation_regional.sample_bilinear(wx, wz) + 20.0) / 120.0
+                }
+                "elevation_local" | "elevation_local_residual" => {
+                    (atlas.elevation_local.sample_bilinear(wx, wz) + 5.0) / 10.0
+                }
+                _ => (atlas.composed_land_elevation_at(wx, wz) + 20.0) / 120.0,
+            };
+            if v < 0.02 {
+                continue;
+            }
+            gizmos.cube(
+                Transform::from_translation(Vec3::new(wx, 0.2, wz))
+                    .with_scale(Vec3::new(spacing, 0.05, spacing)),
+                Color::srgba(0.2, 0.7, 0.9, v.clamp(0.0, 1.0) * 0.4),
+            );
         }
     }
 }

@@ -208,8 +208,8 @@ fn expanded_hd_world_profile_loads() {
         .world_by_id(&shared::StableId::new("world.expanded_slice_hd"))
         .expect("hd world");
     assert!(
-        (world.cell_size_m - 0.5).abs() < f32::EPSILON,
-        "hd profile should use 0.5m cells"
+        (world.cell_size_m - 1.0).abs() < f32::EPSILON,
+        "all world profiles must use 1.0 m cells"
     );
     assert_eq!(world.biomes.as_str(), "biomes.expanded_slice");
 }

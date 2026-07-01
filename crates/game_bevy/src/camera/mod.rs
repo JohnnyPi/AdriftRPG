@@ -73,6 +73,16 @@ pub(crate) fn camera_planar_basis(yaw: f32) -> (Vec3, Vec3) {
     (forward.normalize_or_zero(), right.normalize_or_zero())
 }
 
+pub(crate) fn camera_view_direction(yaw: f32, pitch: f32) -> Vec3 {
+    // Camera sits behind the focus along the "backward" vector; view direction is the opposite.
+    let backward = Vec3::new(
+        yaw.sin() * pitch.cos(),
+        pitch.sin(),
+        yaw.cos() * pitch.cos(),
+    );
+    (-backward).normalize_or_zero()
+}
+
 pub(crate) fn camera_forward_xz(yaw: f32) -> Vec3 {
     camera_planar_basis(yaw).0
 }

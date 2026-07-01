@@ -19,7 +19,7 @@ use crate::terrain::{
     ChunkResidencyPlugin, TerrainEditingPlugin, TerrainFeaturePlugin, TerrainMaterialPlugin,
     TerrainPlugin,
 };
-use crate::ui::{HudPlugin, MainMenuPlugin, OptionsPanelPlugin};
+use crate::ui::{configure_ui_overlay_for_game, sync_camera_viewports_to_window, HudPlugin, MainMenuPlugin, OptionsPanelPlugin, SetupOptionsPlugin, UiOverlayPlugin};
 use crate::vegetation::VegetationPlugin;
 use crate::water::WaterPlugin;
 use crate::structures::StructurePlugin;
@@ -77,14 +77,25 @@ pub fn configure_vertical_slice_app(app: &mut App, window_title: &str) {
         DebugToolsPlugin,
         InteractionPlugin,
         HudPlugin,
+    ))
+    .add_plugins((
+        UiOverlayPlugin,
         OptionsPanelPlugin,
+        SetupOptionsPlugin,
         MainMenuPlugin,
         WorldSemanticPlugin,
-        WorldProfilePlugin,
     ))
-    .add_plugins((StructurePlugin, PerformanceValidationPlugin))
+    .add_plugins((WorldProfilePlugin, StructurePlugin, PerformanceValidationPlugin))
     .init_state::<AppState>()
-    .add_systems(OnEnter(AppState::Running), apply_window_resolution);
+    .add_systems(
+        OnEnter(AppState::Running),
+        (
+            apply_window_resolution,
+            sync_camera_viewports_to_window,
+            configure_ui_overlay_for_game,
+        )
+            .chain(),
+    );
 }
 
 pub fn apply_window_resolution(

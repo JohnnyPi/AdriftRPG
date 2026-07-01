@@ -4,13 +4,14 @@ id: world.expanded_slice_hd
 seed: 48129
 
 voxel:
-  cell_size_m: 0.5
+  cell_size_m: 1.0
 
 chunks:
   cells: [16, 16, 16]
   world_extent: [16, 6, 16]
 
 terrain: terrain.expanded_slice
+island_gen: island_gen.vs3_volcanic
 biomes: biomes.expanded_slice
 materials: materials.expanded_slice
 water: water.tropical_shallow

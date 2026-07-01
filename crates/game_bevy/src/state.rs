@@ -5,5 +5,6 @@ pub enum AppState {
     #[default]
     Loading,
     MainMenu,
+    SetupOptions,
     Running,
 }

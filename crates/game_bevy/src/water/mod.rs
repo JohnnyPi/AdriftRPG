@@ -5,8 +5,9 @@ use bevy::shader::ShaderRef;
 
 use crate::data::ConfigRegistryResource;
 use crate::state::AppState;
-use crate::terrain::TerrainFeatureRegistry;
+use crate::terrain::{TerrainFeatureRegistry, TerrainPipelineState, TerrainWorldInitSet};
 use crate::ui::WaterTweaks;
+use crate::data::UserSetupPrefs;
 use crate::world::requested_world_id;
 
 #[derive(ShaderType, Clone, Copy, Debug)]
@@ -47,7 +48,7 @@ pub type WaterRenderingPlugin = WaterPlugin;
 impl Plugin for WaterPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(MaterialPlugin::<WaterMaterial>::default())
-            .add_systems(OnEnter(AppState::Running), spawn_water_bodies)
+            .add_systems(OnEnter(AppState::Running), spawn_water_bodies.after(TerrainWorldInitSet))
             .add_systems(
                 Update,
                 (
@@ -63,12 +64,13 @@ fn spawn_water_bodies(
     mut commands: Commands,
     registry: Res<ConfigRegistryResource>,
     features: Res<TerrainFeatureRegistry>,
+    pipeline: Res<TerrainPipelineState>,
     tweaks: Res<WaterTweaks>,
-    world_tweaks: Res<crate::ui::WorldTweaks>,
+    prefs: Res<UserSetupPrefs>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<WaterMaterial>>,
 ) {
-    let world_id = crate::world::requested_world_id(&registry, &world_tweaks);
+    let world_id = requested_world_id(&prefs);
     let world = registry
         .0
         .effective_world(Some(&world_id))
@@ -121,8 +123,15 @@ fn spawn_water_bodies(
         Transform::from_xyz(pool_world[0], pool_elevation + 0.02, pool_world[2]),
     ));
 
-    if let Some(river) = features.rivers.get(&1) {
-        if let Some(mesh) = build_river_ribbon_mesh(river) {
+    let river_spline = pipeline
+        .density_source
+        .as_ref()
+        .and_then(|s| s.atlas())
+        .and_then(|a| a.river_graph.clone())
+        .or_else(|| features.rivers.get(&1).cloned());
+
+    if let Some(river) = river_spline {
+        if let Some(mesh) = build_river_ribbon_mesh(&river) {
             let river_mat = make_water_material(
                 &mut materials,
                 water_def,
@@ -146,23 +155,22 @@ fn spawn_water_bodies(
 
 fn sync_ocean_plane_with_profile(
     registry: Res<ConfigRegistryResource>,
-    world_tweaks: Res<crate::ui::WorldTweaks>,
+    prefs: Res<UserSetupPrefs>,
     tweaks: Res<WaterTweaks>,
     mut ocean: Query<(&mut Transform, &mut Mesh3d), (With<WaterSurface>, With<OceanSurface>)>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut last: Local<Option<bool>>,
+    mut last: Local<Option<String>>,
 ) {
-    let expanded = world_tweaks.use_expanded_profile;
-    let Some(previous) = *last else {
-        *last = Some(expanded);
+    let Some(ref previous) = *last else {
+        *last = Some(prefs.world_id.clone());
         return;
     };
-    if previous == expanded {
+    if *previous == prefs.world_id {
         return;
     }
-    *last = Some(expanded);
+    *last = Some(prefs.world_id.clone());
 
-    let world_id = requested_world_id(&registry, &world_tweaks);
+    let world_id = requested_world_id(&prefs);
     let world = registry
         .0
         .effective_world(Some(&world_id))

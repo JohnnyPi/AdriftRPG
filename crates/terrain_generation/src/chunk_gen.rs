@@ -55,11 +55,11 @@ pub fn padded_index(x: i32, y: i32, z: i32, padded_size: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vertical_slice::VerticalSliceDensitySource;
+    use crate::{default_vertical_slice_recipe, RecipeDensitySource};
 
     #[test]
     fn generates_all_world_chunk_positions() {
-        let source = VerticalSliceDensitySource::new(48129, 2.0);
+        let source = RecipeDensitySource::new(default_vertical_slice_recipe(48129, 2.0));
         let extent = [6i32, 3, 6];
         let count = iter_world_chunk_coords(extent)
             .map(|coord| generate_chunk(&source, coord, MaterialId(0)))

@@ -1,0 +1,6 @@
+world_id: world.expanded_slice_hd
+seed: 800000
+use_expanded_profile: true
+island_overrides: {}
+preview_color_mode: elevation
+preview_resolution: 256

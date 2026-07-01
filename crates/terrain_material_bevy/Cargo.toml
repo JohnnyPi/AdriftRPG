@@ -1,0 +1,20 @@
+[package]
+name = "terrain_material_bevy"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+bevy.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+bytemuck.workspace = true
+blake3.workspace = true
+procedural_textures = { path = "../procedural_textures" }
+terrain_surface = { path = "../terrain_surface" }
+serde_yaml = "0.9"
+bincode = "1"
+hex = "0.4"
+
+[dev-dependencies]
+procedural_textures = { path = "../procedural_textures" }

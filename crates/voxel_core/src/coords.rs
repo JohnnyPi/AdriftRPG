@@ -16,7 +16,7 @@ impl ChunkCoord {
     }
 }
 
-/// World-space voxel cell coordinate in meters (1 cell = 1 meter).
+/// World-space voxel cell index (1 cell = 1 meter; requires `cell_size_m == 1.0`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct WorldCell {
     pub x: i32,

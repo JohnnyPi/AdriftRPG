@@ -1,5 +1,6 @@
 mod editing;
 mod features;
+mod island_params;
 mod mesh_convert;
 mod material;
 mod metrics;
@@ -15,16 +16,19 @@ pub type RiverGenerationPlugin = TerrainFeaturePlugin;
 /// VS2 §20 — water occupancy registry lives in [`TerrainFeaturePlugin`].
 #[allow(dead_code)]
 pub type WaterBodyPlugin = TerrainFeaturePlugin;
-pub use material::{TerrainMaterialHandle, TerrainMaterialPlugin, TerrainTriplanarMaterial};
+pub use material::{TerrainMaterialHandle, TerrainMaterialPlugin};
 pub use metrics::{TerrainPipelineMetrics, WorldSeedOverride};
+pub use island_params::island_params_from_compiled;
+pub use recipe::{build_density_source_from_prefs, compile_terrain_recipe};
 #[cfg(test)]
-pub use recipe::build_density_source;
+pub(crate) use recipe::build_density_source;
 pub use pipeline::{
     regen_terrain_with_seed, TerrainPipelineState, TerrainPlugin, TerrainRecipeRevision,
     TerrainRegenPending, TerrainSpawnPoint, TerrainWorldInitSet,
 };
 pub use residency::{
-    draw_residency_rings, world_position_in_decoration_radius, world_position_in_high_detail_radius,
+    draw_residency_rings, spawn_terrain_uploaded,
+    world_position_in_decoration_radius, world_position_in_high_detail_radius,
     ChunkResidencyPlugin, TerrainWorldRuntime,
 };
 

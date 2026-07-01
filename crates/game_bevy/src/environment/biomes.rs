@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use game_data::{BiomeRuleDefinition, ConfigRegistry};
+use shared::StableId;
 use terrain_generation::RecipeDensitySource;
 
 use super::biome_context::BiomeSampleContext;
@@ -28,8 +29,8 @@ pub struct BiomeCatalog {
 }
 
 impl BiomeCatalog {
-    pub fn from_registry(registry: &ConfigRegistry) -> Self {
-        let world = registry.active_world().expect("world");
+    pub fn from_registry(registry: &ConfigRegistry, world_id: Option<&StableId>) -> Self {
+        let world = registry.effective_world(world_id).expect("world");
         let biomes = registry.biomes.get(&world.biomes).expect("biomes");
         Self {
             rules: biomes.rules.clone(),
@@ -102,10 +103,10 @@ fn rule_matches(rule: &BiomeRuleDefinition, ctx: &BiomeSampleContext) -> bool {
         return false;
     }
 
-    if rule.elevation_min.is_some_and(|min| ctx.world_y < min) {
+    if rule.elevation_min.is_some_and(|min| ctx.elevation < min) {
         return false;
     }
-    if rule.elevation_max.is_some_and(|max| ctx.world_y > max) {
+    if rule.elevation_max.is_some_and(|max| ctx.elevation > max) {
         return false;
     }
     if rule.slope_min.is_some_and(|min| ctx.slope_degrees < min) {
@@ -242,9 +243,14 @@ impl Plugin for BiomePlugin {
 
 fn init_biome_catalog(
     registry: Res<crate::data::ConfigRegistryResource>,
+    prefs: Res<crate::data::UserSetupPrefs>,
     mut commands: Commands,
 ) {
-    commands.insert_resource(BiomeCatalog::from_registry(&registry.0));
+    let world_id = crate::world::requested_world_id(&prefs);
+    commands.insert_resource(BiomeCatalog::from_registry(
+        &registry.0,
+        Some(&world_id),
+    ));
 }
 
 #[cfg(test)]
@@ -281,6 +287,64 @@ mod tests {
     }
 
     #[test]
+    fn biome_elevation_follows_surface_not_sample_height() {
+        use crate::data::UserSetupPrefs;
+        use crate::terrain::build_density_source_from_prefs;
+        use game_data::load_registry_from_directory;
+        use std::path::PathBuf;
+
+        let assets = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets")
+            .canonicalize()
+            .expect("assets");
+        let registry = load_registry_from_directory(assets).expect("registry");
+        let mut prefs = UserSetupPrefs::default();
+        prefs.world_id = "world.expanded_slice_hd".into();
+        prefs.seed = 800_000;
+        let source = build_density_source_from_prefs(
+            &registry,
+            &prefs,
+            terrain_generation::FieldStackParams::default(),
+        );
+        let catalog = BiomeCatalog::from_registry(
+            &registry,
+            Some(&shared::StableId::new("world.expanded_slice_hd")),
+        );
+
+        let mut wx = 0.0f32;
+        let mut wz = 0.0f32;
+        let mut surface_y = 0.0f32;
+        let mut found = false;
+        'scan: for x in -120..120 {
+            for z in -120..120 {
+                let candidate_x = x as f32;
+                let candidate_z = z as f32;
+                let y = source.terrain_surface_height_at(candidate_x, candidate_z);
+                let elev = y - source.recipe().sea_level;
+                if elev > 4.0 && elev < 15.0 {
+                    wx = candidate_x;
+                    wz = candidate_z;
+                    surface_y = y;
+                    found = true;
+                    break 'scan;
+                }
+            }
+        }
+        assert!(found, "could not find lowland sample on seed 800000");
+
+        let at_surface = classify_biome(&catalog, &source, wx, surface_y, wz, -0.1);
+        let airborne = classify_biome(&catalog, &source, wx, surface_y + 80.0, wz, -0.1);
+        assert_eq!(
+            at_surface, airborne,
+            "biome must follow surface elevation; at surface={at_surface:?}, airborne={airborne:?}"
+        );
+        assert!(
+            !matches!(at_surface, BiomeKind::Alpine),
+            "lowland should not classify as alpine, got {at_surface:?}"
+        );
+    }
+
+    #[test]
     fn solid_and_air_share_surface_biome() {
         let source = test_source();
         let catalog = test_catalog();
@@ -306,7 +370,10 @@ mod tests {
         let world = registry
             .world_by_id(&shared::StableId::new("world.expanded_slice"))
             .expect("expanded world");
-        let catalog = BiomeCatalog::from_registry(&registry);
+        let catalog = BiomeCatalog::from_registry(
+            &registry,
+            Some(&shared::StableId::new("world.expanded_slice")),
+        );
         let source = crate::terrain::build_density_source(
             &registry,
             Some(&shared::StableId::new("world.expanded_slice")),
@@ -347,6 +414,77 @@ mod tests {
         assert!(
             kinds.iter().any(|k| !matches!(k, BiomeKind::Grassland | BiomeKind::RockyUpland)),
             "expected coastal or moisture-driven biomes, got {:?}",
+            kinds
+        );
+    }
+
+    #[test]
+    fn expanded_hd_seed_800000_has_biome_variety_at_spawn_and_coast() {
+        use crate::data::UserSetupPrefs;
+        use crate::terrain::build_density_source_from_prefs;
+        use game_data::load_registry_from_directory;
+        use std::collections::BTreeSet;
+        use std::path::PathBuf;
+
+        let assets = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets")
+            .canonicalize()
+            .expect("assets");
+        let registry = load_registry_from_directory(assets).expect("registry");
+        let mut prefs = UserSetupPrefs::default();
+        prefs.world_id = "world.expanded_slice_hd".into();
+        prefs.seed = 800_000;
+        let source = build_density_source_from_prefs(
+            &registry,
+            &prefs,
+            terrain_generation::FieldStackParams::default(),
+        );
+        let catalog = BiomeCatalog::from_registry(
+            &registry,
+            Some(&shared::StableId::new("world.expanded_slice_hd")),
+        );
+        let (sx, sy, sz, report) = source.resolve_player_spawn(2.0, 48.0);
+        assert!(report.passed, "spawn failed: {:?}", report.messages);
+
+        let spawn_biome = classify_biome(&catalog, &source, sx, sy, sz, -0.1);
+        assert!(
+            matches!(
+                spawn_biome,
+                BiomeKind::Wetland
+                    | BiomeKind::Beach
+                    | BiomeKind::CoastalScrub
+                    | BiomeKind::Scrub
+                    | BiomeKind::Grassland
+                    | BiomeKind::Forest
+                    | BiomeKind::Alpine
+                    | BiomeKind::RockyUpland
+            ),
+            "spawn should resolve to a playable surface biome, got {spawn_biome:?}"
+        );
+
+        let mut kinds = BTreeSet::new();
+        for rx in (40..=200).step_by(8) {
+            for rz in (40..=220).step_by(8) {
+                let wx = rx as f32 - 128.0;
+                let wz = rz as f32 - 128.0;
+                let y = source.terrain_surface_height_at(wx, wz);
+                if y <= source.recipe().sea_level + 0.5 {
+                    continue;
+                }
+                kinds.insert(classify_biome(&catalog, &source, wx, y, wz, -0.1));
+            }
+        }
+        assert!(
+            kinds.len() >= 5,
+            "expected varied biomes on volcanic hd island, got {:?}",
+            kinds
+        );
+        assert!(
+            kinds.contains(&BiomeKind::Forest)
+                || kinds.contains(&BiomeKind::Grassland)
+                || kinds.contains(&BiomeKind::Beach)
+                || kinds.contains(&BiomeKind::CoastalScrub),
+            "expected lowland vegetation or beach biomes, got {:?}",
             kinds
         );
     }

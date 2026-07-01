@@ -41,6 +41,9 @@ fn load_yaml_files(assets_root: &Path) -> DataResult<Vec<LoadedFile>> {
         .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "yaml"))
     {
         let path = entry.path().to_path_buf();
+        if should_skip_config_file(&path) {
+            continue;
+        }
         let text = fs::read_to_string(&path).map_err(|source| DataError::Io {
             path: path.display().to_string(),
             source,
@@ -134,6 +137,10 @@ fn parse_yaml_file(path: &Path, text: &str) -> DataResult<RawDefinition> {
         RawDefinition::Routes(deserialize(path, text)?)
     } else if id.starts_with("structure.") {
         RawDefinition::Structure(deserialize(path, text)?)
+    } else if id.starts_with("island_gen.") {
+        RawDefinition::IslandGeneration(deserialize(path, text)?)
+    } else if id.starts_with("setup.") {
+        RawDefinition::SetupSchema(deserialize(path, text)?)
     } else {
         return Err(DataError::Parse {
             path: path.display().to_string(),
@@ -153,6 +160,13 @@ fn deserialize<T: serde::de::DeserializeOwned>(path: &Path, text: &str) -> DataR
 
 fn strip_utf8_bom(text: &str) -> &str {
     text.strip_prefix('\u{feff}').unwrap_or(text)
+}
+
+/// Procedural PBR recipe files use a separate schema and are loaded by `terrain_material_bevy`.
+fn should_skip_config_file(path: &Path) -> bool {
+    path.components().any(|component| {
+        component.as_os_str() == "procedural"
+    })
 }
 
 #[cfg(test)]

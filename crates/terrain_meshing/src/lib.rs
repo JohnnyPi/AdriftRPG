@@ -4,6 +4,7 @@ mod dual_contouring;
 mod surface_nets;
 
 use voxel_core::TerrainSample;
+use terrain_surface::SurfaceMeshResolver;
 
 pub use dual_contouring::DualContouringMesher;
 pub use surface_nets::SurfaceNetsMesher;
@@ -21,10 +22,22 @@ pub struct TerrainMeshData {
     pub material_weights: Vec<[f32; 4]>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ChunkMeshingInput<'a> {
     pub samples: &'a [TerrainSample],
     pub chunk_cells: usize,
+    /// When set, per-vertex material blends come from the surface classifier.
+    pub surface_resolver: Option<&'a dyn SurfaceMeshResolver>,
+}
+
+impl std::fmt::Debug for ChunkMeshingInput<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChunkMeshingInput")
+            .field("samples", &self.samples.len())
+            .field("chunk_cells", &self.chunk_cells)
+            .field("surface_resolver", &self.surface_resolver.is_some())
+            .finish()
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

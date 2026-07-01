@@ -2,7 +2,7 @@
 
 use bevy::prelude::*;
 
-use crate::data::ConfigRegistryResource;
+use crate::data::{ConfigRegistryResource, UserSetupPrefs};
 use crate::state::AppState;
 use crate::ui::{AtmosphereTweaks, LightingTweaks, WorldTweaks};
 use crate::world::requested_world_id;
@@ -24,7 +24,8 @@ impl Plugin for EnvironmentConfigPlugin {
 
 fn init_presentation_from_registry(
     registry: Res<ConfigRegistryResource>,
-    world_tweaks: Res<WorldTweaks>,
+    prefs: Res<UserSetupPrefs>,
+    _world_tweaks: Res<WorldTweaks>,
     mut lighting_state: ResMut<EnvironmentLightingState>,
     mut atmosphere: ResMut<AtmosphereTweaks>,
     mut lighting_tweaks: ResMut<LightingTweaks>,
@@ -33,7 +34,7 @@ fn init_presentation_from_registry(
 ) {
     refresh_presentation_for_profile(
         &registry,
-        &world_tweaks,
+        &prefs,
         &mut sky_state,
         &mut atmosphere,
     );
@@ -71,7 +72,7 @@ fn init_presentation_from_registry(
     }
 
     if let Some(fog) = registry.0.active_fog() {
-        let world_id = requested_world_id(&registry, &world_tweaks);
+        let world_id = requested_world_id(&prefs);
         let world_profile = registry
             .0
             .effective_world(Some(&world_id))
@@ -141,11 +142,11 @@ fn init_presentation_from_registry(
 
 pub fn refresh_presentation_for_profile(
     registry: &ConfigRegistryResource,
-    world_tweaks: &WorldTweaks,
+    prefs: &UserSetupPrefs,
     sky_state: &mut SkyState,
     atmosphere: &mut AtmosphereTweaks,
 ) {
-    let world_id = requested_world_id(registry, world_tweaks);
+    let world_id = requested_world_id(prefs);
     let world_profile = registry
         .0
         .effective_world(Some(&world_id))

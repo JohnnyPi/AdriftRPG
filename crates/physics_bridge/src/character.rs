@@ -78,7 +78,7 @@ impl Plugin for CharacterControllerPlugin {
         // FixedUpdate avoids query conflicts with Avian's FixedPostUpdate transform sync.
         app.add_systems(
             FixedUpdate,
-            (apply_gravity, move_character, probe_ground)
+            (apply_gravity, move_character, snap_to_ground, probe_ground)
                 .chain()
                 .in_set(CharacterPhysicsSystems),
         );
@@ -184,6 +184,44 @@ fn move_character(
             velocity.0 += (new_velocity_along_up - velocity_along_up) * up;
         } else {
             velocity.0 = output.projected_velocity;
+        }
+    }
+}
+
+const GROUND_CONTACT_SKIN_M: f32 = 0.015;
+
+/// Pull the capsule down onto walkable ground within the configured snap distance.
+fn snap_to_ground(
+    spatial: SpatialQuery,
+    mut query: Query<
+        (
+            Entity,
+            &mut Transform,
+            &CharacterController,
+            &Collider,
+            &LinearVelocity,
+        ),
+        With<CharacterController>,
+    >,
+) {
+    for (entity, mut transform, controller, collider, velocity) in &mut query {
+        if velocity.y > 0.25 {
+            continue;
+        }
+        let max_distance = controller.ground_snap_m + GROUND_CONTACT_SKIN_M;
+        let filter = SpatialQueryFilter::from_excluded_entities([entity]);
+        let Some(hit) = CharacterCollisionQuery::ground_cast(
+            &spatial,
+            collider,
+            transform.translation,
+            transform.rotation,
+            max_distance,
+            &filter,
+        ) else {
+            continue;
+        };
+        if hit.distance <= controller.ground_snap_m {
+            transform.translation.y -= hit.distance - GROUND_CONTACT_SKIN_M;
         }
     }
 }

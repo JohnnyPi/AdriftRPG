@@ -34,6 +34,10 @@ pub fn spawn_game_camera(
         MainGameCamera,
         mmo_camera,
         Camera3d::default(),
+        Camera {
+            order: 0,
+            ..default()
+        },
         Projection::Perspective(PerspectiveProjection {
             near: 0.1,
             far: 500.0,
