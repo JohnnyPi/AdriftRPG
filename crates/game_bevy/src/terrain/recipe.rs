@@ -1,15 +1,16 @@
 use game_data::{
-    CompiledRiver, CompiledWater, CompiledWorld, ConfigRegistry, TerrainOperationDefinition,
+    CompiledIslandGeneration, CompiledRiver, CompiledWater, CompiledWorld, ConfigRegistry,
+    TerrainOperationDefinition,
 };
-use shared::StableId;
 use sha2::{Digest, Sha256};
+use shared::StableId;
 use terrain_generation::{
-    build_island_atlas, default_vertical_slice_recipe, generate_river_spline, CoastModifierKind,
-    CombineOp, RecipeDensitySource, RecipeOp, RiverCarveContext, RiverGenConfig, TerrainRecipe,
+    CoastModifierKind, CombineOp, RecipeDensitySource, RecipeOp, RiverCarveContext, RiverGenConfig,
+    TerrainRecipe, build_island_atlas, default_vertical_slice_recipe, generate_river_spline,
 };
 
-use crate::data::UserSetupPrefs;
 use super::island_params::island_params_from_compiled;
+use crate::data::UserSetupPrefs;
 
 pub fn build_density_source(
     registry: &ConfigRegistry,
@@ -144,6 +145,9 @@ pub fn compile_terrain_recipe(
             }
         }
     }
+    if let Some(island_gen) = registry.island_generation_for_world(world) {
+        append_generated_island_caves(&mut ops, island_gen, seed_override.unwrap_or(world.seed));
+    }
 
     if ops.is_empty() {
         return default_vertical_slice_recipe(
@@ -165,6 +169,100 @@ pub fn compile_terrain_recipe(
         coord_offset: world.coord_offset,
         ops,
     }
+}
+
+fn append_generated_island_caves(
+    ops: &mut Vec<RecipeOp>,
+    island_gen: &CompiledIslandGeneration,
+    seed: u64,
+) {
+    let caves = &island_gen.caves;
+    if caves.chamber_count_max == 0 || caves.passage_radius_max_m <= 0.0 {
+        return;
+    }
+
+    let count =
+        ((caves.chamber_count_min + caves.chamber_count_max).max(2) / 2).clamp(2, 8) as usize;
+    let base_angle = island_gen.volcano.collapse_direction_deg.to_radians();
+    let base_radius = island_gen.volcano.shield_radius_m * 0.38;
+    let radius_span = island_gen.volcano.shield_radius_m * 0.18;
+    let min_passage = caves.passage_radius_min_m.max(0.6);
+    let max_passage = caves.passage_radius_max_m.max(min_passage);
+    let mut previous = None;
+
+    for index in 0..count {
+        let t = if count == 1 {
+            0.5
+        } else {
+            index as f32 / (count - 1) as f32
+        };
+        let angle_jitter = hash_unit(seed, index as u32) - 0.5;
+        let angle = base_angle + (t - 0.5) * 0.7 + angle_jitter * 0.2;
+        let radial = base_radius + radius_span * t;
+        let chamber_radius = lerp(
+            min_passage,
+            max_passage,
+            0.35 + 0.5 * hash_unit(seed ^ 0xA5A5_A5A5, index as u32),
+        );
+        let center = [
+            island_gen.volcano.center[0] + radial * angle.cos(),
+            cave_center_height(island_gen, t),
+            island_gen.volcano.center[1] + radial * angle.sin(),
+        ];
+        ops.push(RecipeOp::Ellipsoid {
+            center,
+            radii: [chamber_radius * 1.7, chamber_radius, chamber_radius * 1.5],
+            peak_noise: None,
+            combine: CombineOp::Subtract,
+        });
+        if let Some(previous_center) = previous {
+            ops.push(RecipeOp::Capsule {
+                start: previous_center,
+                end: center,
+                radius: chamber_radius.min(max_passage) * 0.72,
+                combine: CombineOp::Subtract,
+            });
+        }
+        previous = Some(center);
+    }
+
+    if caves.overhang_enabled {
+        let mouth_radius = min_passage * 1.15;
+        let mouth = [
+            island_gen.volcano.center[0] + (base_radius + radius_span * 1.15) * base_angle.cos(),
+            (island_gen.island.sea_level_m + caves.minimum_cover_m + mouth_radius)
+                .min(cave_center_height(island_gen, 0.1)),
+            island_gen.volcano.center[1] + (base_radius + radius_span * 1.15) * base_angle.sin(),
+        ];
+        if let Some(last_center) = previous {
+            ops.push(RecipeOp::Capsule {
+                start: last_center,
+                end: mouth,
+                radius: mouth_radius,
+                combine: CombineOp::Subtract,
+            });
+        }
+    }
+}
+
+fn cave_center_height(island_gen: &CompiledIslandGeneration, t: f32) -> f32 {
+    let caves = &island_gen.caves;
+    let base = island_gen.island.sea_level_m + caves.minimum_cover_m + 6.0;
+    let depth_span = caves.maximum_depth_m * (0.18 + 0.18 * t);
+    let ceiling_limit = island_gen.island.maximum_height_m * 0.28;
+    (base + depth_span).min(ceiling_limit.max(base + 2.0))
+}
+
+fn hash_unit(seed: u64, index: u32) -> f32 {
+    let mut value = seed ^ ((index as u64 + 1) * 0x9E37_79B9_7F4A_7C15);
+    value ^= value >> 33;
+    value = value.wrapping_mul(0xff51_afd7_ed55_8ccd);
+    value ^= value >> 33;
+    ((value >> 40) as u32) as f32 / u32::MAX as f32
+}
+
+fn lerp(a: f32, b: f32, t: f32) -> f32 {
+    a + (b - a) * t
 }
 
 fn convert_op(def: &TerrainOperationDefinition) -> RecipeOp {
@@ -325,5 +423,60 @@ fn parse_coast_modifier_kind(value: &str) -> CoastModifierKind {
         "harbor" => CoastModifierKind::Harbor,
         "cliff_shelf" | "cliff" => CoastModifierKind::CliffShelf,
         _ => CoastModifierKind::Cove,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use game_data::load_registry_from_directory;
+    use std::path::PathBuf;
+
+    fn workspace_assets() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets")
+            .canonicalize()
+            .expect("assets")
+    }
+
+    #[test]
+    fn generated_vs3_caves_respond_to_authored_parameters() {
+        let registry = load_registry_from_directory(workspace_assets()).expect("registry");
+        let world = registry
+            .world_by_id(&StableId::new("world.vs3_island"))
+            .expect("world");
+        let base = registry
+            .island_generation_for_world(world)
+            .expect("island")
+            .clone();
+
+        let mut low = base.clone();
+        low.caves.chamber_count_min = 2;
+        low.caves.chamber_count_max = 2;
+        low.caves.overhang_enabled = false;
+
+        let mut high = base.clone();
+        high.caves.chamber_count_min = 6;
+        high.caves.chamber_count_max = 8;
+        high.caves.overhang_enabled = true;
+
+        let mut low_ops = Vec::new();
+        append_generated_island_caves(&mut low_ops, &low, world.seed);
+        let mut high_ops = Vec::new();
+        append_generated_island_caves(&mut high_ops, &high, world.seed);
+
+        assert!(high_ops.len() > low_ops.len());
+        assert!(
+            high_ops
+                .iter()
+                .any(|op| matches!(op, RecipeOp::Capsule { .. }))
+        );
+        assert!(
+            low_ops
+                .iter()
+                .filter(|op| matches!(op, RecipeOp::Ellipsoid { .. }))
+                .count()
+                <= 2
+        );
     }
 }

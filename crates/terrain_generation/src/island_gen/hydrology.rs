@@ -189,22 +189,27 @@ pub fn extract_river_mask(
 
 pub fn trace_primary_river(
     filled: &Field2D<f32>,
-    _accumulation: &Field2D<f32>,
-    _direction: &Field2D<u8>,
+    accumulation: &Field2D<f32>,
+    direction: &Field2D<u8>,
     island_mask: &Field2D<f32>,
     params: &IslandGenParams,
     sea_level: f32,
 ) -> Option<RiverSpline> {
     let mut best_source = None;
-    let mut best_elev = f32::MIN;
+    let mut best_score = f32::MIN;
     for z in 0..filled.height {
         for x in 0..filled.width {
             if island_mask.get(x, z) < 0.4 {
                 continue;
             }
+            let acc = accumulation.get(x, z);
             let elev = filled.get(x, z);
-            if elev > best_elev {
-                best_elev = elev;
+            if acc < params.hydrology.stream_threshold && elev <= sea_level + 4.0 {
+                continue;
+            }
+            let score = acc + elev.max(sea_level) * 2.0;
+            if score > best_score {
+                best_score = score;
                 let wx = filled.origin[0] + x as f32 * filled.spacing;
                 let wz = filled.origin[1] + z as f32 * filled.spacing;
                 best_source = Some((x, z, wx, wz));
@@ -216,28 +221,33 @@ pub fn trace_primary_river(
     let mut path = vec![(wx, wz)];
     let mut visited = std::collections::HashSet::new();
     visited.insert((sx, sz));
+    let mut cells = vec![(sx, sz)];
 
+    let mut cx = sx;
+    let mut cz = sz;
     for _ in 0..500 {
-        let gx = ((wx - filled.origin[0]) / filled.spacing).round() as i32;
-        let gz = ((wz - filled.origin[1]) / filled.spacing).round() as i32;
-        if gx < 0 || gz < 0 || gx >= filled.width as i32 || gz >= filled.height as i32 {
+        let dir = direction.get(cx, cz);
+        if dir == 255 {
             break;
         }
-        let (nx, nz) = match steepest_downhill_elevation(filled, island_mask, gx, gz) {
-            Some(next) => next,
-            None => break,
-        };
+        let (dx, dz) = D8_OFFSETS[dir as usize];
+        let nx = cx as i32 + dx;
+        let nz = cz as i32 + dz;
         if nx < 0 || nz < 0 || nx >= filled.width as i32 || nz >= filled.height as i32 {
             break;
         }
-        if visited.contains(&(nx as u32, nz as u32)) {
+        let next = (nx as u32, nz as u32);
+        if visited.contains(&next) {
             break;
         }
-        visited.insert((nx as u32, nz as u32));
-        wx = filled.origin[0] + nx as f32 * filled.spacing;
-        wz = filled.origin[1] + nz as f32 * filled.spacing;
+        visited.insert(next);
+        cx = next.0;
+        cz = next.1;
+        cells.push(next);
+        wx = filled.origin[0] + cx as f32 * filled.spacing;
+        wz = filled.origin[1] + cz as f32 * filled.spacing;
         path.push((wx, wz));
-        if island_mask.get(nx as u32, nz as u32) < 0.1 {
+        if island_mask.get(cx, cz) < 0.1 || filled.get(cx, cz) <= sea_level + 0.25 {
             break;
         }
     }
@@ -259,53 +269,73 @@ pub fn trace_primary_river(
 
     let n = path.len();
     let mut points = Vec::new();
-    for (i, (x, z)) in path.iter().enumerate() {
+    let source_acc = accumulation.get(sx, sz).max(params.hydrology.rainfall_base);
+    for (i, ((x, z), (gx, gz))) in path.iter().zip(cells.iter()).enumerate() {
         let t = i as f32 / (n - 1) as f32;
-        let width = 1.8 + (6.5 - 1.8) * t;
-        let depth = 0.4 + (1.6 - 0.4) * t;
+        let acc = (accumulation.get(*gx, *gz) / source_acc).clamp(0.0, 1.0);
+        let width = 1.8 + (6.5 - 1.8) * acc.max(t * 0.35);
+        let depth = 0.4 + (1.6 - 0.4) * acc.max(t * 0.5);
+        let terrain_height = filled.get(*gx, *gz);
+        let water_elevation = terrain_height.max(sea_level) - depth * 0.25;
+        let bed_elevation = (water_elevation - depth).max(sea_level - depth * 0.25);
         points.push(RiverControlPoint {
             position_xz: [*x, *z],
-            bed_elevation: sea_level - depth * 0.5,
-            water_elevation: (sea_level + 0.25).max(sea_level),
+            bed_elevation,
+            water_elevation,
             width,
             depth,
-            discharge: 1.0 - t * 0.3,
+            discharge: accumulation
+                .get(*gx, *gz)
+                .max(params.hydrology.rainfall_base),
         });
     }
     Some(RiverSpline { points })
 }
 
-fn steepest_downhill_elevation(
-    filled: &Field2D<f32>,
-    island_mask: &Field2D<f32>,
-    gx: i32,
-    gz: i32,
-) -> Option<(i32, i32)> {
-    let current = filled.get(gx as u32, gz as u32);
-    let mut best = None;
-    let mut best_drop = 0.0f32;
-    let mut lowest = None;
-    let mut lowest_elev = f32::MAX;
-    for (dx, dz) in D8_OFFSETS {
-        let nx = gx + dx;
-        let nz = gz + dz;
-        if nx < 0 || nz < 0 || nx >= filled.width as i32 || nz >= filled.height as i32 {
-            continue;
-        }
-        if island_mask.get(nx as u32, nz as u32) < 0.05 {
-            return Some((nx, nz));
-        }
-        let neighbor = filled.get(nx as u32, nz as u32);
-        let drop = current - neighbor;
-        if drop > best_drop {
-            best_drop = drop;
-            best = Some((nx, nz));
-        }
-        if neighbor < lowest_elev {
-            lowest_elev = neighbor;
-            lowest = Some((nx, nz));
-        }
-    }
-    best.or(lowest)
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
+    #[test]
+    fn traced_river_follows_flow_direction_field() {
+        let mut filled = Field2D::<f32>::new(5, 5, [0.0, 0.0], 1.0);
+        let mut accumulation = Field2D::<f32>::new(5, 5, [0.0, 0.0], 1.0);
+        let mut direction = Field2D::<u8>::new(5, 5, [0.0, 0.0], 1.0);
+        let mut mask = Field2D::<f32>::new(5, 5, [0.0, 0.0], 1.0);
+
+        for z in 0..5 {
+            for x in 0..5 {
+                filled.set(x, z, 20.0 - z as f32 - x as f32 * 0.1);
+                accumulation.set(x, z, 1.0);
+                direction.set(x, z, 255);
+                mask.set(x, z, 1.0);
+            }
+        }
+        accumulation.set(2, 0, 80.0);
+        accumulation.set(2, 1, 70.0);
+        accumulation.set(2, 2, 60.0);
+        accumulation.set(2, 3, 50.0);
+        direction.set(2, 0, 4);
+        direction.set(2, 1, 4);
+        direction.set(2, 2, 4);
+        direction.set(2, 3, 4);
+        mask.set(2, 4, 0.0);
+        filled.set(2, 4, 0.0);
+
+        let mut params = IslandGenParams::default();
+        params.hydrology.stream_threshold = 10.0;
+        params.hydrology.minimum_stream_length_m = 3.0;
+        let river = trace_primary_river(&filled, &accumulation, &direction, &mask, &params, 0.0)
+            .expect("river");
+        let xs: Vec<_> = river
+            .points
+            .iter()
+            .map(|point| point.position_xz[0])
+            .collect();
+        assert_eq!(xs, vec![2.0, 2.0, 2.0, 2.0, 2.0]);
+        assert!(
+            river.points[0].discharge >= river.points[3].discharge,
+            "river discharge should be sourced from flow accumulation"
+        );
+    }
+}

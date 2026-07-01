@@ -72,6 +72,32 @@ fn sample_triplanar_ormh(layer: u32, world_pos: vec3<f32>, world_normal: vec3<f3
     return cx * blend.x + cy * blend.y + cz * blend.z;
 }
 
+fn decode_normal(sample: vec4<f32>) -> vec3<f32> {
+    return normalize(sample.xyz * 2.0 - vec3<f32>(1.0, 1.0, 1.0));
+}
+
+fn sample_triplanar_normal(layer: u32, world_pos: vec3<f32>, world_normal: vec3<f32>) -> vec3<f32> {
+    let scale = settings.global_texture_scale / max(layer_scale(layer), 0.01);
+    let blend = triplanar_weights(world_normal);
+    let uv_x = world_pos.zy * scale;
+    let uv_y = world_pos.xz * scale;
+    let uv_z = world_pos.xy * scale;
+
+    let sx = decode_normal(textureSampleLevel(normal_array, normal_sampler, uv_x, i32(layer), 0.0));
+    let sy = decode_normal(textureSampleLevel(normal_array, normal_sampler, uv_y, i32(layer), 0.0));
+    let sz = decode_normal(textureSampleLevel(normal_array, normal_sampler, uv_z, i32(layer), 0.0));
+
+    var nx = normalize(vec3<f32>(sx.z, sx.y, sx.x));
+    var ny = normalize(vec3<f32>(sy.x, sy.z, sy.y));
+    var nz = normalize(vec3<f32>(sz.x, sz.y, sz.z));
+
+    nx.x *= select(-1.0, 1.0, world_normal.x >= 0.0);
+    ny.y *= select(-1.0, 1.0, world_normal.y >= 0.0);
+    nz.z *= select(-1.0, 1.0, world_normal.z >= 0.0);
+
+    return normalize(nx * blend.x + ny * blend.y + nz * blend.z);
+}
+
 @vertex
 fn vertex(vertex: Vertex) -> VertexOutput {
     var out: VertexOutput;
@@ -125,12 +151,14 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     var albedo = vec3<f32>(0.0);
     var roughness = 0.85;
     var metallic = 0.0;
+    var detail_normal = vec3<f32>(0.0, 0.0, 0.0);
 
     for (var i = 0u; i < 4u; i = i + 1u) {
         let layer = u32(ids[i] + 0.5);
         let w = weights[i];
         if w > 0.001 && layer < settings.layer_count {
             albedo += sample_triplanar_albedo(layer, world_pos, world_normal) * w;
+            detail_normal += sample_triplanar_normal(layer, world_pos, world_normal) * w;
             let ormh = sample_triplanar_ormh(layer, world_pos, world_normal);
             roughness += ormh.g * w;
             metallic += ormh.b * w;
@@ -140,6 +168,9 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     let weight_sum = weights.x + weights.y + weights.z + weights.w;
     if weight_sum < 0.001 {
         albedo = sample_triplanar_albedo(0u, world_pos, world_normal);
+        detail_normal = sample_triplanar_normal(0u, world_pos, world_normal);
+    } else {
+        detail_normal = normalize(detail_normal / weight_sum);
     }
 
     if settings.debug_mode == 1u {
@@ -153,7 +184,9 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     pbr_input.V = calculate_view(in.world_position, pbr_input.is_orthographic);
     pbr_input.frag_coord = in.position;
     pbr_input.world_position = in.world_position;
-    let prepared_normal = prepare_world_normal(world_normal, false, is_front);
+    let normal_mix = clamp(settings.normal_strength * 0.75, 0.0, 1.0);
+    let shading_normal = normalize(mix(world_normal, detail_normal, normal_mix));
+    let prepared_normal = prepare_world_normal(shading_normal, false, is_front);
     pbr_input.world_normal = prepared_normal;
     pbr_input.N = normalize(prepared_normal);
     pbr_input.material.base_color = vec4<f32>(albedo, 1.0);
