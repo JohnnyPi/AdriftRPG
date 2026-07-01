@@ -1,5 +1,5 @@
-use bevy::prelude::*;
 use bevy::pbr::Material;
+use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, ShaderType};
 use bevy::shader::ShaderRef;
 
@@ -53,7 +53,11 @@ impl Material for TerrainPbrMaterial {
 }
 
 impl TerrainPbrMaterial {
-    pub fn fallback(images: &mut Assets<Image>, materials: &mut Assets<Self>, layers: u32) -> Handle<Self> {
+    pub fn fallback(
+        images: &mut Assets<Image>,
+        materials: &mut Assets<Self>,
+        layers: u32,
+    ) -> Handle<Self> {
         let handles = crate::arrays::create_placeholder_array_images(images, layers);
         materials.add(Self {
             albedo_array: handles.albedo,

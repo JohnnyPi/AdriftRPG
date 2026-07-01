@@ -106,18 +106,101 @@ impl WaterBodyRegistry {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+struct SplineRibbonSample {
+    tangent: [f32; 2],
+    water_elevation: f32,
+    bed_elevation: f32,
+    width: f32,
+    discharge: f32,
+    lateral_distance: f32,
+}
+
+fn spline_ribbon_sample(
+    control_points: &[RiverControlPoint],
+    position_xz: [f32; 2],
+) -> Option<SplineRibbonSample> {
+    if control_points.len() < 2 {
+        return None;
+    }
+    let mut best: Option<SplineRibbonSample> = None;
+    for segment in control_points.windows(2) {
+        let start = &segment[0];
+        let end = &segment[1];
+        let ax = start.position_xz[0];
+        let az = start.position_xz[1];
+        let bx = end.position_xz[0];
+        let bz = end.position_xz[1];
+        let ab = [bx - ax, bz - az];
+        let len_sq = ab[0] * ab[0] + ab[1] * ab[1];
+        if len_sq <= f32::EPSILON {
+            continue;
+        }
+        let ap = [position_xz[0] - ax, position_xz[1] - az];
+        let t = ((ap[0] * ab[0] + ap[1] * ab[1]) / len_sq).clamp(0.0, 1.0);
+        let point = [ax + ab[0] * t, az + ab[1] * t];
+        let lateral_dx = position_xz[0] - point[0];
+        let lateral_dz = position_xz[1] - point[1];
+        let lateral_distance = (lateral_dx * lateral_dx + lateral_dz * lateral_dz).sqrt();
+        let tangent_len = len_sq.sqrt();
+        let sample = SplineRibbonSample {
+            tangent: [ab[0] / tangent_len, ab[1] / tangent_len],
+            water_elevation: start.water_elevation
+                + (end.water_elevation - start.water_elevation) * t,
+            bed_elevation: start.bed_elevation + (end.bed_elevation - start.bed_elevation) * t,
+            width: start.width + (end.width - start.width) * t,
+            discharge: start.discharge + (end.discharge - start.discharge) * t,
+            lateral_distance,
+        };
+        if best
+            .as_ref()
+            .is_none_or(|current| sample.lateral_distance < current.lateral_distance)
+        {
+            best = Some(sample);
+        }
+    }
+    best
+}
+
 impl WaterQuery for WaterBodyRegistry {
     fn water_at(&self, point: [f32; 3]) -> Option<WaterSample> {
         let mut best: Option<WaterSample> = None;
         for body in self.bodies.values() {
-            if let WaterSurfaceDefinition::Horizontal { elevation } = body.surface {
-                if point[1] < elevation {
-                    let depth = elevation - point[1];
+            match &body.surface {
+                WaterSurfaceDefinition::Horizontal { elevation } => {
+                    if point[1] < *elevation {
+                        let depth = *elevation - point[1];
+                        let sample = WaterSample {
+                            body: body.id,
+                            surface_height: *elevation,
+                            depth,
+                            flow_velocity: [0.0, 0.0, 0.0],
+                            kind: body.kind,
+                        };
+                        if best.as_ref().map(|b| b.depth).unwrap_or(f32::MAX) > depth {
+                            best = Some(sample);
+                        }
+                    }
+                }
+                WaterSurfaceDefinition::SplineRibbon { control_points } => {
+                    let Some(ribbon) = spline_ribbon_sample(control_points, [point[0], point[2]])
+                    else {
+                        continue;
+                    };
+                    let half_width = ribbon.width.max(0.1) * 0.5;
+                    if ribbon.lateral_distance > half_width || point[1] >= ribbon.water_elevation {
+                        continue;
+                    }
+                    let depth = ribbon.water_elevation - point[1];
+                    let area = (ribbon.width
+                        * (ribbon.water_elevation - ribbon.bed_elevation).max(0.1))
+                    .max(0.1);
+                    let speed = (ribbon.discharge / area).abs();
                     let sample = WaterSample {
                         body: body.id,
-                        surface_height: elevation,
+                        surface_height: ribbon.water_elevation,
                         depth,
-                        flow_velocity: [0.0, 0.0, 0.0],
+                        flow_velocity: [ribbon.tangent[0] * speed, 0.0, ribbon.tangent[1] * speed],
                         kind: body.kind,
                     };
                     if best.as_ref().map(|b| b.depth).unwrap_or(f32::MAX) > depth {
@@ -130,8 +213,20 @@ impl WaterQuery for WaterBodyRegistry {
     }
 
     fn surface_height_at(&self, position_xz: [f32; 2]) -> Option<f32> {
-        let _ = position_xz;
-        Some(self.sea_level_m)
+        let mut best = Some(self.sea_level_m);
+        for body in self.bodies.values() {
+            if let WaterSurfaceDefinition::SplineRibbon { control_points } = &body.surface {
+                let Some(ribbon) = spline_ribbon_sample(control_points, position_xz) else {
+                    continue;
+                };
+                if ribbon.lateral_distance <= ribbon.width.max(0.1) * 0.5 {
+                    best = Some(best.map_or(ribbon.water_elevation, |current| {
+                        current.max(ribbon.water_elevation)
+                    }));
+                }
+            }
+        }
+        best
     }
 }
 
@@ -156,5 +251,46 @@ mod water_tests {
         let sample = registry.water_at(camera).expect("submerged");
         assert!(sample.depth > 0.3);
         assert_eq!(sample.body, WaterBodyId(2));
+    }
+
+    #[test]
+    fn spline_ribbon_bodies_are_queryable() {
+        let mut registry = WaterBodyRegistry::demo_registry(2.0, 31.5);
+        registry.bodies.insert(
+            WaterBodyId(3),
+            WaterBody {
+                id: WaterBodyId(3),
+                stable_id: StableId::new("water.river.test"),
+                kind: WaterBodyKind::River,
+                surface: WaterSurfaceDefinition::SplineRibbon {
+                    control_points: vec![
+                        RiverControlPoint {
+                            position_xz: [0.0, 0.0],
+                            bed_elevation: 0.5,
+                            water_elevation: 1.5,
+                            width: 4.0,
+                            depth: 1.0,
+                            discharge: 2.0,
+                        },
+                        RiverControlPoint {
+                            position_xz: [8.0, 0.0],
+                            bed_elevation: 0.2,
+                            water_elevation: 1.2,
+                            width: 5.0,
+                            depth: 1.0,
+                            discharge: 2.4,
+                        },
+                    ],
+                },
+                material_id: StableId::new("water.river"),
+            },
+        );
+
+        let sample = registry.water_at([4.0, 1.0, 0.5]).expect("river sample");
+        assert_eq!(sample.kind, WaterBodyKind::River);
+        assert_eq!(sample.body, WaterBodyId(3));
+        assert!(sample.depth > 0.1);
+        assert!(sample.flow_velocity[0].abs() > 0.01);
+        assert!(registry.surface_height_at([4.0, 0.5]).unwrap() > 1.0);
     }
 }

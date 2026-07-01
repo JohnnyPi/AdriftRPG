@@ -3,15 +3,24 @@ use bevy::tasks::{AsyncComputeTaskPool, Task};
 use procedural_textures::TerrainMaterialRecipe;
 
 use crate::bake::{
-    bake_cpu_arrays, build_material_from_arrays, recipe_fingerprint_for, recipes_for_world,
-    try_load_cache, write_cache, TerrainProceduralMaterialState,
+    TerrainProceduralMaterialState, bake_cpu_arrays, build_material_from_arrays,
+    recipe_fingerprint_for, recipes_for_world, try_load_cache, write_cache,
 };
 use crate::material::TerrainPbrMaterial;
 
 #[derive(Resource, Default)]
 pub struct PendingTextureBake {
-    pub task: Option<Task<(procedural_textures::CpuTextureArrays, [u8; 32], Vec<TerrainMaterialRecipe>)>>,
+    pub task: Option<
+        Task<(
+            procedural_textures::CpuTextureArrays,
+            [u8; 32],
+            Vec<TerrainMaterialRecipe>,
+        )>,
+    >,
 }
+
+#[derive(Resource, Clone, Default)]
+pub struct ProceduralMaterialRecipeOverride(pub Option<Vec<TerrainMaterialRecipe>>);
 
 pub struct ProceduralTerrainMaterialPlugin {
     pub materials_yaml: Option<std::path::PathBuf>,
@@ -29,9 +38,13 @@ impl Plugin for ProceduralTerrainMaterialPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TerrainProceduralMaterialState>()
             .init_resource::<PendingTextureBake>()
+            .init_resource::<ProceduralMaterialRecipeOverride>()
             .insert_resource(ProceduralMaterialYamlPath(self.materials_yaml.clone()))
             .add_plugins(MaterialPlugin::<TerrainPbrMaterial>::default())
-            .add_systems(Startup, insert_fallback_material.in_set(FallbackTerrainMaterialSet))
+            .add_systems(
+                Startup,
+                insert_fallback_material.in_set(FallbackTerrainMaterialSet),
+            )
             .add_systems(Update, (start_texture_bake, poll_texture_bake));
     }
 }
@@ -67,6 +80,7 @@ fn insert_fallback_material(
 
 fn start_texture_bake(
     yaml_path: Res<ProceduralMaterialYamlPath>,
+    recipe_override: Res<ProceduralMaterialRecipeOverride>,
     mut pending: ResMut<PendingTextureBake>,
     state: Res<TerrainProceduralMaterialState>,
 ) {
@@ -74,13 +88,19 @@ fn start_texture_bake(
         return;
     }
 
-    let recipes = recipes_for_world(yaml_path.0.as_ref());
+    let Some(recipes) = recipe_override.0.clone().or_else(|| {
+        yaml_path
+            .0
+            .as_ref()
+            .map(|path| recipes_for_world(Some(path)))
+    }) else {
+        return;
+    };
     let fingerprint = recipe_fingerprint_for(&recipes);
 
     if let Some(cached) = try_load_cache(fingerprint) {
-        pending.task = Some(AsyncComputeTaskPool::get().spawn(async move {
-            (cached, fingerprint, recipes)
-        }));
+        pending.task =
+            Some(AsyncComputeTaskPool::get().spawn(async move { (cached, fingerprint, recipes) }));
         return;
     }
 

@@ -4,10 +4,11 @@ use crate::data::ConfigRegistryResource;
 use crate::environment::biomes::BiomeCatalog;
 use crate::state::AppState;
 use crate::water::WaterMaterial;
-use terrain_material_bevy::{
-    PendingTextureBake, ProceduralMaterialYamlPath, TerrainProceduralMaterialState,
-};
 use procedural_textures::ProceduralMaterialsDocument;
+use terrain_material_bevy::{
+    PendingTextureBake, ProceduralMaterialRecipeOverride, ProceduralMaterialYamlPath,
+    TerrainProceduralMaterialState,
+};
 
 /// Applies live updates for visual YAML changes (materials, biomes, water).
 pub struct VisualConfigHotReloadPlugin;
@@ -39,10 +40,7 @@ fn reload_biome_catalog(
     }
     *last_hash = Some(hash);
     let world_id = crate::world::requested_world_id(&prefs);
-    commands.insert_resource(BiomeCatalog::from_registry(
-        &registry.0,
-        Some(&world_id),
-    ));
+    commands.insert_resource(BiomeCatalog::from_registry(&registry.0, Some(&world_id)));
 }
 
 fn reload_terrain_material(
@@ -61,6 +59,7 @@ fn reload_terrain_material(
 fn reload_procedural_terrain_material(
     registry: Res<ConfigRegistryResource>,
     mut last_hash: Local<Option<String>>,
+    recipe_override: Option<Res<ProceduralMaterialRecipeOverride>>,
     yaml_path: Option<Res<ProceduralMaterialYamlPath>>,
     mut proc_state: ResMut<TerrainProceduralMaterialState>,
     mut pending: ResMut<PendingTextureBake>,
@@ -70,6 +69,16 @@ fn reload_procedural_terrain_material(
         return;
     }
     *last_hash = Some(hash);
+    proc_state.ready = false;
+    pending.task = None;
+    if let Some(override_recipes) = recipe_override
+        .as_ref()
+        .and_then(|override_recipes| override_recipes.0.as_ref())
+    {
+        proc_state.recipe_fingerprint =
+            terrain_material_bevy::recipe_fingerprint_for(override_recipes);
+        return;
+    }
     let Some(yaml_path) = yaml_path else {
         return;
     };
@@ -83,10 +92,7 @@ fn reload_procedural_terrain_material(
     let Ok(doc) = serde_yaml::from_str::<ProceduralMaterialsDocument>(text) else {
         return;
     };
-    proc_state.ready = false;
-    pending.task = None;
     proc_state.recipe_fingerprint = procedural_textures::document_fingerprint(&doc);
-    let _ = doc;
 }
 
 fn reload_water_material(

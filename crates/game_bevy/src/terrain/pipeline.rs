@@ -2,28 +2,28 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task};
 use std::time::Instant;
-use terrain_generation::{iter_world_chunk_coords, RecipeDensitySource};
+use terrain_generation::{DensitySource, RecipeDensitySource, iter_world_chunk_coords};
 use terrain_meshing::{ChunkMeshingInput, SurfaceNetsMesher, TerrainMeshData, TerrainMesher};
 use tracing::info;
-use voxel_core::{ChunkCoord, WorldCell, CHUNK_CELLS};
+use voxel_core::{CHUNK_CELLS, ChunkCoord, WorldCell};
 
 use crate::data::ConfigRegistryResource;
-use crate::data::{sync_world_tweaks_from_prefs, UserSetupPrefs};
-use crate::terrain::residency::{
-    within_density_radius, within_physics_radius, within_render_radius, TerrainWorldRuntime,
-};
-use crate::ui::{TerrainTweaks, WorldTweaks};
-use physics_bridge::terrain_layers;
+use crate::data::{UserSetupPrefs, sync_world_tweaks_from_prefs};
 use crate::environment::biome_context::ChunkColumnCache;
 use crate::environment::materials::material_for_world_with_cache;
+use crate::environment::surface::ChunkSurfaceResolver;
 use crate::environment::{BiomeCatalog, BiomeInitSet};
 use crate::state::AppState;
-use crate::environment::surface::ChunkSurfaceResolver;
 use crate::terrain::material::TerrainMaterialHandle;
 use crate::terrain::mesh_convert::{chunk_world_transform, mesh_from_terrain_data};
 use crate::terrain::metrics::{TerrainPipelineMetrics, WorldSeedOverride};
 use crate::terrain::recipe::{build_density_source_from_prefs, terrain_recipe_hash};
+use crate::terrain::residency::{
+    TerrainWorldRuntime, within_density_radius, within_physics_radius, within_render_radius,
+};
 use crate::terrain::{ChunkState, TerrainChunkEntity, TerrainEditStore, TerrainRevision};
+use crate::ui::{TerrainTweaks, WorldTweaks};
+use physics_bridge::terrain_layers;
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TerrainWorldInitSet;
@@ -143,12 +143,13 @@ impl TerrainPipelineState {
                 chunk.revision = revision;
             }
         }
-        self.pending_density.retain(|job| !coords.contains(&job.coord));
+        self.pending_density
+            .retain(|job| !coords.contains(&job.coord));
         self.pending_mesh.retain(|job| !coords.contains(&job.coord));
-        self.upload_queue.retain(|item| !coords.contains(&item.coord));
-        self.collider_queue.retain(|pending| {
-            !to_despawn.contains(&pending.entity)
-        });
+        self.upload_queue
+            .retain(|item| !coords.contains(&item.coord));
+        self.collider_queue
+            .retain(|pending| !to_despawn.contains(&pending.entity));
         to_despawn
     }
 }
@@ -221,15 +222,10 @@ fn init_terrain_world(
     runtime.cell_size_m = world.cell_size_m;
     runtime.revision = revision.value;
     let override_seed = seed_override_active(&seed_override, world.seed);
-    let source = build_density_source_from_prefs(
-        &registry.0,
-        &prefs,
-        terrain_tweaks.field_stack_params(),
-    );
-    let (sx, sy, sz, spawn_report) = source.resolve_player_spawn(
-        terrain_generation::PLAYER_SPAWN_MIN_CLEARANCE_M,
-        48.0,
-    );
+    let source =
+        build_density_source_from_prefs(&registry.0, &prefs, terrain_tweaks.field_stack_params());
+    let (sx, sy, sz, spawn_report) =
+        source.resolve_player_spawn(terrain_generation::PLAYER_SPAWN_MIN_CLEARANCE_M, 48.0);
     spawn_point.0 = Vec3::new(sx, sy, sz);
     let spawn_cell = WorldCell::new(sx.floor() as i32, sy.floor() as i32, sz.floor() as i32);
     pipeline.spawn_chunk = Some(spawn_cell.chunk_coord());
@@ -306,11 +302,8 @@ pub fn regen_terrain_with_seed(
         .expect("world");
     let override_seed = seed_override_active(seed_override, world.seed);
     revision.value += 1;
-    let source = build_density_source_from_prefs(
-        &registry.0,
-        prefs,
-        terrain_tweaks.field_stack_params(),
-    );
+    let source =
+        build_density_source_from_prefs(&registry.0, prefs, terrain_tweaks.field_stack_params());
     let (sx, sy, sz) = source.spawn_position();
     spawn_point.0 = Vec3::new(sx, sy, sz);
     let spawn_cell = WorldCell::new(sx.floor() as i32, sy.floor() as i32, sz.floor() as i32);
@@ -437,13 +430,7 @@ fn dispatch_density_jobs(
         let edit_overlay = edits.clone();
         let started = Instant::now();
         let task = AsyncComputeTaskPool::get().spawn(async move {
-            generate_padded_samples_with_biomes(
-                &src,
-                &catalog,
-                &edit_overlay,
-                coord,
-                cell_size_m,
-            )
+            generate_padded_samples_with_biomes(&src, &catalog, &edit_overlay, coord, cell_size_m)
         });
         pipeline.pending_density.push(PendingDensityJob {
             coord,
@@ -497,8 +484,7 @@ fn poll_density_jobs(
         let (ox, oy, oz) = voxel_core::TerrainChunk::new(coord).sample_origin();
         let padded_side = CHUNK_CELLS + 3;
         let mesh_task = AsyncComputeTaskPool::get().spawn(async move {
-            let resolver =
-                ChunkSurfaceResolver::new(source, ox, oy, oz, padded_side, cell_size_m);
+            let resolver = ChunkSurfaceResolver::new(source, ox, oy, oz, padded_side, cell_size_m);
             let mesher = SurfaceNetsMesher;
             let input = ChunkMeshingInput {
                 samples: &samples,
@@ -712,23 +698,22 @@ fn generate_padded_samples_with_biomes(
                 let wx = ox + px;
                 let wy = oy + py;
                 let wz = oz + pz;
-                let (density, material) = if let Some(override_sample) =
-                    edits.0.sample_override(wx, wy, wz)
-                {
-                    (override_sample.density, override_sample.material)
-                } else {
-                    let density = source.density_at(wx_m, wy_m, wz_m);
-                    let material = material_for_world_with_cache(
-                        biomes,
-                        source,
-                        Some(&column_cache),
-                        wx_m,
-                        wy_m,
-                        wz_m,
-                        density,
-                    );
-                    (density, material)
-                };
+                let (density, material) =
+                    if let Some(override_sample) = edits.0.sample_override(wx, wy, wz) {
+                        (override_sample.density, override_sample.material)
+                    } else {
+                        let density = source.sample_density(wx_m, wy_m, wz_m);
+                        let material = material_for_world_with_cache(
+                            biomes,
+                            source,
+                            Some(&column_cache),
+                            wx_m,
+                            wy_m,
+                            wz_m,
+                            density,
+                        );
+                        (density, material)
+                    };
                 samples.push(voxel_core::TerrainSample { density, material });
             }
         }
@@ -738,12 +723,16 @@ fn generate_padded_samples_with_biomes(
 
 #[cfg(test)]
 mod pipeline_tests {
-    use crate::terrain::TerrainEditStore;
     use super::generate_padded_samples_with_biomes;
     use crate::environment::BiomeCatalog;
+    use crate::terrain::TerrainEditStore;
     use game_data::BiomeRuleDefinition;
-    use terrain_generation::{default_vertical_slice_recipe, RecipeDensitySource};
+    use terrain_generation::{
+        DensitySource, IslandGenParams, RecipeDensitySource, TerrainRecipe, build_island_atlas,
+        default_vertical_slice_recipe,
+    };
     use terrain_meshing::{ChunkMeshingInput, SurfaceNetsMesher, TerrainMesher};
+    use voxel_core::{CHUNK_CELLS, TerrainChunk, WorldCell};
 
     fn test_catalog() -> BiomeCatalog {
         BiomeCatalog {
@@ -755,12 +744,9 @@ mod pipeline_tests {
     fn spawn_area_chunk_meshes_with_vertices() {
         let source = RecipeDensitySource::new(default_vertical_slice_recipe(42, 2.0));
         let (sx, sy, sz) = source.spawn_position();
-        let coord = voxel_core::WorldCell::new(
-            sx.floor() as i32,
-            sy.floor() as i32,
-            sz.floor() as i32,
-        )
-        .chunk_coord();
+        let coord =
+            voxel_core::WorldCell::new(sx.floor() as i32, sy.floor() as i32, sz.floor() as i32)
+                .chunk_coord();
         let samples = generate_padded_samples_with_biomes(
             &source,
             &test_catalog(),
@@ -782,5 +768,57 @@ mod pipeline_tests {
         );
         assert!(!mesh.material_ids.is_empty());
         assert!(!mesh.material_weights.is_empty());
+    }
+
+    #[test]
+    fn biome_meshing_path_uses_sample_density_microdetail() {
+        let mut params = IslandGenParams::default();
+        params.surface_noise.voxel_amplitude_m = 1.0;
+        let atlas = build_island_atlas(&params);
+        let source = RecipeDensitySource::new(TerrainRecipe {
+            seed: params.seed,
+            sea_level: params.island.sea_level_m,
+            spawn_x: 0.0,
+            spawn_z: 0.0,
+            coord_offset: [0.0, 0.0, 0.0],
+            ops: Vec::new(),
+        })
+        .with_atlas(atlas);
+        let coord = WorldCell::new(0, 0, 0).chunk_coord();
+        let samples = generate_padded_samples_with_biomes(
+            &source,
+            &test_catalog(),
+            &TerrainEditStore::default(),
+            coord,
+            1.0,
+        );
+
+        let (ox, oy, oz) = TerrainChunk::new(coord).sample_origin();
+        let padded_side = CHUNK_CELLS + 3;
+        let mut verified = false;
+        'scan: for pz in -1..=(CHUNK_CELLS as i32 + 1) {
+            for py in -1..=(CHUNK_CELLS as i32 + 1) {
+                for px in -1..=(CHUNK_CELLS as i32 + 1) {
+                    let wx = (ox + px) as f32;
+                    let wy = (oy + py) as f32;
+                    let wz = (oz + pz) as f32;
+                    let sampled = source.sample_density(wx, wy, wz);
+                    let base = source.density_at(wx, wy, wz);
+                    if (sampled - base).abs() <= 0.01 {
+                        continue;
+                    }
+                    let idx = (pz + 1) as usize * padded_side * padded_side
+                        + (py + 1) as usize * padded_side
+                        + (px + 1) as usize;
+                    assert!((samples[idx].density - sampled).abs() < 0.001);
+                    verified = true;
+                    break 'scan;
+                }
+            }
+        }
+        assert!(
+            verified,
+            "expected at least one microdetail-adjusted padded sample"
+        );
     }
 }

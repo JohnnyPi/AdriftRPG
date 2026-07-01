@@ -2,12 +2,14 @@ use std::path::PathBuf;
 
 use bevy::prelude::*;
 use procedural_textures::{
-    arrays_fingerprint, build_cpu_arrays, default_island_recipes, document_fingerprint,
-    ProceduralMaterialsDocument, TerrainMaterialRecipe,
+    ProceduralMaterialsDocument, TerrainMaterialRecipe, arrays_fingerprint, build_cpu_arrays,
+    default_island_recipes, document_fingerprint,
 };
 
-use crate::arrays::{upload_texture_arrays, TerrainArrayHandles};
-use crate::material::{layer_scales_from_recipes, TerrainLayerScales, TerrainMaterialSettings, TerrainPbrMaterial};
+use crate::arrays::{TerrainArrayHandles, upload_texture_arrays};
+use crate::material::{
+    TerrainLayerScales, TerrainMaterialSettings, TerrainPbrMaterial, layer_scales_from_recipes,
+};
 
 const CACHE_DIR: &str = "target/terrain_material_cache";
 
@@ -94,6 +96,15 @@ pub fn build_material_from_arrays(
 ) -> Handle<TerrainPbrMaterial> {
     let handles = upload_texture_arrays(arrays, images);
     let layer_scales = layer_scales_from_recipes(recipes);
+    let normal_strength = if recipes.is_empty() {
+        0.0
+    } else {
+        recipes
+            .iter()
+            .map(|recipe| recipe.normal_strength)
+            .sum::<f32>()
+            / recipes.len() as f32
+    };
     materials.add(TerrainPbrMaterial {
         albedo_array: handles.albedo.clone(),
         normal_array: handles.normal.clone(),
@@ -101,7 +112,7 @@ pub fn build_material_from_arrays(
         settings: TerrainMaterialSettings {
             triplanar_sharpness: 4.0,
             global_texture_scale: 1.0,
-            normal_strength: 0.0,
+            normal_strength,
             height_blend_strength: 0.0,
             layer_count: arrays.layers,
             debug_mode: 0,
@@ -111,6 +122,9 @@ pub fn build_material_from_arrays(
     })
 }
 
-pub fn fingerprint_matches_baked(arrays: &procedural_textures::CpuTextureArrays, recipe_hash: [u8; 32]) -> [u8; 32] {
+pub fn fingerprint_matches_baked(
+    arrays: &procedural_textures::CpuTextureArrays,
+    recipe_hash: [u8; 32],
+) -> [u8; 32] {
     arrays_fingerprint(arrays, recipe_hash)
 }

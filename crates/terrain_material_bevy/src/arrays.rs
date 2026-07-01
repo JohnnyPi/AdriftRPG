@@ -47,7 +47,10 @@ pub fn create_array_image(
     image
 }
 
-pub fn create_placeholder_array_images(images: &mut Assets<Image>, layers: u32) -> TerrainArrayHandles {
+pub fn create_placeholder_array_images(
+    images: &mut Assets<Image>,
+    layers: u32,
+) -> TerrainArrayHandles {
     let width = 4u32;
     let height = 4u32;
     let count = (width * height * layers * 4) as usize;
@@ -101,7 +104,10 @@ pub fn create_placeholder_array_images(images: &mut Assets<Image>, layers: u32) 
     }
 }
 
-pub fn upload_texture_arrays(cpu: &CpuTextureArrays, images: &mut Assets<Image>) -> TerrainArrayHandles {
+pub fn upload_texture_arrays(
+    cpu: &CpuTextureArrays,
+    images: &mut Assets<Image>,
+) -> TerrainArrayHandles {
     let albedo = create_array_image(
         cpu.width,
         cpu.height,
