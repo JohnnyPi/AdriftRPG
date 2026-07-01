@@ -8,7 +8,7 @@ voxel:
 
 chunks:
   cells: [16, 16, 16]
-  world_extent: [16, 6, 16]
+  world_extent: [16, 10, 16]
 
 terrain: terrain.expanded_slice
 island_gen: island_gen.vs3_volcanic

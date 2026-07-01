@@ -149,7 +149,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     }
 
     var albedo = vec3<f32>(0.0);
-    var roughness = 0.85;
+    var roughness = 0.0;
     var metallic = 0.0;
     var detail_normal = vec3<f32>(0.0, 0.0, 0.0);
 
@@ -169,6 +169,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     if weight_sum < 0.001 {
         albedo = sample_triplanar_albedo(0u, world_pos, world_normal);
         detail_normal = sample_triplanar_normal(0u, world_pos, world_normal);
+        roughness = 0.85;
     } else {
         detail_normal = normalize(detail_normal / weight_sum);
     }

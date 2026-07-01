@@ -161,7 +161,7 @@ fn recipe_from_entry(entry: &TerrainMaterialEntryDefinition) -> TerrainMaterialR
         }),
         MaterialSemantic::Wet | MaterialSemantic::Ground => TextureRecipe::Ground(GroundConfig {
             seed: 2_000 + entry.id as u32,
-            macro_scale: 2.2,
+            macro_scale: 2.0,
             macro_octaves: 5,
             micro_scale: 10.0,
             micro_octaves: 4,
