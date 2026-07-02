@@ -1,5 +1,7 @@
+// crates/voxel_core/src/terrain_chunk.rs
 use crate::{
-    ChunkCoord, LocalSample, MaterialId, TerrainSample, CHUNK_CELLS, CHUNK_SAMPLES, SAMPLE_COUNT,
+    stable_hash::{fnv1a_update, quantize_density_mm, FNV_OFFSET},
+    ChunkCoord, LocalSample, MaterialId, TerrainSample, CHUNK_SAMPLES, SAMPLE_COUNT,
 };
 
 /// Density samples for one chunk: `17 × 17 × 17` corner values covering `16³` cells.
@@ -36,11 +38,7 @@ impl TerrainChunk {
 
     /// World-space origin of this chunk's sample (0,0,0) corner in meters.
     pub fn sample_origin(&self) -> (i32, i32, i32) {
-        (
-            self.coord.x * CHUNK_CELLS as i32,
-            self.coord.y * CHUNK_CELLS as i32,
-            self.coord.z * CHUNK_CELLS as i32,
-        )
+        self.coord.sample_origin()
     }
 
     /// Sample on a chunk face shared with a neighbor (`axis`: 0=x, 1=y, 2=z; `high`: max face).
@@ -54,19 +52,19 @@ impl TerrainChunk {
             0 => self.get(LocalSample::new(edge, u, v)),
             1 => self.get(LocalSample::new(u, edge, v)),
             2 => self.get(LocalSample::new(u, v, edge)),
-            _ => TerrainSample::default(),
+            _ => unreachable!("invalid border axis {axis}"),
         }
     }
 
-    /// Deterministic hash of all sample densities (quantized) for regression tests.
+    /// Stable FNV-1a hash of all sample densities (quantized to ~1 mm) for regression tests.
     pub fn density_hash(&self) -> u64 {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut hash = FNV_OFFSET;
         for sample in self.samples.iter() {
-            (sample.density.to_bits()).hash(&mut hasher);
-            sample.material.0.hash(&mut hasher);
+            let quantized = quantize_density_mm(sample.density);
+            hash = fnv1a_update(hash, quantized.to_le_bytes());
+            hash = fnv1a_update(hash, sample.material.0.to_le_bytes());
         }
-        hasher.finish()
+        hash
     }
 }
 
@@ -79,7 +77,7 @@ pub fn fill_chunk_from_density<F>(
 where
     F: FnMut(i32, i32, i32) -> f32,
 {
-    let (ox, oy, oz) = TerrainChunk::new(coord).sample_origin();
+    let (ox, oy, oz) = coord.sample_origin();
     let mut chunk = TerrainChunk::new(coord);
     for z in 0..CHUNK_SAMPLES {
         for y in 0..CHUNK_SAMPLES {
@@ -105,26 +103,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sample_indexing_is_unique() {
-        let mut seen = std::collections::HashSet::new();
-        for z in 0..CHUNK_SAMPLES {
-            for y in 0..CHUNK_SAMPLES {
-                for x in 0..CHUNK_SAMPLES {
-                    let local = LocalSample::new(x as u8, y as u8, z as u8);
-                    assert!(seen.insert(local.linear_index()));
-                }
-            }
-        }
-        assert_eq!(seen.len(), SAMPLE_COUNT);
-    }
-
-    #[test]
     fn sample_linear_indices_are_unique() {
         use std::collections::HashSet;
         let mut indices = HashSet::new();
-        for z in 0..=CHUNK_CELLS as u8 {
-            for y in 0..=CHUNK_CELLS as u8 {
-                for x in 0..=CHUNK_CELLS as u8 {
+        for z in 0..=crate::CHUNK_CELLS as u8 {
+            for y in 0..=crate::CHUNK_CELLS as u8 {
+                for x in 0..=crate::CHUNK_CELLS as u8 {
                     let local = LocalSample::new(x, y, z);
                     assert!(local.is_valid());
                     assert!(
@@ -149,5 +133,37 @@ mod tests {
         );
         let border = chunk.border_sample(0, true, 3, 5);
         assert_eq!(border.density, -1.0);
+    }
+
+    #[test]
+    fn density_hash_treats_zero_and_negative_zero_equally() {
+        let mut positive = TerrainChunk::new(ChunkCoord::new(0, 0, 0));
+        positive.set(
+            LocalSample::new(0, 0, 0),
+            TerrainSample {
+                density: 0.0,
+                material: MaterialId(0),
+            },
+        );
+        let mut negative = TerrainChunk::new(ChunkCoord::new(0, 0, 0));
+        negative.set(
+            LocalSample::new(0, 0, 0),
+            TerrainSample {
+                density: -0.0,
+                material: MaterialId(0),
+            },
+        );
+        assert_eq!(positive.density_hash(), negative.density_hash());
+    }
+
+    #[test]
+    fn density_hash_sphere_chunk_is_stable() {
+        let chunk = fill_chunk_from_density(ChunkCoord::new(0, 0, 0), |x, y, z| {
+            let dx = x as f32 - 8.0;
+            let dy = y as f32 - 8.0;
+            let dz = z as f32 - 8.0;
+            dx * dx + dy * dy + dz * dz - 16.0
+        }, MaterialId(1));
+        assert_eq!(chunk.density_hash(), 9251488588076025822);
     }
 }

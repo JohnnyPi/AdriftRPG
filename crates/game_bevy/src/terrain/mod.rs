@@ -1,3 +1,4 @@
+// crates/game_bevy/src/terrain/mod.rs
 mod editing;
 mod features;
 mod island_params;
@@ -16,10 +17,11 @@ pub type RiverGenerationPlugin = TerrainFeaturePlugin;
 /// VS2 §20 — water occupancy registry lives in [`TerrainFeaturePlugin`].
 #[allow(dead_code)]
 pub type WaterBodyPlugin = TerrainFeaturePlugin;
+pub use island_params::island_params_from_compiled;
 pub use material::{TerrainMaterialHandle, TerrainMaterialPlugin};
 pub use metrics::{TerrainPipelineMetrics, WorldSeedOverride};
-pub use island_params::island_params_from_compiled;
-pub use recipe::{build_density_source_from_prefs, compile_terrain_recipe};
+pub use recipe::build_density_source_from_prefs;
+pub use terrain_generation::compile_terrain_recipe;
 #[cfg(test)]
 pub(crate) use recipe::build_density_source;
 pub use pipeline::{
@@ -60,6 +62,10 @@ pub enum ChunkState {
 pub struct TerrainChunkEntity {
     pub coord: ChunkCoord,
 }
+
+/// Per-chunk material instance carrying chunk-local slot remap uniforms.
+#[derive(Component, Debug, Clone)]
+pub struct TerrainChunkMaterial(pub Handle<terrain_material_bevy::TerrainPbrMaterial>);
 
 #[derive(Resource, Debug)]
 pub struct TerrainRevision {

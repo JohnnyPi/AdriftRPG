@@ -1,0 +1,39 @@
+﻿schema_version: 1
+id: surface.vertical_slice
+description: Compact vertical slice surface blending
+
+gates:
+  - id: cave
+    exclusive: true
+    when:
+      cave_exposure_min: 0.55
+    blend:
+      - { material: cave_stone, weight: 1.0 }
+
+  - id: underwater
+    exclusive: true
+    when:
+      water_depth_min: 0.05
+    blend:
+      - { material: wet_rock, weight: 1.0 }
+
+  - id: coast
+    exclusive: true
+    when:
+      coast_distance_max: 35.0
+    blend:
+      - { material: sand, weight: 0.7 }
+      - { material: wet_rock, weight: 0.3 }
+
+  - id: steep
+    exclusive: true
+    when:
+      slope_min: 35.0
+    blend:
+      - { material: rock, weight: 1.0 }
+
+  - id: land
+    when:
+      fallback: true
+    blend:
+      - { material: grass, weight: 1.0 }

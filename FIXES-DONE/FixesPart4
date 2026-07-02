@@ -1,0 +1,141 @@
+# Installment 4: recipe surface, field stack, topology sealing (Parts 5–7)
+
+**Files:** `terrain_generation/src/surface_height.rs` (258), `…/field_stack.rs` (110), `…/topology.rs` (118), plus uploaded `recipe.rs` (82) — which is another collision casualty.
+
+## Review gap #2: both terrain `recipe.rs` files are missing
+
+The uploaded `recipe.rs` is the **texture** crate's `TextureRecipe` (it's fine — one nit: `fingerprint()` uses `serde_json::to_string(self).unwrap_or_default()`, so a serialization error silently fingerprints the empty string; make it panic or return `Result`). But `surface_height.rs` imports `crate::recipe::{coastal_inland_factor, island_land_factor, RecipeOp, TerrainRecipe}` and `pipeline.rs` imports `crate::terrain::recipe::{build_density_source_from_prefs, terrain_recipe_hash}` — so **`terrain_generation/src/recipe.rs`** (the `RecipeOp` graph and `RecipeDensitySource::density_at`, i.e. *the* density function) and **`game_bevy/src/terrain/recipe.rs`** both collided away. The terrain one is now the single most important unaudited file: op composition order, `CombineOp` handling, `coord_offset` semantics, and whether `land_surface_height` faithfully mirrors the 3D density all live there. Please upload both when you can.
+
+## Bug 12: ridge placement uses `wz + origin` — the configured Z position is dead
+
+**Confidence / Severity:** Confirmed against live config / Medium-High (macro terrain shape wrong)
+**File:** `surface_height.rs`, `sample_coastal_surface`
+
+**Evidence:**
+```rust
+let ridge_bump = ((wx - params.ridge_origin[0]) / params.ridge_scale[0]).clamp(0.0, 1.0)
+    * ((wz + params.ridge_origin[1]) / params.ridge_scale[1]).clamp(0.0, 1.0)
+```
+X subtracts the origin; Z **adds** it. Plugging in `expanded_slice_terrain.yaml` (`ridge_origin: [180, 196]`, `ridge_scale: [48, 56]`, world ≈ 0–256): the z-term is `(wz + 196)/56 ∈ [3.5, 8.1]` — clamped to 1.0 **everywhere on the map**. The configured z-placement has zero effect, and the "ridge" degenerates to a pure west→east ramp adding up to 12 m to *all* terrain east of x = 180, at every z. The intended bump near (180, 196) doesn't exist; instead the island's eastern rim is uniformly raised into a shelf.
+
+**Repair:** `(wz - params.ridge_origin[1])`. **Regression test:** with the expanded profile, assert `sample_coastal_surface` at (180, 20) — far from the ridge in z — is not elevated by `ridge_amplitude`.
+
+**Separate design question while you're in there:** even fixed, this is a product of two one-sided clamped ramps — a *quarter-plane plateau* (full +12 m held over the entire corner region beyond origin+scale), not a localized ridge. If a headland rising toward one corner is the intent, fine — but if "ridge" means a localized landform, this wants a bump kernel (e.g. `smoothstep` in, `smoothstep` out on each axis, or the `ridge_field` quadratic falloff that already exists in `field_stack.rs`).
+
+## Bug 13: rivers are generated against a hardcoded parallel terrain model, not the real surface
+
+**Confidence / Severity:** Confirmed usage; full impact audit in installment 6 / **High (architectural)**
+**Files:** `field_stack.rs` (`stack_surface_height`, `coastal_height`), `river.rs:90` and `:130`
+
+**Evidence:** `river.rs` samples elevation via `stack_surface_height`, which is a *hardcoded* world: `coastal_height`'s landmass is a linear band around the line `0.5x + 0.3z = 0` (nothing like the radial island mask), plus a ridge welded at `[180, 196]` and a valley at `[128, 140]` with fixed scales. Meanwhile the *actual* meshed terrain comes from the recipe: island mask centered `[128, 128]`, coastal surface, and a `valley_basin` at `[105, 165]`. The hardcoded ridge coordinates match the expanded YAML (someone copied config into code), but the valley is ~40 m away from the configured one and the base landmass model is entirely different.
+
+**Why it causes the symptom:** this is Part 9's core failure — hydrology computed from a field that isn't the final elevation. Rivers will seek the phantom valley at [128, 140] and treat the linear band as the coast, so in the real world they run across slopes, terminate on dry land, or float above/tunnel through terrain that `stack_surface_height` doesn't know about. Any tuning of the terrain YAML silently desynchronizes rivers further, because the river model doesn't read the YAML at all (beyond seed/params scaling).
+
+**Repair direction:** `river.rs` must sample the same authority the voxels use — `land_surface_height(recipe, x, z)` (or better, the baked atlas `filled_elevation`, which exists precisely for hydrology). `stack_surface_height`/`coastal_height` should then be deleted or quarantined to tests. I'll confirm the full data flow and write the exact patch in installment 6 (hydrology), since `hydrology.rs`/`island_atlas.rs` may already do this correctly for the atlas path — in which case the question becomes which river path is live.
+
+## Bug 14: harbor noise sampled on raw `atan2` angle — radial seam across every harbor
+
+**Confidence / Severity:** Confirmed by inspection / Medium-Low (localized artifact)
+**File:** `surface_height.rs`, `harbor_depression`
+
+**Evidence:** `noise.sample(angle * arc_frequency, 0.0, dist * 0.05)` where `angle = dz.atan2(dx)` jumps from +π to −π across the ray pointing −X from the harbor center. Value noise is not periodic in its argument, so the arc modulation is discontinuous there: a straight crease in the harbor depression along that ray (depth steps abruptly).
+
+**Repair:** sample on the unit circle so the domain is continuous: `noise.sample(angle.cos() * k, angle.sin() * k, dist * 0.05)` with `k ≈ arc_frequency` (retune). **Regression test:** evaluate `harbor_depression` at angle = π−ε and −π+ε at equal radius; assert the difference is below a small epsilon.
+
+## Bug 15: two config surfaces that silently do nothing
+
+**Confidence / Severity:** Confirmed / Medium (violates "config drives terrain")
+**Files:** `surface_height.rs`, plus parsers in `atlas_runtime.rs:138` and `route_validation.rs:230`
+
+Two instances of the same class. First, `CoastalSurface`'s `origin` and `scale` YAML fields are parsed, copied into `CoastalSurfaceParams` — and never read (`sample_coastal_surface` doesn't touch `params.origin`/`params.scale`; the `let _ = (origin, scale);` in `land_surface_height` is the tell). Both live YAMLs set them (`[128,128]/[256,256]`, `[48,48]/[96,96]`) expecting them to position/size the surface. Second, `CoastModifierKind::CliffShelf` is reachable from YAML (`"cliff_shelf" | "cliff"` parse in two places) and evaluates to `depression = 0.0` — a configured coastal feature with zero effect.
+
+**Why it matters:** this is the "terrain doesn't match the intended model" category at its most literal — the model author writes config that the engine accepts and ignores. **Repair:** either implement them (origin/scale as the coastal surface's local frame; CliffShelf as a shelf profile) or reject them in `game_data` validation with a clear error ("cliff_shelf is not implemented"). Silent acceptance is the only wrong option. **Test:** a registry-validation test asserting every parseable op kind changes output somewhere (evaluate a probe grid with/without the op).
+
+## Bug 16: cavity seal margin mixes normalized and metric units
+
+**Confidence / Severity:** Confirmed (mechanism); geometry-dependent impact / Medium
+**File:** `topology.rs` (`CAVITY_EXTERIOR_MARGIN = 0.35`), rooted in `ellipsoid_sdf` (finding M8)
+
+**Evidence:** `outside_declared_cavities` compares `cavity_sdf_at > -0.35`, where the SDF is `capsule_sdf` (**meters**) for capsule cavities but `ellipsoid_sdf` (**normalized units** — `len(p/r) − 1`) for ellipsoid cavities. For an ellipsoid cave with radii ~20 m (the vertical-slice caves are 18–22 m), 0.35 normalized ≈ **7 m** of world distance, versus 0.35 m for capsules. Concretely: within any ellipsoid cavity that dips below `surface − FOUNDATION_DEPTH_M`, an inner shell ~0.35·radius thick is treated as "outside the cave" and gets foundation-sealed solid — large ellipsoid caves lose meters of interior below foundation depth, while capsule tunnels lose 35 cm.
+
+**Repair:** make `ellipsoid_sdf` return approximate meters (scale by `rx.min(ry).min(rz)`, per M8) so one margin constant means one thing; or use per-primitive margins. **Regression test:** for a 20 m ellipsoid cavity centered below foundation depth, assert the sealed/unsealed boundary sits within ~0.5 m of the cavity wall.
+
+## Minor findings
+
+**M10 — `TerrainMask::sample_bilinear` is a copy of `Field2D`'s bilinear sampler, including Bug 4** (return 0.0 out of bounds and on the last row/col). Two divergent implementations of the same primitive is how one gets fixed and the other doesn't. Delete `TerrainMask` in favor of `Field2D<f32>` (they're structurally identical), then Bug 4's fix covers both.
+
+**M11 — `valley_field` has an infinite-slope rim** (`field_stack.rs`): `−depth·√(1−r²)` is a hemisphere — its radial derivative → ∞ at r = 1, so every `valley_basin` op (live in `expanded_slice_terrain.yaml`) imprints a crease ring at its boundary: a visible slope/normal discontinuity circle around the valley. `cove_depression` next door uses the smooth `t²` falloff; use that (or `(1−r²)²`).
+
+**M12 — `build_coast_mask` and `FieldStackParams.coast_blend` are dead**, and `coastal_height` exists only to feed Bug 13's phantom model. Once rivers move to the real surface, most of `field_stack.rs` reduces to `ridge_field`/`valley_field`.
+
+## What's verified good
+
+`sample_coastal_surface`'s ridged term folds correctly (`1 − |2r − 1|` — the fix `SeamlessNoise::ridged` needs, Bug 6). Domain warping is applied coherently: the coast factor, ridge, and noise terms all use the warped coordinates, and `island_land_factor_warped` warps with the island mask's own strength — self-consistent per op. `apply_foundation_seal`'s logic is structurally sound (cavity exemption → ocean exemption → `solid_union` with a bedrock plane), matching the doc's preferred CSG composition; only the margin units (Bug 16) undermine it. And `count_outdoor_void_columns` is exactly the kind of scenario validator Part 14 asks for — once `recipe.rs` arrives I'll verify its `coord_offset` handling matches `density_at`'s.
+
+# Installment 4 — Addendum: `game_bevy/src/terrain/recipe.rs`
+
+One housekeeping note first: both files uploaded as `recipe.rs` again, so they collided and only one survived — this one is **`game_bevy/src/terrain/recipe.rs`** (the Bevy-side compiler). The `terrain_generation/src/recipe.rs` (with `TerrainRecipe`, `RecipeOp`, `RecipeDensitySource::density_at`, `island_land_factor`, `coastal_inland_factor`) is **still missing**. When you re-send it, rename it first (e.g. `recipe_terrain_gen.rs`) so it survives the flatten. That file remains the top audit priority — op composition order and the atlas/recipe interaction can't be verified without it.
+
+What this file does confirm immediately: **Bug 13 is live wiring**, not a stale code path. `build_density_source → build_river_carve → generate_river_spline(&config)` threads `FieldStackParams` straight into river generation — the demo-river path carves rivers from the hardcoded phantom surface, exactly as suspected.
+
+## Bug 17: `terrain_recipe_hash` misses most of what actually shapes the terrain
+
+**Confidence / Severity:** Confirmed by inspection / Medium-High (stale-terrain class)
+**File:** `recipe.rs`, `terrain_recipe_hash`
+
+**Evidence:** the hash covers seed, sea level, spawn, and the op list — but the terrain that gets built also depends on inputs the hash never sees: the **island-generation atlas parameters** (`prefs.apply_overrides(base)` → `island_params_from_compiled` → `build_island_atlas` — none of it hashed), the **`FieldStackParams`** fed to river generation, and all river config except `bank_width_m` (of the whole `RiverGenConfig` — `mouth_width_m`, `source_depth_m`, `grid_spacing_m`, etc. — only `id` and `bank_width_m` are hashed).
+
+**Runtime effect:** the doc's "stale caches" category. If `sync_terrain_on_recipe_change` (pipeline.rs) keys regeneration off this hash, then editing volcano/island parameters in setup prefs, or any river field except bank width, produces **no regeneration** — the world on screen silently stops matching the config. I'll verify in installment 9 whether prefs changes trigger regen through another channel; if they don't, this is High.
+
+**Secondary weakness:** ops are hashed via `format!("{op:?}")` — `Debug` output is not a stability contract (float formatting has changed across Rust releases, and any field rename reshuffles the hash). Harmless-ish here (worst case: one spurious regen after a toolchain bump), but since you already depend on `serde` everywhere, hash a `serde_json` serialization of the ops instead, and fold in the island-gen params and full river config.
+
+**Regression test:** compile the same world twice with one changed `source_depth_m` (and separately one changed volcano radius); assert the hashes differ.
+
+## Bug 18: config typos silently flip CSG semantics
+
+**Confidence / Severity:** Confirmed / Medium (a one-character YAML typo turns a cave into a hill)
+**File:** `recipe.rs`, `parse_combine`, `parse_coast_modifier_kind`
+
+**Evidence:**
+```rust
+fn parse_combine(value: &str) -> CombineOp {
+    match value.to_ascii_lowercase().as_str() {
+        "subtract" => CombineOp::Subtract,
+        _ => CombineOp::Union,      // "subtractt", "Subtract " → solid blob
+    }
+}
+```
+Any unrecognized `combine` string silently becomes `Union` — a misspelled cave op **adds a solid ellipsoid** instead of carving one, which reads as an inexplicable bulbous hill exactly where a cave was authored. Same pattern in `parse_coast_modifier_kind` (unknown → `Cove`) — combined with Bug 15's no-op `CliffShelf`, three of the possible parse outcomes here diverge silently from author intent.
+
+**Repair:** these parses happen at recipe-compile time from already-validated definitions — the string→enum conversion belongs in `game_data` validation with a hard error listing valid values. If it must stay here, return `Result` and surface it. **Regression test:** registry load with `combine: subtractt` must fail validation with a message naming the field.
+
+## Bug 19: generated cave count and vertical placement don't follow their config contract
+
+**Confidence / Severity:** Confirmed (count math) + Suspected (height semantics) / Medium
+**File:** `recipe.rs`, `append_generated_island_caves`, `cave_center_height`
+
+**Evidence, count:** `count = ((min + max).max(2) / 2).clamp(2, 8)` is the *midpoint* of min/max, clamped to [2, 8]. So `chamber_count_min/max` are not bounds: `min=1, max=1` yields 2 chambers (above max); `min=10, max=12` yields 8 (below min, silently). The only honored setting is `max == 0` (early return). The test at the bottom only checks *monotonicity* (`high_ops.len() > low_ops.len()`), so it can't catch this.
+
+**Evidence, height:** `cave_center_height` computes `base + caves.maximum_depth_m * (0.18 + 0.18t)` — a larger configured **depth raises** the cave centers (then clamps to a ceiling fraction of island height). If `maximum_depth_m` means "how deep below the surface caves may go" — the natural reading — the sign is inverted: authors asking for deeper caves get higher ones. I can't fully confirm intent without `definitions.rs` field docs (installment 10), so treating as suspected; the count bug needs no confirmation.
+
+**Also worth noting:** chamber radii are derived from `passage_radius_min/max_m` (`lerp(min_passage, max_passage, …)`), so "chambers" are passage-sized — if the config has (or should have) a chamber-radius field, it's not consulted.
+
+**Repair:** derive count deterministically *within* [min, max] (`min + hash_unit(...) * (max - min)`), respect them as hard bounds, and re-express `cave_center_height` so depth measures downward from the local surface. **Regression test:** `min=max=N` produces exactly N chambers for N in 1..=8; increasing `maximum_depth_m` strictly lowers mean chamber Y.
+
+## Suspected defect: nothing guarantees the cave mouth actually breaches the surface
+
+**File:** `recipe.rs`, overhang/mouth block
+
+The mouth point is placed heuristically — at radial distance ≈ 0.59 × shield radius along the collapse direction, at `y ≈ sea_level + minimum_cover_m + mouth_radius` — and a capsule is carved from the last chamber to it. Whether that capsule intersects **air** depends entirely on the volcano's flank profile at that radius: too high a flank and the "entrance" is sealed rock (a cave system with no opening); too low and it opens underwater at the shoreline. This is the doc's "cave with a *deliberate* entrance" requirement without the guarantee. **Diagnostic:** after recipe compile, march along the mouth capsule axis sampling `density_at`, assert at least one sign change to positive (air) above sea level; log a validation warning otherwise. (This can reuse the `count_outdoor_void_columns` machinery in `topology.rs`.) Repair, if it fires: solve the mouth position against `land_surface_height` — place it where the flank surface crosses the desired elevation band, rather than at a fixed radius.
+
+## Minor findings
+
+**M13 — `expect("world") / expect("water") / expect("terrain definition")`** throughout: a dangling cross-reference in YAML panics the app inside a Bevy system instead of failing registry validation with a message. If `game_data` validation already guarantees referential integrity (I'll check in installment 10), fine — but then these should say so (`expect("validated by registry")`).
+
+**M14 — asymmetric river attachment:** the island-gen path (`with_atlas`) never attaches `RiverCarveContext`, the non-atlas path always tries to. Probably intended (the atlas has its own `river_mask`/`RiverSpline`), but if a world has *both* `island_generation` and a `demo_river`, the demo river silently vanishes. Worth an explicit validation rule: a world may declare one river system, not both.
+
+**M15 — `hash_unit` is a proper splitmix-style mixer** — ironically, exactly the finalizer quality `ValueNoise::hash` lacks (Bug 7). When you fix Bug 7, this function is the in-repo reference to crib from.
+
+## What's verified good
+
+`convert_op` is a faithful field-by-field mapping with no unit conversions to get wrong. Cave generation is deterministic — all randomness routes through `hash_unit(seed, index)` with no `rand`/HashMap dependence, and the `generated_vs3_caves_respond_to_authored_parameters` test is the right *kind* of test (config → op-list property), it just needs the exact-count assertions from Bug 19. Recipe compilation is pure (no global state), so the same registry + seed always yields the same op list — the determinism story here is sound; it's the *hash* that under-reports (Bug 17).

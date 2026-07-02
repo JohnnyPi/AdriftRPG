@@ -1,3 +1,4 @@
+// crates/game_bevy/src/ui/overlay_camera.rs
 //! Persistent UI camera for egui across menu state transitions.
 //!
 //! bevy_egui attaches `PrimaryEguiContext` to the first camera it sees and never

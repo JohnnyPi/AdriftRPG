@@ -1,0 +1,168 @@
+## Current Architecture Map
+
+```text
+YAML recipes (game_data/assets/*.yaml)
+  → game_data: definitions.rs → compile.rs → registry.rs (typed, hashed via sha2)
+  → game_bevy: config_init.rs / load.rs → ConfigRegistryResource
+      ↓
+terrain_generation: recipe.rs (RecipeOp graph) + params.rs / island_params.rs
+  → island_atlas.rs (2D aligned fields: elevation_regional, elevation_local,
+    bathymetry, island_mask, flow_*, river_mask, cliff/beach/soil, biome…)
+    built by footprint → coast → erosion → hydrology → river → carving → slope
+  → surface_height.rs (analytic coastal surface)
+  → DensitySource / RecipeDensitySource (3D signed density; negative = solid)
+      ↓
+voxel_core: ChunkCoord/WorldCell/WorldSample (coords.rs),
+  TerrainChunk 17³ corner samples (terrain_chunk.rs), density_ops.rs (CSG)
+      ↓
+terrain_meshing: surface_nets.rs → TerrainMeshData (+ bake.rs, material.rs, blend.rs)
+      ↓
+game_bevy/terrain: pipeline.rs (dispatch/poll density + mesh jobs on
+  AsyncComputeTaskPool, chained Update systems) → mesh_convert.rs (cell_size scaling)
+  → material.rs/atlas_runtime.rs (shader inputs) → avian3d colliders
+  → residency.rs (density/render/physics radii), edits.rs (persistent edits)
+      ↓
+environment: biomes.rs, biome_context.rs, surface.rs (ChunkSurfaceResolver),
+  materials.rs → per-vertex material classification during meshing
+```
+
+Density convention: **negative = solid** (`density_ops.rs`: `plane_density = y - height`, `union = min`, `subtract = max(solid, -cavity)`), which matches the doc's expected convention. Vertical axis is Y. Chunks are 16³ cells / 17³ samples, nominally 1 m cells.
+
+## Proposed review order (dependency-first, per the doc)
+
+1. **voxel_core foundation** — `chunk.rs`, `sample.rs`, `coords.rs`, `terrain_chunk.rs` ← *this installment*
+2. `density_ops.rs`, `noise.rs`, `field2d.rs`, `resolution.rs` (Parts 6, 8, 11)
+3. `surface_nets.rs` + `normal.rs` + `mesh_convert.rs` (Parts 13–15: meshing, seams, normals)
+4. `recipe.rs`, `surface_height.rs`, `field_stack.rs`, `density.rs`-equivalents (Parts 5–7)
+5. `island_atlas.rs`, `footprint.rs`, `coast.rs`, `bathymetry.rs`, `island.rs` (macro terrain)
+6. `hydrology.rs`, `river.rs`, `erosion.rs`, `carving.rs`, `water_body.rs` (Parts 9–10)
+7. `biome_field.rs`, `biomes.rs`, `biome_context.rs`, `surface.rs`, `materials.rs`, `material.rs`, `bake.rs`, `blend.rs` (Parts 16–18)
+8. Shader/material runtime: `atlas_runtime.rs`, `material_recipe.rs`, `bake_materials.rs` (Part 19)
+9. `pipeline.rs`, `residency.rs`, `edits.rs`, `edit_boundary.rs`, `collision.rs` (Parts 20+: streaming, concurrency, edits)
+10. Config: `definitions.rs`, `compile.rs`, `registry.rs`, `validate.rs`, `validation.rs`, YAMLs
+11. Tests/diagnostics: `determinism.rs`, `metrics.rs`, diag files
+
+---
+
+# Installment 1: voxel_core foundation
+
+**Files:** `voxel_core/src/chunk.rs` (5), `voxel_core/src/sample.rs` (10), `voxel_core/src/coords.rs` (169), `voxel_core/src/terrain_chunk.rs` (153)
+
+Overall: this layer is in good shape. Indexing is consistent (`x + y·17 + z·17²`), negative-coordinate chunk math is correct, and shared borders are filled from world-space density, which is the right seam-prevention strategy. The issues below are real but mostly medium/low severity — the important ones are the unchecked cast, the unstable determinism hash, and a unit-assumption gap that this layer bakes in for the whole engine.
+
+## Bug 1: `WorldSample::local_sample` silently wraps out-of-chunk coordinates
+
+**Severity:** Medium (latent — becomes a runtime panic or corruption far from its cause)
+**File:** `voxel_core/src/coords.rs`, `WorldSample::local_sample`
+
+**Evidence:**
+```rust
+LocalSample::new(
+    (self.x - origin_x) as u8,   // no range check
+    ...
+)
+```
+If the sample doesn't lie within `chunk` (e.g., a caller mixes up neighbor coords during edits or border stitching), a negative or >255 difference wraps via `as u8`. `LocalSample::is_valid()` exists but is only enforced via `debug_assert!` in `TerrainChunk::get/set` — in **release** builds the wrapped value flows into `linear_index()`, which can exceed `SAMPLE_COUNT` and produce a slice-bounds panic, or worse, land inside bounds and silently read/write the wrong sample (e.g., delta of 273 wraps to 17 → index still "valid-looking" arithmetic). This is exactly the class of coordinate defect Part 3 of the diagnostics doc targets, and `edits.rs` is a caller (I'll verify its usage in installment 9).
+
+**Why it causes the symptom:** wrong-sample writes during terrain editing manifest as single-voxel spikes/pits or chunk-border artifacts that appear only in release builds.
+
+**Minimal confirmation test:**
+```rust
+let s = WorldSample::new(-1, 0, 0);
+let local = s.local_sample(ChunkCoord::new(0, 0, 0)); // wraps to x=255
+assert!(!local.is_valid()); // passes today — proving the wrap is representable
+```
+
+**Repair:** make the conversion fallible or asserted:
+```rust
+pub fn local_sample(&self, chunk: ChunkCoord) -> Option<LocalSample> {
+    let dx = self.x - chunk.x * crate::CHUNK_CELLS as i32;
+    let dy = self.y - chunk.y * crate::CHUNK_CELLS as i32;
+    let dz = self.z - chunk.z * crate::CHUNK_CELLS as i32;
+    let range = 0..=(crate::CHUNK_SAMPLES as i32 - 1);
+    (range.contains(&dx) && range.contains(&dy) && range.contains(&dz))
+        .then(|| LocalSample::new(dx as u8, dy as u8, dz as u8))
+}
+```
+(or keep the infallible signature and add `debug_assert!` plus a documented precondition, if churn on callers is unwanted — but `Option` is the correct shape for edit-boundary code).
+
+**Regression test:** the confirmation test above, inverted: out-of-chunk samples return `None`; boundary sample `(16,16,16)` for chunk `(0,0,0)` returns `Some(LocalSample::new(16,16,16))`.
+
+## Bug 2: `density_hash` is not a stable hash, and its doc comment lies
+
+**Severity:** Medium (undermines the determinism/regression tooling the diagnostics doc depends on)
+**File:** `voxel_core/src/terrain_chunk.rs`, `TerrainChunk::density_hash`
+
+**Evidence:**
+```rust
+/// Deterministic hash of all sample densities (quantized) for regression tests.
+pub fn density_hash(&self) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for sample in self.samples.iter() {
+        (sample.density.to_bits()).hash(&mut hasher);
+```
+Three problems. First, `DefaultHasher`'s algorithm is explicitly **not** guaranteed stable across Rust releases — recorded golden hashes in regression tests (Stage 0 of the repair plan: "record chunk hashes") will rot on a toolchain bump and produce false regressions. Second, the comment says "quantized" but the code hashes raw `f32::to_bits()` — no quantization occurs, so any last-ulp float difference (e.g., from a legitimate refactor of evaluation order, or fused-multiply-add differences across targets) changes the hash. Third, `-0.0` vs `0.0` hash differently despite being geometrically identical. The same `DefaultHasher` pattern also appears in `preview.rs:35` and `determinism.rs:19`, so the whole determinism-verification layer shares this weakness.
+
+**Minimal confirmation test:** hash a chunk containing `0.0` and one containing `-0.0`; the hashes differ.
+
+**Repair:** hash quantized densities with a hand-rolled stable hash (FNV-1a is 6 lines, no dependency):
+```rust
+pub fn density_hash(&self) -> u64 {
+    const OFFSET: u64 = 0xcbf29ce484222325;
+    const PRIME: u64 = 0x100000001b3;
+    let mut h = OFFSET;
+    for s in self.samples.iter() {
+        // quantize to ~1mm so bit-level float noise doesn't change identity
+        let q = (s.density * 1024.0).round() as i32 as u32;
+        for b in q.to_le_bytes().into_iter().chain(s.material.0.to_le_bytes()) {
+            h = (h ^ b as u64).wrapping_mul(PRIME);
+        }
+    }
+    h
+}
+```
+Apply the same change (or share this helper) in `determinism.rs` and `preview.rs`.
+
+**Regression test:** golden-hash a `fill_chunk_from_density` chunk from a fixed sphere SDF; assert the literal value; assert `0.0` and `-0.0` chunks hash equal.
+
+## Bug 3: `cell_size_m ≠ 1.0` is representable but unenforced, while voxel_core hard-assumes 1 m cells
+
+**Severity:** Medium-High as a validation gap (High if anyone sets 0.5 m, which the project spec explicitly targets: "0.5–1 meter voxels")
+**Files:** `voxel_core/src/coords.rs` (`WorldCell` doc: "1 cell = 1 meter; requires `cell_size_m == 1.0`"), `game_data/src/definitions.rs:249`, `game_data/src/compile.rs:286`, `game_bevy/src/terrain/mesh_convert.rs`
+
+**Evidence:** `WorldCell`/`WorldSample` are integer meter coordinates by convention. `mesh_convert.rs` correctly scales positions by `cell_size_m`, meaning parts of the codebase *do* honor non-unit cells — but `terrain_chunk.rs::fill_chunk_from_density` passes raw integer sample coords to the density evaluator as if they were meters, and `environment/surface.rs:47-50` round-trips meters↔cells assuming exact divisibility. The only guard I can find is a **unit test** (`validation.rs:211`) that checks a *single* world profile (`world.expanded_slice_hd`); nothing in `compile.rs` or `validate.rs` rejects `cell_size_m: 0.5` at load time. Set it in any YAML and you get an engine where meshes are scaled correctly but density is sampled at the wrong world positions — terrain shape shrinks/stretches relative to the atlas fields, coastlines land in the wrong place, and colliders/materials disagree with the atlas. This is the doc's Part 4 "unit mismatch representable in config" failure mode.
+
+**Minimal confirmation test:** set `cell_size_m: 0.5` in `compact_slice_world.yaml`, load, and compare `surface_height` at a fixed world point against the meshed surface Y — they diverge by 2×.
+
+**Repair (immediate):** enforce the invariant where the config is compiled, in `game_data/src/compile.rs`:
+```rust
+if (def.voxel.cell_size_m - 1.0).abs() > f32::EPSILON {
+    return Err(CompileError::UnsupportedValue {
+        field: "voxel.cell_size_m",
+        reason: "only 1.0 m cells are supported until voxel_core is unit-aware",
+    });
+}
+```
+**Repair (architectural, later):** thread `cell_size_m` into the world↔cell conversions (a `CellMetrics { cell_size_m }` passed to `fill_chunk_from_density`'s coordinate mapping) before attempting the 0.5 m target.
+
+**Regression test:** registry-load test asserting every world profile in `assets/` compiles only with `cell_size_m == 1.0`, replacing the single-profile check in `validation.rs`.
+
+## Minor findings
+
+**M1 — `WorldSample::chunk_coord` divides by `CHUNK_SAMPLES - 1`** (`coords.rs`). Numerically identical to `CHUNK_CELLS`, but it obscures intent and invites a copy-paste error later. Use `CHUNK_CELLS`. Also worth documenting the ownership convention right here: boundary sample world-x = 16 reports chunk `(1,0,0)` even though chunk `(0,0,0)` stores a duplicate at local 16. Any code that *writes* samples (edits) must fan out to every chunk sharing the sample — up to 8 chunks at a corner — or you get the classic post-edit chunk seam. I'll verify `edits.rs` does this in installment 9; flagging the contract now because this file is where it should be documented.
+
+**M2 — `border_sample` swallows invalid axes** (`terrain_chunk.rs`). `_ => TerrainSample::default()` returns density 0.0 (exactly on the isosurface!) for a programmer error. Make it `_ => unreachable!("invalid axis {axis}")` or take an enum.
+
+**M3 — `fill_chunk_from_density` allocates a throwaway chunk** (`terrain_chunk.rs`). `TerrainChunk::new(coord).sample_origin()` heap-allocates 4913 samples just to compute `coord * 16`. Make `sample_origin` a free/associated fn of `ChunkCoord`:
+```rust
+pub const fn chunk_sample_origin(coord: ChunkCoord) -> (i32, i32, i32) { ... }
+```
+This runs once per chunk per generation job, so it's noise for perf, but it's also just wrong-shaped code.
+
+**M4 — duplicate tests.** `sample_indexing_is_unique` and `sample_linear_indices_are_unique` in `terrain_chunk.rs` test the identical property. Delete one. Neither tests the *layout* (that index stride is x=1, y=17, z=289) — worth one assertion so the mesher's assumed layout is pinned: `assert_eq!(LocalSample::new(0,1,0).linear_index(), 17);` etc.
+
+**M5 — `floor_div`/`positive_mod` reimplement `i32::div_euclid`/`rem_euclid`** (`coords.rs`). The hand-rolled versions are correct (verified against negatives), but stdlib versions are clearer and const-friendly.
+
+## What's verified good in this layer
+
+Negative-coordinate chunk math is correct and tested (`negative_chunk_coordinates`, `boundary_sample_local_index`). The 17³-samples-for-16³-cells relationship the doc tells us to verify (Part 3) is correct: `CHUNK_SAMPLES = CHUNK_CELLS + 1`, `SAMPLE_COUNT = 17³`, and border samples are duplicated rather than shared, with `fill_chunk_from_density` evaluating in world space — so identical densities on shared faces are structurally guaranteed *for generation* (edits are the remaining risk).

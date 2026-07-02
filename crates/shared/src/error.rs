@@ -1,3 +1,4 @@
+// crates/shared/src/error.rs
 use crate::StableId;
 
 #[derive(Debug, thiserror::Error)]

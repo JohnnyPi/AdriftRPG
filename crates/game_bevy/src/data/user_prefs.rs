@@ -1,3 +1,4 @@
+// crates/game_bevy/src/data/user_prefs.rs
 //! Persistent user setup preferences (outside assets/ to avoid hot-reload loops).
 
 use std::collections::BTreeMap;

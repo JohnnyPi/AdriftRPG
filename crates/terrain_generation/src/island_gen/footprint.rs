@@ -1,3 +1,4 @@
+// crates/terrain_generation/src/island_gen/footprint.rs
 //! Elliptical lobes and domain warp (VS3 §3).
 
 use crate::field2d::{smooth_max, smoothstep};
@@ -25,8 +26,8 @@ pub fn build_island_mask(params: &IslandGenParams, wx: f32, wz: f32) -> f32 {
     let warp = if params.island.warp_amplitude > 0.0 {
         let f = params.island.warp_frequency;
         [
-            noise.sample(wx * f, 0.0, wz * f) * params.island.warp_amplitude,
-            noise.sample(wx * f + 100.0, 0.0, wz * f) * params.island.warp_amplitude,
+            (noise.sample(wx * f, 0.0, wz * f) - 0.5) * 2.0 * params.island.warp_amplitude,
+            (noise.sample(wx * f + 100.0, 0.0, wz * f) - 0.5) * 2.0 * params.island.warp_amplitude,
         ]
     } else {
         [0.0, 0.0]
@@ -58,4 +59,51 @@ pub fn build_island_mask(params: &IslandGenParams, wx: f32, wz: f32) -> f32 {
         };
     }
     support.clamp(0.0, 1.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::island_gen::params::IslandGenParams;
+
+    #[test]
+    fn warped_mask_centroid_stays_near_configured_center() {
+        let mut params = IslandGenParams::default();
+        params.island.warp_amplitude = 24.0;
+        params.island.warp_frequency = 0.006;
+        params.center = [50.0, -30.0];
+        let spacing = 8.0;
+        let extent = 400.0;
+        let origin = [
+            params.center[0] - extent * 0.5,
+            params.center[1] - extent * 0.5,
+        ];
+        let w = (extent / spacing).ceil() as u32 + 1;
+        let h = w;
+        let mut sum_x = 0.0f64;
+        let mut sum_z = 0.0f64;
+        let mut weight = 0.0f64;
+        for z in 0..h {
+            for x in 0..w {
+                let wx = origin[0] + x as f32 * spacing;
+                let wz = origin[1] + z as f32 * spacing;
+                let m = build_island_mask(&params, wx, wz) as f64;
+                sum_x += wx as f64 * m;
+                sum_z += wz as f64 * m;
+                weight += m;
+            }
+        }
+        let cx = (sum_x / weight) as f32;
+        let cz = (sum_z / weight) as f32;
+        assert!(
+            (cx - params.center[0]).abs() < spacing * 2.0,
+            "centroid x {cx} should be near {}",
+            params.center[0]
+        );
+        assert!(
+            (cz - params.center[1]).abs() < spacing * 2.0,
+            "centroid z {cz} should be near {}",
+            params.center[1]
+        );
+    }
 }

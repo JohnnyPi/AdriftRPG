@@ -1,3 +1,4 @@
+// crates/terrain_generation/tests/route_validation.rs
 use game_data::load_registry_from_directory;
 use std::path::PathBuf;
 use terrain_generation::{

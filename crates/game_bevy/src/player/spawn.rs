@@ -1,3 +1,4 @@
+// crates/game_bevy/src/player/spawn.rs
 use bevy::prelude::*;
 use game_data::{CompiledCamera, CompiledLighting, CompiledPlayer};
 

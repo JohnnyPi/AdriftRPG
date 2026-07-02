@@ -1,3 +1,4 @@
+// crates/terrain_generation/src/island_gen/volcano.rs
 //! Volcanic cone stack (VS3 §4).
 
 use crate::field2d::smoothstep;

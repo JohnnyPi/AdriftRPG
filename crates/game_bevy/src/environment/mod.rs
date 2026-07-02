@@ -1,3 +1,4 @@
+// crates/game_bevy/src/environment/mod.rs
 pub mod audio;
 pub mod biome_context;
 pub mod biomes;

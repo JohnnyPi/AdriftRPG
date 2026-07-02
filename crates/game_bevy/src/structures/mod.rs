@@ -1,3 +1,4 @@
+// crates/game_bevy/src/structures/mod.rs
 //! YAML-driven structure spawner (forts, shelters).
 
 use avian3d::prelude::{Collider, CollisionLayers, RigidBody};

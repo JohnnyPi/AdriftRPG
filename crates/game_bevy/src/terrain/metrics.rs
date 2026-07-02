@@ -1,3 +1,4 @@
+// crates/game_bevy/src/terrain/metrics.rs
 use bevy::prelude::*;
 
 /// Rolling pipeline stage timings and queue depths for the F1 debug panel.

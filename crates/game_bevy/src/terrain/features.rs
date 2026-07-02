@@ -1,3 +1,4 @@
+// crates/game_bevy/src/terrain/features.rs
 //! Terrain feature registry — rivers, water bodies, caves (VS2 §19).
 
 use bevy::prelude::*;

@@ -1,3 +1,4 @@
+// crates/terrain_generation/src/density_ops.rs
 /// Solid union: keep the more-interior (more negative) value.
 #[inline]
 pub fn solid_union(a: f32, b: f32) -> f32 {
@@ -59,7 +60,8 @@ pub fn capsule_sdf(
     (dx * dx + dy * dy + dz * dz).sqrt() - radius
 }
 
-/// Ellipsoid SDF (axis-aligned).
+/// Ellipsoid SDF (axis-aligned). Returns approximate metric distance: the zero-set is
+/// exact, but gradient magnitude varies with axis radii before scaling.
 pub fn ellipsoid_sdf(
     px: f32,
     py: f32,
@@ -71,10 +73,11 @@ pub fn ellipsoid_sdf(
     ry: f32,
     rz: f32,
 ) -> f32 {
+    let scale = rx.min(ry).min(rz);
     let dx = (px - cx) / rx;
     let dy = (py - cy) / ry;
     let dz = (pz - cz) / rz;
-    (dx * dx + dy * dy + dz * dz).sqrt() - 1.0
+    ((dx * dx + dy * dy + dz * dz).sqrt() - 1.0) * scale
 }
 
 #[cfg(test)]

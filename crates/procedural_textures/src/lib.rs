@@ -1,3 +1,4 @@
+// crates/procedural_textures/src/lib.rs
 //! CPU procedural PBR texture generation (Symbios-style, Bevy-independent).
 
 mod arrays;
@@ -9,7 +10,10 @@ mod normal;
 mod noise;
 mod recipe;
 
-pub use arrays::{arrays_fingerprint, build_cpu_arrays, CpuTextureArrays};
+pub use arrays::{
+    arrays_fingerprint, build_cpu_arrays, build_cpu_arrays_for_palette, build_cpu_arrays_in_core_order,
+    CpuTextureArrays,
+};
 pub use error::TextureGenerationError;
 pub use generators::{
     CobblestoneConfig, CobblestoneGenerator, GroundConfig, GroundGenerator, RockConfig,
@@ -17,8 +21,9 @@ pub use generators::{
 };
 pub use maps::{GeneratedPbrMaps, encode_height_u8, pack_ormh};
 pub use material_recipe::{
-    default_island_recipes, document_fingerprint, strip_utf8_bom, ProceduralMaterialsDocument,
-    TerrainMaterialIdName, TerrainMaterialRecipe,
+    default_island_recipes, document_fingerprint, order_recipes_for_core_layers,
+    order_recipes_for_palette, strip_utf8_bom, ProceduralMaterialsDocument, TerrainMaterialIdName,
+    TerrainMaterialRecipe, CORE_ISLAND_LAYER_ORDER,
 };
 pub use recipe::{texture_recipe_from_yaml_value, ProceduralTextureGenerator, TextureRecipe};
 
@@ -88,5 +93,29 @@ mod tests {
         let doc: ProceduralMaterialsDocument =
             serde_yaml::from_str(strip_utf8_bom(&text)).expect("parse yaml");
         assert_eq!(doc.materials.len(), 8);
+        let ordered = order_recipes_for_core_layers(&doc.materials).expect("core order");
+        assert_eq!(ordered.len(), 8);
+        assert_eq!(ordered[0].id, "FreshBasalt");
+        assert_eq!(ordered[7].id, "RiverSilt");
+    }
+
+    #[test]
+    fn shuffled_yaml_order_still_maps_to_core_layers() {
+        let mut recipes = default_island_recipes();
+        recipes.swap(0, 5);
+        let ordered = order_recipes_for_core_layers(&recipes).expect("order");
+        assert_eq!(ordered[0].id, "FreshBasalt");
+        assert_eq!(ordered[5].id, "CoralSand");
+        let arrays = build_cpu_arrays_in_core_order(&recipes).expect("arrays");
+        assert_eq!(arrays.layers, 8);
+    }
+
+    #[test]
+    fn missing_core_material_errors() {
+        let recipes: Vec<_> = default_island_recipes()
+            .into_iter()
+            .filter(|r| r.id != "RiverSilt")
+            .collect();
+        assert!(order_recipes_for_core_layers(&recipes).is_err());
     }
 }

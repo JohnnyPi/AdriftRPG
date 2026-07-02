@@ -1,3 +1,4 @@
+// crates/terrain_material_bevy/src/lib.rs
 mod arrays;
 mod bake;
 mod material;

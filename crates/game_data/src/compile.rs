@@ -1,8 +1,10 @@
-use shared::StableId;
+// crates/game_data/src/compile.rs
+use serde::Serialize;
+use shared::{DataError, DataResult, StableId};
 
 use crate::definitions::*;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CompiledApp {
     pub id: StableId,
     pub world: StableId,
@@ -11,7 +13,7 @@ pub struct CompiledApp {
     pub performance: StableId,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CompiledPerformance {
     pub id: StableId,
     pub target_fps: u32,
@@ -27,7 +29,7 @@ pub struct CompiledPerformance {
     pub water_quality: String,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CompiledPlayer {
     pub id: StableId,
     pub capsule_radius_m: f32,
@@ -46,7 +48,7 @@ pub struct CompiledPlayer {
     pub gravity_mps2: f32,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CompiledCamera {
     pub id: StableId,
     pub distance_default_m: f32,
@@ -75,7 +77,7 @@ pub struct CompiledCamera {
     pub recenter_key: String,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CompiledLighting {
     pub id: StableId,
     pub sun_direction: [f32; 3],
@@ -90,7 +92,7 @@ pub struct CompiledLighting {
     pub fog_end_m: f32,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CompiledWater {
     pub id: StableId,
     pub sea_level_m: f32,
@@ -101,7 +103,7 @@ pub struct CompiledWater {
     pub wave_amplitude: f32,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CompiledWorld {
     pub id: StableId,
     pub seed: u64,
@@ -111,6 +113,7 @@ pub struct CompiledWorld {
     pub terrain: StableId,
     pub biomes: StableId,
     pub materials: StableId,
+    pub surface: StableId,
     pub water: StableId,
     pub lighting: StableId,
     pub sky: Option<StableId>,
@@ -122,7 +125,7 @@ pub struct CompiledWorld {
     pub resolution: Option<GenerationResolutionDefinition>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CompiledTerrain {
     pub id: StableId,
     pub spawn: Option<[f32; 3]>,
@@ -130,31 +133,40 @@ pub struct CompiledTerrain {
     pub operations: Vec<TerrainOperationDefinition>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CompiledCave {
     pub id: StableId,
     pub operations: Vec<TerrainOperationDefinition>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CompiledBiomes {
     pub id: StableId,
     pub rules: Vec<BiomeRuleDefinition>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CompiledTerrainMaterials {
     pub id: StableId,
     pub materials: Vec<TerrainMaterialEntryDefinition>,
+    pub layer_order: Vec<StableId>,
+    pub key_to_layer: std::collections::BTreeMap<StableId, u32>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct CompiledSurfaceRules {
+    pub id: StableId,
+    pub gates: Vec<SurfaceGateDefinition>,
+    pub classifiers: Vec<SurfaceClassifierDefinition>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CompiledVegetation {
     pub id: StableId,
     pub rules: Vec<VegetationRuleDefinition>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CompiledDebug {
     pub id: StableId,
     pub bindings: DebugBindingsDefinition,
@@ -280,7 +292,21 @@ impl From<&WaterDefinition> for CompiledWater {
 
 impl From<&WorldDefinition> for CompiledWorld {
     fn from(def: &WorldDefinition) -> Self {
-        Self {
+        Self::try_from_definition(def)
+            .expect("world definition must be validated before compile")
+    }
+}
+
+impl CompiledWorld {
+    pub fn try_from_definition(def: &WorldDefinition) -> DataResult<Self> {
+        if (def.voxel.cell_size_m - 1.0).abs() > f32::EPSILON {
+            return Err(DataError::InvalidValue {
+                context: format!("world `{}`", def.header.id),
+                message: "voxel.cell_size_m must be 1.0 until sub-meter voxel indexing is supported"
+                    .to_string(),
+            });
+        }
+        Ok(Self {
             id: def.header.id.clone(),
             seed: def.seed,
             cell_size_m: def.voxel.cell_size_m,
@@ -289,6 +315,10 @@ impl From<&WorldDefinition> for CompiledWorld {
             terrain: def.terrain.clone(),
             biomes: def.biomes.clone(),
             materials: def.materials.clone(),
+            surface: def
+                .surface
+                .clone()
+                .unwrap_or_else(|| default_surface_for_materials(&def.materials)),
             water: def.water.clone(),
             lighting: def.lighting.clone(),
             sky: def.sky.clone(),
@@ -298,11 +328,9 @@ impl From<&WorldDefinition> for CompiledWorld {
             coord_offset: def.coord_offset.unwrap_or([0.0, 0.0, 0.0]),
             island_gen: def.island_gen.clone(),
             resolution: def.resolution.clone(),
-        }
+        })
     }
-}
 
-impl CompiledWorld {
     pub fn recipe_to_world(&self, position: [f32; 3]) -> [f32; 3] {
         [
             position[0] - self.coord_offset[0],
@@ -310,6 +338,14 @@ impl CompiledWorld {
             position[2] - self.coord_offset[2],
         ]
     }
+}
+
+fn default_surface_for_materials(materials: &StableId) -> StableId {
+    let suffix = materials
+        .as_str()
+        .strip_prefix("materials.")
+        .unwrap_or(materials.as_str());
+    StableId::new(&format!("surface.{suffix}"))
 }
 
 impl From<&TerrainGenerationDefinition> for CompiledTerrain {
@@ -343,9 +379,51 @@ impl From<&BiomesDefinition> for CompiledBiomes {
 
 impl From<&TerrainMaterialsDefinition> for CompiledTerrainMaterials {
     fn from(def: &TerrainMaterialsDefinition) -> Self {
+        let mut key_to_layer = std::collections::BTreeMap::new();
+        let layer_order = if def.layers.is_empty() {
+            let mut ordered: Vec<_> = def.materials.iter().collect();
+            ordered.sort_by_key(|m| m.resolved_legacy_id());
+            ordered
+                .into_iter()
+                .map(|m| m.resolved_key())
+                .collect()
+        } else {
+            def.layers.clone()
+        };
+        for (index, key) in layer_order.iter().enumerate() {
+            key_to_layer.insert(key.clone(), index as u32);
+        }
         Self {
             id: def.header.id.clone(),
             materials: def.materials.clone(),
+            layer_order,
+            key_to_layer,
+        }
+    }
+}
+
+impl CompiledTerrainMaterials {
+    pub fn layer_count(&self) -> u32 {
+        self.layer_order.len() as u32
+    }
+
+    pub fn layer_for_key(&self, key: &StableId) -> Option<u32> {
+        self.key_to_layer.get(key).copied()
+    }
+
+    pub fn entry_for_key(&self, key: &StableId) -> Option<&TerrainMaterialEntryDefinition> {
+        self.materials
+            .iter()
+            .find(|entry| &entry.resolved_key() == key)
+    }
+}
+
+impl From<&SurfaceRulesDefinition> for CompiledSurfaceRules {
+    fn from(def: &SurfaceRulesDefinition) -> Self {
+        Self {
+            id: def.header.id.clone(),
+            gates: def.gates.clone(),
+            classifiers: def.classifiers.clone(),
         }
     }
 }
@@ -368,7 +446,7 @@ impl From<&DebugDefinition> for CompiledDebug {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CompiledOptions {
     pub id: StableId,
     pub toggle_key: String,
@@ -376,7 +454,7 @@ pub struct CompiledOptions {
     pub stubs: Vec<String>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CompiledSetupParameter {
     pub id: String,
     pub label: String,
@@ -387,27 +465,27 @@ pub struct CompiledSetupParameter {
     pub default: f32,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CompiledSetupGroup {
     pub id: String,
     pub label: String,
     pub parameters: Vec<CompiledSetupParameter>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CompiledSetupPreviewMode {
     pub id: String,
     pub label: String,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CompiledSetupSchema {
     pub id: StableId,
     pub groups: Vec<CompiledSetupGroup>,
     pub preview_modes: Vec<CompiledSetupPreviewMode>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CompiledIslandGeneration {
     pub id: StableId,
     pub seed: u64,
@@ -472,7 +550,7 @@ impl CompiledIslandGeneration {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CompiledPhysics {
     pub id: StableId,
     pub gravity_mps2: f32,
@@ -480,7 +558,7 @@ pub struct CompiledPhysics {
     pub maximum_substeps: u32,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CompiledRiver {
     pub id: StableId,
     pub source_region_center: [f32; 2],
@@ -501,7 +579,7 @@ pub struct CompiledRiver {
     pub waterfall_threshold_m: f32,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CompiledHydrology {
     pub id: StableId,
     pub kind: String,
@@ -570,7 +648,7 @@ impl From<&HydrologyDefinition> for CompiledHydrology {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CompiledAtmosphere {
     pub id: StableId,
     pub sun_azimuth_deg: f32,
@@ -589,7 +667,7 @@ pub struct CompiledAtmosphere {
     pub exposure_adaptation_speed: f32,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CompiledFog {
     pub id: StableId,
     pub distance_color: [f32; 3],
@@ -605,7 +683,7 @@ pub struct CompiledFog {
     pub local_volumes: Vec<CompiledFogLocalVolume>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CompiledFogLocalVolume {
     pub center: [f32; 3],
     pub half_extents: [f32; 3],
@@ -613,7 +691,7 @@ pub struct CompiledFogLocalVolume {
     pub color: [f32; 3],
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CompiledLandmarks {
     pub id: StableId,
     pub facts: Vec<CompiledLandmarkFact>,
@@ -621,32 +699,32 @@ pub struct CompiledLandmarks {
     pub fog_volumes: Vec<CompiledFogLocalVolume>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CompiledLandmarkFact {
     pub tag: String,
     pub position: [f32; 3],
     pub label: String,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CompiledLandmarkSign {
     pub position: [f32; 3],
     pub label: String,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CompiledRoutes {
     pub id: StableId,
     pub routes: Vec<CompiledRoute>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CompiledRoute {
     pub id: String,
     pub waypoints: Vec<[f32; 2]>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CompiledStructure {
     pub id: StableId,
     pub anchor: [f32; 3],
@@ -656,7 +734,7 @@ pub struct CompiledStructure {
     pub collision: String,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CompiledStructurePart {
     pub kind: String,
     pub size: Option<[f32; 3]>,
@@ -667,7 +745,7 @@ pub struct CompiledStructurePart {
     pub tag: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CompiledSky {
     pub id: StableId,
     pub zenith_color: [f32; 3],
@@ -686,7 +764,7 @@ pub struct CompiledSky {
     pub shader: String,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CompiledWaterBodyMaterial {
     pub id: StableId,
     pub shallow_color: [f32; 3],

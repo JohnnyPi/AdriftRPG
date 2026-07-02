@@ -1,3 +1,4 @@
+// crates/game_bevy/src/water/mod.rs
 use bevy::prelude::*;
 use bevy::pbr::Material;
 use bevy::render::render_resource::{AsBindGroup, ShaderType};

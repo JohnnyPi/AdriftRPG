@@ -1,3 +1,4 @@
+// crates/physics_bridge/src/lib.rs
 //! Physics integration wrappers using Avian3D.
 
 mod body_spec;

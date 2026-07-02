@@ -1,3 +1,4 @@
+// crates/terrain_meshing/src/dual_contouring.rs
 use crate::{ChunkMeshingInput, MeshingError, TerrainMeshData, TerrainMesher};
 
 /// Alternative mesher stub (Dual Contouring deferred).

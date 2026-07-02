@@ -1,3 +1,4 @@
+// crates/game_bevy/src/player/motor.rs
 //! Formal movement intent separated from physical resolution (VS2 §9.1).
 
 use bevy::prelude::*;

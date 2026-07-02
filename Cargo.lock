@@ -3174,6 +3174,7 @@ dependencies = [
  "physics_bridge",
  "procedural_textures",
  "serde",
+ "serde_json",
  "serde_yaml",
  "sha2",
  "shared",
@@ -3193,6 +3194,7 @@ version = "0.1.0"
 dependencies = [
  "hex",
  "serde",
+ "serde_json",
  "serde_yaml",
  "sha2",
  "shared",
@@ -6006,6 +6008,7 @@ name = "terrain_generation"
 version = "0.1.0"
 dependencies = [
  "game_data",
+ "serde",
  "shared",
  "terrain_meshing",
  "voxel_core",

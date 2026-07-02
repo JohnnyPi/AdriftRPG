@@ -1,3 +1,4 @@
+// crates/procedural_textures/src/normal.rs
 pub fn normals_from_height_field(
     width: u32,
     height: u32,

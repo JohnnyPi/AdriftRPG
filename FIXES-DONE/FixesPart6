@@ -1,0 +1,69 @@
+# Installment 6: macro island — footprint, coast, bathymetry, atlas surface, classifier
+
+**Files:** `terrain_generation/src/island_atlas.rs` (80), `…/island_gen/footprint.rs` (61), `…/island_gen/coast.rs` (76), `…/island_gen/bathymetry.rs` (55), plus `island.rs` (261 — the surface classifier, from the materials crate).
+
+## Review gap #3: `island_gen/mod.rs` is missing (collided with the camera `mod.rs`)
+
+`build_island_atlas` and `sample_atlas_surface` — the atlas assembly orchestrator, where **pass ordering** lives (footprint → elevation → hydrology → erosion → carving → coast → biome, and what gets recomputed after what) — aren't in the upload. `params.rs` turned out to be `island_gen/params.rs` (good), so the submodules are mostly here; it's the module root that collided. The Parts 9–10 pass-ordering audit is blocked on it — please re-send as e.g. `island_gen-mod.rs`. Meanwhile, the submodules alone yield two High findings.
+
+## Bug 25: the coast-distance field is water-side only — every land-side consumer misreads it
+
+**Confidence / Severity:** Confirmed across three consumers (pending only the mod.rs wiring check) / **High**
+**Files:** `bathymetry.rs` (`compute_coast_distance`), `coast.rs` (`classify_coast`, `apply_beach_profiles`), `island.rs` (`classify`)
+
+**Evidence:** `compute_coast_distance` writes **0.0 for every land cell** (`land > 0.5 → dist = 0`) and positive distance-to-land only for water cells. But the consumers all treat it as *distance from the shoreline on land*:
+
+`classify_coast` runs only on land (`mask ≥ 0.4`), where coast is always 0. So `cliff_score *= smoothstep(2.0, 30.0, 0.0)` = **0 — the cliff mask is identically zero everywhere**. And `near_coast = 1 − smoothstep(0, width_max, 0)` = **1 everywhere — the beach gate is fully open across the entire island interior**, so `beach_score = low_slope · sediment` classifies every flat inland cell as beach.
+
+`apply_beach_profiles` then pulls every `beach_mask ≥ 0.15` cell 60%·mask toward `sea + berm − coast·0.08` — with coast = 0, that's a *constant* — so the island's flat interior lowlands get flattened toward beach-berm height.
+
+`island.rs`'s classifier gates on `c.coast_distance_m < 20.0 && elevation < sea + 4` — with coast_distance 0 on all land, every low-lying cell island-wide takes the coast branch and renders coral sand, and the river branch below it is unreachable there.
+
+**Combined runtime effect:** no cliff material anywhere, sand and berm-flattening across inland lowlands, coast materials far from the coast — three of the doc's Part 18 red flags ("beach material applied to every surface below a height", "material classification inconsistent with terrain shape", plus geometric flattening) from a single root cause.
+
+**Repair:** make the field two-sided. Compute a proper distance transform to the coastline contour (mask ≈ 0.5) valid on *both* sides — signed (negative offshore, positive inland) or two channels. A two-pass chamfer transform is ~30 lines, exact enough, and O(n) (also fixing Bug 26). Then: `classify_coast`'s cliff/beach gates read the land-side distance; `bathymetry_height` reads the water-side; `island.rs` keeps its `< 20 m` gate but it now means what it says.
+
+**Regression test:** synthetic circular island — assert coast_distance at the island center ≈ radius (today: 0), and monotonically increasing inland; assert cliff_mask is nonzero on a synthetic steep-sloped coastal ring (today: all zeros).
+
+## Bug 26: coast distance saturates at a 20 m search horizon — underwater step-ring offshore
+
+**Confidence / Severity:** Confirmed / High (underwater terrain shape)
+**File:** `bathymetry.rs`, `compute_coast_distance` + `bathymetry_height`
+
+**Evidence:** the brute-force search window is `search = min(ceil(20.0 / spacing), 40)` cells — a hard **20 m** horizon (5 cells at 4 m spacing; the 40-cell cap never engages). Any water cell farther than 20 m from land finds nothing and falls back to the constant `spacing * 40` (= 160 m at local spacing). So along any ray leaving the island, `coast_distance` climbs correctly to 20 m, then jumps to 160 m across one cell. `bathymetry_height` is a pure function of this distance, so the seabed follows: shelf profile out to 20 m, then a one-cell **cliff drop to a flat plateau** at the depth implied by 160 m (`sea − shelf_depth − (160 − shelf_width)·deep_slope`) — a step-ring wall encircling the island 20 m offshore, with a dead-flat abyss beyond. Since configured shelf widths (`shelf_width_min/max_m`) are plainly meant to exceed 20 m, the intended shelf → drop-off morphology can never form.
+
+**Repair:** the same chamfer distance transform as Bug 25 — full-field, no horizon. `bathymetry_height`'s profile itself is fine (smoothstep shelf, linear drop; the slope crease at the shelf break is geologically appropriate) and will start working the moment its input is real. **Regression test:** along a radial ray from the island, assert coast_distance increases by ≤ 2·spacing per cell (no jumps) out to the atlas edge, and that bathymetry depth at 2× shelf width is strictly deeper than at 1× (today they can be equal or inverted at the jump).
+
+## Bug 27: island-mask domain warp is uncentered — island displaced off its configured center
+
+**Confidence / Severity:** Confirmed / Medium
+**File:** `footprint.rs`, `build_island_mask`
+
+**Evidence:**
+```rust
+noise.sample(wx * f, 0.0, wz * f) * params.island.warp_amplitude
+```
+`ValueNoise::sample` returns **[0, 1]** — the warp offset is always positive on both axes, mean ≈ amplitude/2. Every other warp site in the codebase subtracts 0.5 (`warp_xz` in `surface_height.rs`, the island-mask warp in `recipe.rs`). Effect: the island's footprint is translated ~amplitude/2 toward +x/+z relative to `params.center`, and the coast wobble is one-sided (lobes only ever push outward in one diagonal direction). Everything registered against the configured center — volcano placement, generated caves (`base_radius` from volcano center), spawn logic — is then systematically offset from the actual landmass.
+
+**Repair:** `(noise.sample(...) - 0.5) * 2.0 * warp_amplitude` on both axes. **Regression test:** compute the mask's centroid over the grid with warp enabled; assert it lies within a few meters of `params.center` (today it's biased by ~amplitude/2).
+
+## Bug 28: min/max config ranges are collapsed to fixed midpoints
+
+**Confidence / Severity:** Confirmed / Medium (dead-config family, fifth instance)
+**Files:** `bathymetry.rs` (`shelf_width…*0.55`, `shelf_depth…*0.5`, `deep_slope…*0.4`), `coast.rs` (`berm = min + (max−min)*0.5`)
+
+Every `*_min_m`/`*_max_m` pair in `CoastParams`/`BeachParams` is blended at a hardcoded constant — the ranges exist in YAML as ranges but the terrain never varies within them, spatially or by seed. An author widening `shelf_width_max_m` gets 55% of the change, uniformly. Either drive the mix with seeded, position-varying noise (`hash(seed, coast segment)` → t ∈ [0,1], which is clearly the design intent of publishing ranges) or collapse the config schema to single values so it stops lying. **Test:** two seeds must produce different shelf widths at the same shore point once ranges are honored.
+
+## Suspected defect (pending `island_gen/mod.rs`): hard land/sea switch in `surface_height_at`
+
+**File:** `island_atlas.rs`
+
+`surface_height_at` switches between `composed_land_elevation` and `bathymetry` at `mask > 0.01`, with an override keeping land wherever `land_elev > sea + 0.25`. If the elevation and bathymetry fields aren't constructed to *agree* at that contour (that stitching would live in the missing mod.rs), the surface steps discontinuously at the coastline — the doc's "coastline discontinuities" symptom. The override also means any spurious land-field values offshore (e.g. from Bug 4's edge behavior or peak-preserving upsampling) become floating shelf terrain above the sea. And note the Bug 4 interaction at the world rim: beyond the atlas extent both samplers return 0.0, so with sea = 2.0 the surface snaps to y = 0 — a shallow false seabed ring at the atlas boundary instead of deep ocean. **Diagnostic:** plot `surface_height_at` along a radial transect through the coast and the atlas edge; look for steps at mask ≈ 0.01 and at the atlas boundary.
+
+## Classifier findings (`island.rs`)
+
+The structure is better than the doc's worst-case (each branch emits a soft 4-way blend, `normalize()` everywhere, real tests with `validate_blend`), but the **branch selection is a hard priority chain**: cave > underwater > coast > river > cliff > land, gated by hard thresholds (`river_distance < 5.0`, `coast_distance < 20.0`, `slope > 48°`). Materials pop across those contours — the Part 18 "visible contour bands" pattern at class boundaries even though within-class blending is soft. The clean fix is to make the *class scores* soft too (compute all branch blends near a boundary and lerp by a smoothstepped gate over ~2–4 m), at least for coast/river/land. Two smaller items: `classify_cave` lists `WeatheredBasalt` in slots 0 *and* 3 — a wasted blend slot and a trap for any downstream dominant-material logic (merge the weights); and `classify_land`'s early returns at `alpine > 0.55` / `wetland > 0.25` are palette switches that will band at those soft-weight contours — fold them into the weighted blend instead.
+
+## What's verified good
+
+`footprint.rs`'s lobe construction is deterministic and smooth (`smooth_max` k = 0.15, clamped), and `elliptical_distance` guards degenerate radii. `bathymetry_height`'s shelf/drop-off profile is the right shape — it's starved by its input, not wrong itself. `island_atlas.rs`'s regional + local residual composition matches the `field2d` design, and the atlas struct is exactly the field inventory the diagnostics doc prescribes (filled elevation, flow, sediment, masks, soil, biome weights, validation messages). `island.rs` has genuine unit tests with blend validation — rare in classifier code and worth preserving through the refactor.

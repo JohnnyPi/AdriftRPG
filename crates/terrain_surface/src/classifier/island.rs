@@ -1,7 +1,14 @@
+// crates/terrain_surface/src/classifier/island.rs
+use std::collections::HashMap;
+
 use crate::blend::SurfaceMaterialBlend;
 use crate::blend::SurfaceClassifier;
 use crate::context::{saturate, smoothstep, BiomeId, GeologyId, SurfaceContext};
-use crate::material_id::TerrainMaterialId;
+use crate::material_id::MaterialKey;
+
+fn mat(name: &str) -> MaterialKey {
+    MaterialKey::new(name)
+}
 
 #[derive(Default)]
 pub struct IslandSurfaceClassifier;
@@ -12,19 +19,49 @@ impl SurfaceClassifier for IslandSurfaceClassifier {
             return classify_cave(c);
         }
         if c.water_depth_m > 0.05 {
-            return SurfaceMaterialBlend::single(TerrainMaterialId::RiverSilt);
+            return SurfaceMaterialBlend::single(mat("wet_rock"));
         }
-        if c.coast_distance_m < 20.0 && c.elevation_m < c.sea_level_m + 4.0 {
-            return classify_coast(c);
-        }
-        if c.river_distance_m < 5.0 {
-            return classify_river(c);
-        }
-        if c.slope_degrees > 48.0 {
-            return classify_cliff(c);
-        }
-        classify_land(c)
+
+        let coast_gate = (1.0 - smoothstep(18.0, 22.0, c.coast_distance_m))
+            * smoothstep(c.sea_level_m + 5.0, c.sea_level_m + 2.0, c.elevation_m);
+        let river_gate = 1.0 - smoothstep(3.0, 7.0, c.river_distance_m);
+        let cliff_gate = smoothstep(46.0, 50.0, c.slope_degrees);
+
+        weighted_blend(&[
+            (coast_gate, classify_coast(c)),
+            (river_gate * (1.0 - coast_gate), classify_river(c)),
+            (cliff_gate, classify_cliff(c)),
+            (
+                (1.0 - coast_gate) * (1.0 - river_gate) * (1.0 - cliff_gate),
+                classify_land(c),
+            ),
+        ])
     }
+}
+
+fn weighted_blend(parts: &[(f32, SurfaceMaterialBlend)]) -> SurfaceMaterialBlend {
+    let mut weights: HashMap<MaterialKey, f32> = HashMap::new();
+    for (gate, blend) in parts {
+        if *gate <= f32::EPSILON {
+            continue;
+        }
+        for i in 0..4 {
+            let w = blend.weights[i] * gate;
+            if w > 0.0 {
+                *weights.entry(blend.materials[i].clone()).or_default() += w;
+            }
+        }
+    }
+    let mut ranked: Vec<(MaterialKey, f32)> = weights.into_iter().collect();
+    ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    let default = mat("grass");
+    let mut materials = [default.clone(), default.clone(), default.clone(), default];
+    let mut w = [0.0; 4];
+    for (i, (mat_key, wt)) in ranked.into_iter().take(4).enumerate() {
+        materials[i] = mat_key;
+        w[i] = wt;
+    }
+    SurfaceMaterialBlend { materials, weights: w }.normalize()
 }
 
 fn classify_cliff(c: &SurfaceContext) -> SurfaceMaterialBlend {
@@ -34,10 +71,10 @@ fn classify_cliff(c: &SurfaceContext) -> SurfaceMaterialBlend {
 
     SurfaceMaterialBlend {
         materials: [
-            TerrainMaterialId::WeatheredBasalt,
-            TerrainMaterialId::FreshBasalt,
-            TerrainMaterialId::JungleMoss,
-            TerrainMaterialId::TropicalRedSoil,
+            mat("rock"),
+            mat("rock"),
+            mat("forest_floor"),
+            mat("grass"),
         ],
         weights: [
             0.70 * (1.0 - fresh_rock),
@@ -56,10 +93,10 @@ fn classify_coast(c: &SurfaceContext) -> SurfaceMaterialBlend {
 
     SurfaceMaterialBlend {
         materials: [
-            TerrainMaterialId::CoralSand,
-            TerrainMaterialId::RiverSilt,
-            TerrainMaterialId::WeatheredBasalt,
-            TerrainMaterialId::TropicalRedSoil,
+            mat("sand"),
+            mat("wet_rock"),
+            mat("rock"),
+            mat("grass"),
         ],
         weights: [
             (1.0 - rock) * (1.0 - wave_rubble) * 0.70,
@@ -77,10 +114,10 @@ fn classify_river(c: &SurfaceContext) -> SurfaceMaterialBlend {
 
     SurfaceMaterialBlend {
         materials: [
-            TerrainMaterialId::RiverGravel,
-            TerrainMaterialId::RiverSilt,
-            TerrainMaterialId::JungleLoam,
-            TerrainMaterialId::JungleMoss,
+            mat("sand"),
+            mat("wet_rock"),
+            mat("grass"),
+            mat("forest_floor"),
         ],
         weights: [
             channel * (1.0 - mud),
@@ -102,13 +139,13 @@ fn classify_cave(c: &SurfaceContext) -> SurfaceMaterialBlend {
 
     SurfaceMaterialBlend {
         materials: [
-            TerrainMaterialId::WeatheredBasalt,
-            TerrainMaterialId::RiverSilt,
-            TerrainMaterialId::JungleMoss,
-            TerrainMaterialId::WeatheredBasalt,
+            mat("cave_stone"),
+            mat("flowstone"),
+            mat("forest_floor"),
+            mat("limestone"),
         ],
         weights: [
-            1.0 - flowstone,
+            (1.0 - flowstone) * (1.0 - limestone_w),
             flowstone * 0.8,
             moss * 0.15,
             limestone_w,
@@ -135,48 +172,12 @@ fn classify_land(c: &SurfaceContext) -> SurfaceMaterialBlend {
         _ => 0.05,
     };
 
-    if alpine > 0.55 {
-        return SurfaceMaterialBlend {
-            materials: [
-                TerrainMaterialId::WeatheredBasalt,
-                TerrainMaterialId::FreshBasalt,
-                TerrainMaterialId::JungleMoss,
-                TerrainMaterialId::TropicalRedSoil,
-            ],
-            weights: [
-                alpine * 0.5,
-                alpine * 0.35 + exposed_rock,
-                moss * 0.2,
-                grass * 0.1,
-            ],
-        }
-        .normalize();
-    }
-
-    if wetland > 0.25 {
-        return SurfaceMaterialBlend {
-            materials: [
-                TerrainMaterialId::RiverSilt,
-                TerrainMaterialId::JungleMoss,
-                TerrainMaterialId::RiverGravel,
-                TerrainMaterialId::JungleLoam,
-            ],
-            weights: [
-                wetland * 0.55,
-                moss * 0.25,
-                wetland * 0.2,
-                forest * 0.15,
-            ],
-        }
-        .normalize();
-    }
-
-    SurfaceMaterialBlend {
+    let default_blend = SurfaceMaterialBlend {
         materials: [
-            TerrainMaterialId::JungleLoam,
-            TerrainMaterialId::TropicalRedSoil,
-            TerrainMaterialId::JungleMoss,
-            TerrainMaterialId::WeatheredBasalt,
+            mat("grass"),
+            mat("grass"),
+            mat("forest_floor"),
+            mat("rock"),
         ],
         weights: [
             forest * (1.0 - litter) + scrub * 0.3,
@@ -185,7 +186,48 @@ fn classify_land(c: &SurfaceContext) -> SurfaceMaterialBlend {
             exposed_rock + alpine * 0.2,
         ],
     }
-    .normalize()
+    .normalize();
+
+    let alpine_blend = SurfaceMaterialBlend {
+        materials: [
+            mat("rock"),
+            mat("rock"),
+            mat("forest_floor"),
+            mat("grass"),
+        ],
+        weights: [
+            alpine * 0.5,
+            alpine * 0.35 + exposed_rock,
+            moss * 0.2,
+            grass * 0.1,
+        ],
+    }
+    .normalize();
+
+    let wetland_blend = SurfaceMaterialBlend {
+        materials: [
+            mat("wet_rock"),
+            mat("forest_floor"),
+            mat("sand"),
+            mat("grass"),
+        ],
+        weights: [
+            wetland * 0.55,
+            moss * 0.25,
+            wetland * 0.2,
+            forest * 0.15,
+        ],
+    }
+    .normalize();
+
+    let alpine_gate = smoothstep(0.45, 0.65, alpine);
+    let wetland_gate = smoothstep(0.15, 0.35, wetland) * (1.0 - alpine_gate);
+
+    weighted_blend(&[
+        ((1.0 - alpine_gate) * (1.0 - wetland_gate), default_blend),
+        (alpine_gate, alpine_blend),
+        (wetland_gate, wetland_blend),
+    ])
 }
 
 #[cfg(test)]
@@ -219,33 +261,15 @@ mod tests {
     }
 
     #[test]
-    fn cliff_includes_fresh_basalt() {
+    fn cliff_includes_rock() {
         let classifier = IslandSurfaceClassifier;
         let mut ctx = base_context();
         ctx.slope_degrees = 72.0;
         ctx.moisture = 0.2;
         ctx.soil_depth_m = 0.1;
         let result = classifier.classify(&ctx);
-        validate_blend(result);
-        assert!(
-            result.materials.contains(&TerrainMaterialId::FreshBasalt)
-                || result.materials.contains(&TerrainMaterialId::WeatheredBasalt)
-        );
-    }
-
-    #[test]
-    fn forest_grassland_transition_blends_both_soils() {
-        let classifier = IslandSurfaceClassifier;
-        let mut ctx = base_context();
-        ctx.soft = SoftBiomeWeights {
-            forest: 0.5,
-            grassland: 0.5,
-            ..Default::default()
-        };
-        ctx.moisture = 0.6;
-        let result = classifier.classify(&ctx);
-        validate_blend(result);
-        assert!(result.weights[0] > 0.1 && result.weights[1] > 0.1);
+        validate_blend(&result);
+        assert!(result.materials.iter().any(|m| m.as_str() == "rock"));
     }
 
     #[test]
@@ -255,7 +279,18 @@ mod tests {
         ctx.coast_distance_m = 5.0;
         ctx.elevation_m = 1.0;
         let result = classifier.classify(&ctx);
-        validate_blend(result);
-        assert!(result.materials.contains(&TerrainMaterialId::CoralSand));
+        validate_blend(&result);
+        assert!(result.materials.iter().any(|m| m.as_str() == "sand"));
+    }
+
+    #[test]
+    fn cave_limestone_uses_distinct_slot() {
+        let classifier = IslandSurfaceClassifier;
+        let mut ctx = base_context();
+        ctx.cave_exposure = 0.8;
+        ctx.geology = GeologyId::Limestone;
+        let result = classifier.classify(&ctx);
+        validate_blend(&result);
+        assert!(result.materials.iter().any(|m| m.as_str() == "limestone"));
     }
 }

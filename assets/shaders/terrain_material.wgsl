@@ -18,8 +18,15 @@ struct TerrainSettings {
 }
 
 struct TerrainLayerScales {
-    scales0: vec4<f32>,
-    scales1: vec4<f32>,
+    count: u32,
+    _padding0: u32,
+    _padding1: u32,
+    _padding2: u32,
+    scales: array<vec4<f32>, 16>,
+}
+
+struct ChunkSlotPaletteUniform {
+    local_to_global: array<vec4<u32>, 2>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var albedo_array: texture_2d_array<f32>;
@@ -30,12 +37,23 @@ struct TerrainLayerScales {
 @group(#{MATERIAL_BIND_GROUP}) @binding(5) var ormh_sampler: sampler;
 @group(#{MATERIAL_BIND_GROUP}) @binding(6) var<uniform> settings: TerrainSettings;
 @group(#{MATERIAL_BIND_GROUP}) @binding(7) var<uniform> layer_scales: TerrainLayerScales;
+@group(#{MATERIAL_BIND_GROUP}) @binding(8) var<uniform> chunk_slots: ChunkSlotPaletteUniform;
 
 fn layer_scale(layer: u32) -> f32 {
-    if layer < 4u {
-        return layer_scales.scales0[layer];
+    if layer >= layer_scales.count {
+        return 1.0;
     }
-    return layer_scales.scales1[layer - 4u];
+    let chunk = layer / 4u;
+    let component = layer % 4u;
+    let row = layer_scales.scales[chunk];
+    if component == 0u {
+        return row.x;
+    } else if component == 1u {
+        return row.y;
+    } else if component == 2u {
+        return row.z;
+    }
+    return row.w;
 }
 
 fn triplanar_weights(n: vec3<f32>) -> vec3<f32> {
@@ -48,27 +66,51 @@ fn triplanar_weights(n: vec3<f32>) -> vec3<f32> {
     return w / sum;
 }
 
-fn sample_triplanar_albedo(layer: u32, world_pos: vec3<f32>, world_normal: vec3<f32>) -> vec3<f32> {
+fn sample_triplanar_albedo(
+    layer: u32,
+    world_pos: vec3<f32>,
+    world_normal: vec3<f32>,
+    ddx_p: vec3<f32>,
+    ddy_p: vec3<f32>,
+) -> vec3<f32> {
     let scale = settings.global_texture_scale / max(layer_scale(layer), 0.01);
     let blend = triplanar_weights(world_normal);
     let uv_x = world_pos.zy * scale;
     let uv_y = world_pos.xz * scale;
     let uv_z = world_pos.xy * scale;
-    let cx = textureSampleLevel(albedo_array, albedo_sampler, uv_x, i32(layer), 0.0).rgb;
-    let cy = textureSampleLevel(albedo_array, albedo_sampler, uv_y, i32(layer), 0.0).rgb;
-    let cz = textureSampleLevel(albedo_array, albedo_sampler, uv_z, i32(layer), 0.0).rgb;
+    let ddx_x = ddx_p.zy * scale;
+    let ddy_x = ddy_p.zy * scale;
+    let ddx_y = ddx_p.xz * scale;
+    let ddy_y = ddy_p.xz * scale;
+    let ddx_z = ddx_p.xy * scale;
+    let ddy_z = ddy_p.xy * scale;
+    let cx = textureSampleGrad(albedo_array, albedo_sampler, uv_x, i32(layer), ddx_x, ddy_x).rgb;
+    let cy = textureSampleGrad(albedo_array, albedo_sampler, uv_y, i32(layer), ddx_y, ddy_y).rgb;
+    let cz = textureSampleGrad(albedo_array, albedo_sampler, uv_z, i32(layer), ddx_z, ddy_z).rgb;
     return cx * blend.x + cy * blend.y + cz * blend.z;
 }
 
-fn sample_triplanar_ormh(layer: u32, world_pos: vec3<f32>, world_normal: vec3<f32>) -> vec4<f32> {
+fn sample_triplanar_ormh(
+    layer: u32,
+    world_pos: vec3<f32>,
+    world_normal: vec3<f32>,
+    ddx_p: vec3<f32>,
+    ddy_p: vec3<f32>,
+) -> vec4<f32> {
     let scale = settings.global_texture_scale / max(layer_scale(layer), 0.01);
     let blend = triplanar_weights(world_normal);
     let uv_x = world_pos.zy * scale;
     let uv_y = world_pos.xz * scale;
     let uv_z = world_pos.xy * scale;
-    let cx = textureSampleLevel(ormh_array, ormh_sampler, uv_x, i32(layer), 0.0);
-    let cy = textureSampleLevel(ormh_array, ormh_sampler, uv_y, i32(layer), 0.0);
-    let cz = textureSampleLevel(ormh_array, ormh_sampler, uv_z, i32(layer), 0.0);
+    let ddx_x = ddx_p.zy * scale;
+    let ddy_x = ddy_p.zy * scale;
+    let ddx_y = ddx_p.xz * scale;
+    let ddy_y = ddy_p.xz * scale;
+    let ddx_z = ddx_p.xy * scale;
+    let ddy_z = ddy_p.xy * scale;
+    let cx = textureSampleGrad(ormh_array, ormh_sampler, uv_x, i32(layer), ddx_x, ddy_x);
+    let cy = textureSampleGrad(ormh_array, ormh_sampler, uv_y, i32(layer), ddx_y, ddy_y);
+    let cz = textureSampleGrad(ormh_array, ormh_sampler, uv_z, i32(layer), ddx_z, ddy_z);
     return cx * blend.x + cy * blend.y + cz * blend.z;
 }
 
@@ -76,16 +118,28 @@ fn decode_normal(sample: vec4<f32>) -> vec3<f32> {
     return normalize(sample.xyz * 2.0 - vec3<f32>(1.0, 1.0, 1.0));
 }
 
-fn sample_triplanar_normal(layer: u32, world_pos: vec3<f32>, world_normal: vec3<f32>) -> vec3<f32> {
+fn sample_triplanar_normal(
+    layer: u32,
+    world_pos: vec3<f32>,
+    world_normal: vec3<f32>,
+    ddx_p: vec3<f32>,
+    ddy_p: vec3<f32>,
+) -> vec3<f32> {
     let scale = settings.global_texture_scale / max(layer_scale(layer), 0.01);
     let blend = triplanar_weights(world_normal);
     let uv_x = world_pos.zy * scale;
     let uv_y = world_pos.xz * scale;
     let uv_z = world_pos.xy * scale;
+    let ddx_x = ddx_p.zy * scale;
+    let ddy_x = ddy_p.zy * scale;
+    let ddx_y = ddx_p.xz * scale;
+    let ddy_y = ddy_p.xz * scale;
+    let ddx_z = ddx_p.xy * scale;
+    let ddy_z = ddy_p.xy * scale;
 
-    let sx = decode_normal(textureSampleLevel(normal_array, normal_sampler, uv_x, i32(layer), 0.0));
-    let sy = decode_normal(textureSampleLevel(normal_array, normal_sampler, uv_y, i32(layer), 0.0));
-    let sz = decode_normal(textureSampleLevel(normal_array, normal_sampler, uv_z, i32(layer), 0.0));
+    let sx = decode_normal(textureSampleGrad(normal_array, normal_sampler, uv_x, i32(layer), ddx_x, ddy_x));
+    let sy = decode_normal(textureSampleGrad(normal_array, normal_sampler, uv_y, i32(layer), ddx_y, ddy_y));
+    let sz = decode_normal(textureSampleGrad(normal_array, normal_sampler, uv_z, i32(layer), ddx_z, ddy_z));
 
     var nx = normalize(vec3<f32>(sx.z, sx.y, sx.x));
     var ny = normalize(vec3<f32>(sy.x, sy.z, sy.y));
@@ -96,6 +150,29 @@ fn sample_triplanar_normal(layer: u32, world_pos: vec3<f32>, world_normal: vec3<
     nz.z *= select(-1.0, 1.0, world_normal.z >= 0.0);
 
     return normalize(nx * blend.x + ny * blend.y + nz * blend.z);
+}
+
+fn global_layer_for_local(local: u32) -> u32 {
+    if local >= 8u {
+        return 0u;
+    }
+    let chunk = local / 4u;
+    let component = local % 4u;
+    let row = chunk_slots.local_to_global[chunk];
+    var mapped: u32;
+    if component == 0u {
+        mapped = row.x;
+    } else if component == 1u {
+        mapped = row.y;
+    } else if component == 2u {
+        mapped = row.z;
+    } else {
+        mapped = row.w;
+    }
+    if mapped >= 4294967295u {
+        return 0u;
+    }
+    return mapped;
 }
 
 @vertex
@@ -129,54 +206,113 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     let world_pos = in.world_position.xyz;
     let world_normal = normalize(in.world_normal);
 
-#ifdef VERTEX_UVS_B
-    let ids = vec4<f32>(in.uv.x, in.uv.y, in.uv_b.x, in.uv_b.y);
-#else
-#ifdef VERTEX_UVS_A
-    let ids = vec4<f32>(in.uv.x, in.uv.y, 0.0, 0.0);
-#else
-    let ids = vec4<f32>(0.0, 0.0, 0.0, 0.0);
-#endif
-#endif
 #ifdef VERTEX_COLORS
     let weights = in.color;
 #else
     let weights = vec4<f32>(1.0, 0.0, 0.0, 0.0);
 #endif
+#ifdef VERTEX_UVS_A
+    let idx01 = in.uv;
+#else
+    let idx01 = vec2<f32>(0.0, 0.0);
+#endif
+#ifdef VERTEX_UVS_B
+    let idx23 = in.uv_b;
+#else
+    let idx23 = vec2<f32>(0.0, 0.0);
+#endif
 
     if settings.debug_mode == 2u {
-        return vec4<f32>(0.34, 0.52, 0.28, 1.0);
+        return vec4<f32>(1.0, 0.0, 1.0, 1.0);
     }
+
+    let ddx_p = dpdx(world_pos);
+    let ddy_p = dpdy(world_pos);
 
     var albedo = vec3<f32>(0.0);
     var roughness = 0.0;
     var metallic = 0.0;
+    var occlusion = 0.0;
     var detail_normal = vec3<f32>(0.0, 0.0, 0.0);
 
+    var local_indices = array<u32, 4>(
+        u32(idx01.x),
+        u32(idx01.y),
+        u32(idx23.x),
+        u32(idx23.y),
+    );
+    var blend_weights = array<f32, 4>(weights.x, weights.y, weights.z, weights.w);
+
+    var height_weights = array<f32, 4>(0.0, 0.0, 0.0, 0.0);
+    var height_sum = 0.0;
+    let height_k = settings.height_blend_strength;
+
     for (var i = 0u; i < 4u; i = i + 1u) {
-        let layer = u32(ids[i] + 0.5);
-        let w = weights[i];
-        if w > 0.001 && layer < settings.layer_count {
-            albedo += sample_triplanar_albedo(layer, world_pos, world_normal) * w;
-            detail_normal += sample_triplanar_normal(layer, world_pos, world_normal) * w;
-            let ormh = sample_triplanar_ormh(layer, world_pos, world_normal);
-            roughness += ormh.g * w;
-            metallic += ormh.b * w;
+        let w = blend_weights[i];
+        if w <= 0.001 {
+            continue;
+        }
+        let global_layer = global_layer_for_local(local_indices[i]);
+        if global_layer >= settings.layer_count {
+            continue;
+        }
+        let ormh = sample_triplanar_ormh(global_layer, world_pos, world_normal, ddx_p, ddy_p);
+        let h = max(ormh.a, 0.01);
+        let hw = w * pow(h, height_k);
+        height_weights[i] = hw;
+        height_sum += hw;
+    }
+
+    if height_sum > 0.001 {
+        for (var i = 0u; i < 4u; i = i + 1u) {
+            blend_weights[i] = height_weights[i] / height_sum;
         }
     }
 
-    let weight_sum = weights.x + weights.y + weights.z + weights.w;
+    var weight_sum = 0.0;
+    for (var i = 0u; i < 4u; i = i + 1u) {
+        let w = blend_weights[i];
+        if w <= 0.001 {
+            continue;
+        }
+        let global_layer = global_layer_for_local(local_indices[i]);
+        if global_layer >= settings.layer_count {
+            continue;
+        }
+        albedo += sample_triplanar_albedo(global_layer, world_pos, world_normal, ddx_p, ddy_p) * w;
+        detail_normal += sample_triplanar_normal(global_layer, world_pos, world_normal, ddx_p, ddy_p) * w;
+        let ormh = sample_triplanar_ormh(global_layer, world_pos, world_normal, ddx_p, ddy_p);
+        occlusion += ormh.r * w;
+        roughness += ormh.g * w;
+        metallic += ormh.b * w;
+        weight_sum += w;
+    }
+
     if weight_sum < 0.001 {
-        albedo = sample_triplanar_albedo(0u, world_pos, world_normal);
-        detail_normal = sample_triplanar_normal(0u, world_pos, world_normal);
+        albedo = sample_triplanar_albedo(0u, world_pos, world_normal, ddx_p, ddy_p);
+        detail_normal = sample_triplanar_normal(0u, world_pos, world_normal, ddx_p, ddy_p);
+        let ormh = sample_triplanar_ormh(0u, world_pos, world_normal, ddx_p, ddy_p);
+        occlusion = ormh.r;
         roughness = 0.85;
+        weight_sum = 1.0;
     } else {
+        albedo /= weight_sum;
+        roughness /= weight_sum;
+        metallic /= weight_sum;
+        occlusion /= weight_sum;
         detail_normal = normalize(detail_normal / weight_sum);
     }
 
     if settings.debug_mode == 1u {
-        let layer = u32(ids.x + 0.5);
-        let hue = f32(layer) / max(f32(settings.layer_count), 1.0);
+        var dominant = 0u;
+        var dominant_w = 0.0;
+        for (var i = 0u; i < 4u; i = i + 1u) {
+            if blend_weights[i] > dominant_w {
+                dominant_w = blend_weights[i];
+                dominant = global_layer_for_local(local_indices[i]);
+            }
+        }
+        let hue = f32(dominant) / max(f32(settings.layer_count), 1.0);
         return vec4<f32>(hue, 0.5, 1.0 - hue, 1.0);
     }
 
@@ -193,6 +329,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     pbr_input.material.base_color = vec4<f32>(albedo, 1.0);
     pbr_input.material.perceptual_roughness = clamp(roughness, 0.04, 1.0);
     pbr_input.material.metallic = clamp(metallic, 0.0, 1.0);
+    pbr_input.diffuse_occlusion = vec3<f32>(occlusion);
 
     let lit = apply_pbr_lighting(pbr_input);
     return main_pass_post_lighting_processing(pbr_input, lit);

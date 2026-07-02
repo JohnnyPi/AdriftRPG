@@ -1,3 +1,4 @@
+// crates/game_bevy/src/ui/options_panel.rs
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 

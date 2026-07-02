@@ -1,3 +1,4 @@
+// crates/game_bevy/src/camera/transform.rs
 use bevy::prelude::*;
 
 use super::components::{CameraDebugSnapshot, MainGameCamera, MmoCamera};

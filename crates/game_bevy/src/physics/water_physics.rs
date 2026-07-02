@@ -1,3 +1,4 @@
+// crates/game_bevy/src/physics/water_physics.rs
 //! Water physics — buoyancy, flow, shallow movement (VS2 Phase 11).
 
 use avian3d::prelude::*;

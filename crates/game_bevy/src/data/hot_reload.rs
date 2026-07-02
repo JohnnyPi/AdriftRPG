@@ -1,3 +1,4 @@
+// crates/game_bevy/src/data/hot_reload.rs
 use bevy::prelude::*;
 
 use crate::data::ConfigRegistryResource;
@@ -73,7 +74,7 @@ fn reload_procedural_terrain_material(
     pending.task = None;
     if let Some(override_recipes) = recipe_override
         .as_ref()
-        .and_then(|override_recipes| override_recipes.0.as_ref())
+        .and_then(|override_recipes| override_recipes.recipes.as_ref())
     {
         proc_state.recipe_fingerprint =
             terrain_material_bevy::recipe_fingerprint_for(override_recipes);

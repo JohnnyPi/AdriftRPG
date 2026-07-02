@@ -1,3 +1,4 @@
+// crates/game_bevy/src/terrain/mesh_convert.rs
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
@@ -26,26 +27,26 @@ pub fn mesh_from_terrain_data(data: &TerrainMeshData, cell_size_m: f32) -> Mesh 
             .collect::<Vec<_>>(),
     );
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, data.normals.clone());
-    if !data.material_ids.is_empty() {
+    if !data.material_vertices.is_empty() {
+        mesh.insert_attribute(
+            Mesh::ATTRIBUTE_COLOR,
+            data.material_vertices
+                .iter()
+                .map(|v| [v.weights[0], v.weights[1], v.weights[2], v.weights[3]])
+                .collect::<Vec<_>>(),
+        );
         mesh.insert_attribute(
             Mesh::ATTRIBUTE_UV_0,
-            data.material_ids
+            data.material_vertices
                 .iter()
-                .map(|ids| [ids[0] as f32, ids[1] as f32])
+                .map(|v| [v.local_indices[0] as f32, v.local_indices[1] as f32])
                 .collect::<Vec<_>>(),
         );
         mesh.insert_attribute(
             Mesh::ATTRIBUTE_UV_1,
-            data.material_ids
+            data.material_vertices
                 .iter()
-                .map(|ids| [ids[2] as f32, ids[3] as f32])
-                .collect::<Vec<_>>(),
-        );
-        mesh.insert_attribute(
-            Mesh::ATTRIBUTE_COLOR,
-            data.material_weights
-                .iter()
-                .map(|w| [w[0], w[1], w[2], w[3]])
+                .map(|v| [v.local_indices[2] as f32, v.local_indices[3] as f32])
                 .collect::<Vec<_>>(),
         );
     }

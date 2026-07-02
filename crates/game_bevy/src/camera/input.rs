@@ -1,3 +1,4 @@
+// crates/game_bevy/src/camera/input.rs
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow, WindowFocused};
 

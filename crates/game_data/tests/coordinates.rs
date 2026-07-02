@@ -1,3 +1,4 @@
+// crates/game_data/tests/coordinates.rs
 use game_data::{validate_definitions, CompiledWorld, RawDefinition, WorldChunksDefinition, WorldDefinition, WorldVoxelDefinition};
 use shared::{DataError, DefinitionHeader, StableId};
 
@@ -12,6 +13,7 @@ fn recipe_to_world_subtracts_coord_offset() {
         terrain: StableId::new("terrain.test"),
         biomes: StableId::new("biomes.test"),
         materials: StableId::new("materials.test"),
+        surface: StableId::new("surface.test"),
         water: StableId::new("water.test"),
         lighting: StableId::new("lighting.test"),
         sky: None,
@@ -46,6 +48,7 @@ fn rejects_non_unit_cell_size() {
         terrain: StableId::new("terrain.test"),
         biomes: StableId::new("biomes.test"),
         materials: StableId::new("materials.test"),
+        surface: None,
         water: StableId::new("water.test"),
         lighting: StableId::new("lighting.test"),
         sky: None,

@@ -1,3 +1,4 @@
+// crates/game_bevy/src/ui/mod.rs
 mod hud;
 mod main_menu;
 mod options_panel;

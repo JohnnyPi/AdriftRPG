@@ -1,3 +1,4 @@
+// crates/game_bevy/src/camera/follow.rs
 use bevy::prelude::*;
 
 use crate::data::ConfigRegistryResource;

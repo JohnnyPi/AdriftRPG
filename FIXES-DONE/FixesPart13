@@ -1,0 +1,35 @@
+# Installment 13: the config layer — definitions, compile, load, validation
+
+**Files:** `game_data/src/definitions.rs` (1283, scanned), `…/compile.rs` (915, scanned), `…/load.rs` (189), `…/hash.rs` (9), `terrain_generation/src/island_gen/validate.rs` (99), plus `coordinates.rs` (the test that settles an old claim). Note: `game_data/src/validate.rs` is collision casualty #5 — but its *behavior* is partially recoverable from tests, and it changes a verdict:
+
+## Correction: Bug 3 is withdrawn — `cell_size_m` IS validated
+
+Installment 1 claimed `cell_size_m ≠ 1.0` was "representable but unenforced," based on grepping the visible files. The `coordinates.rs` test proves otherwise: `validate_definitions` rejects it with `"cell_size_m must be 1.0"` (`rejects_non_unit_cell_size`), and `registry.rs:51` runs `validate_definitions(...).into_result()?` **before** compiling — so a 0.5 m world cannot load. The gap I reported doesn't exist; the collided `game_data/validate.rs` hid the enforcement. My error — the confirmed/suspected discipline should have kept that one at "suspected" until the validator was in hand.
+
+What survives of Bug 3, downgraded to a roadmap note: `voxel_core`'s integer-meter assumption (`WorldCell`, `fill_chunk_from_density`, `surface.rs` round-trips) still means the project's stated **0.5–1 m voxel target requires the unit-threading work** before that validator rule can be relaxed — the guard is correct, the capability is still missing. And the single-profile test in `validation.rs:211` is now just redundant with the real validator; delete it or make it iterate all worlds.
+
+(This also raises my confidence that `validate_definitions` covers referential integrity, which would justify the `expect("world")`/`expect("water")` family — M13/M42 — as validated invariants. If you send `game_data/validate.rs` as `game_data-validate.rs` I'll confirm coverage; otherwise I'll treat it as probable in the synthesis.)
+
+## Findings in `validate_atlas` (the terrain-side validator)
+
+The checks it has are the right kind — edges-underwater, minimum land area, river presence, peak height — but three calibration defects blunt them:
+
+**Bug 53 — thresholds are hardcoded where they must derive from config.** `max_h < sea + 40.0` fails *every* world configured with `maximum_height_m < 40`, regardless of whether the terrain matched its config perfectly; and `min_land = 50` **cells** changes meaning with resolution (50 cells is 3,200 m² at 8 m spacing but 51,200 m² at 32 m — the same island passes at one resolution and fails at another). Repair: `peak ≥ sea + 0.5·params.island.maximum_height_m`, and express land area in m² (`cells × spacing²`) against a params-derived floor. **Severity:** Medium — a validator that cries wolf (or goes silent) on config changes trains people to ignore it, and M22 already showed the runtime ignores it.
+
+**Bug 54 — the river check tests presence, not sanity.** `river_graph.is_some()` passes the current Bug-32-era river — a summit-sourced trace over broken accumulation. Add the invariant from Bug 29's regression test right here: consecutive control points non-increasing in filled elevation, and the mouth below `sea + 0.5`. That converts this validator into the thing that would have caught Bugs 32/34 the week they were written.
+
+Also worth noting positively: the edges-underwater check reads `elevation_regional.get` directly (not the Bug-4 sampler), so it's immune to the edge-sentinel problem it's adjacent to.
+
+## Config schema quality — mostly a clean bill
+
+**Schema strictness is real:** `#[serde(deny_unknown_fields)]` appears on 76 types, so a typo'd YAML *key* is a load error, not silence. This matters for diagnosis: the dead-config family (Bugs 15, 18, 19, 21, 28, M16, M37 — now eight instances) is **not** a loose-schema problem. Every one is a *parsed-but-unread field* — the failure mode schema strictness cannot catch, which is why the synthesis will recommend a "config liveness" test pattern (perturb each field, assert some output changes) rather than more schema work.
+
+**Load path is solid:** duplicate `StableId` detection reports both file paths; `WalkDir` order can't leak into behavior because the registry is `BTreeMap` end to end; compile is strict (exactly one `unwrap_or` in 915 lines — the documented `coord_offset` default).
+
+**Bug 55 — `canonical_bytes` is hand-maintained, the same disease as Bug 17.** `registry_hash` serializes the registry by manually appending each field (`hash.rs` → `registry.rs::canonical_bytes`). Every new compiled field must be remembered here or the hash under-reports changes — exactly how `terrain_recipe_hash` rotted. The visible portion covers world fields well, but the pattern guarantees drift. Repair for both hashes at once: derive the bytes from a `serde` serialization of the compiled structs (`serde_json::to_vec` into SHA-256 — you already depend on both), so new fields are hashed by construction. **Severity:** Medium, preventive.
+
+**Validation backlog (the config layer's real deliverable).** The review has accumulated a list of rules that belong in `validate_definitions`/compile rather than where their failures currently surface: unknown `combine`/`coast_modifier` strings → error, not silent Union/Cove (Bug 18); `cliff_shelf` → error until implemented (Bug 15); `chamber_count_min ≤ max`, both honored (Bug 19); at most one `coastal_surface` op (Bug 22); atlas-incompatible op types in island-gen worlds → error (Bug 23); `world.chunk_cells == [16,16,16]` — today a wrong value loads fine and every chunk fails at *mesh time* via `surface_nets`' runtime check (late, per-chunk, noisy); and the material-list order guard (Bug 42). Each is a few lines next to the `cell_size_m` rule that already demonstrates the pattern.
+
+## What's verified good
+
+The config layer is the strongest layer in the codebase, and the correction above is evidence of it: enforcement I assumed missing was present and tested. Strict schemas, duplicate detection with actionable errors, deterministic load, validation-before-compile ordering, a faithful compile step with one documented default, SHA-256 (stable, unlike `DefaultHasher`) for the registry hash — this is the discipline the generation layers need imported. `validate_atlas` has the right instincts and just needs its thresholds tied to params and one river invariant. And `coordinates.rs`'s `recipe_to_world_subtracts_coord_offset` pins the coordinate convention in a test — the Part 3 audit's ideal artifact.

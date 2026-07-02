@@ -1,3 +1,4 @@
+// crates/game_bevy/src/world/mod.rs
 mod preview;
 mod profile;
 

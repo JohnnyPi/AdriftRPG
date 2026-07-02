@@ -1,3 +1,4 @@
+// crates/game_bevy/src/world/profile.rs
 //! World profile selection override from options panel.
 
 use bevy::prelude::*;

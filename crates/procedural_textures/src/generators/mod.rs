@@ -1,3 +1,4 @@
+// crates/procedural_textures/src/generators/mod.rs
 mod cobblestone;
 mod ground;
 mod rock;

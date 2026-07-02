@@ -1,3 +1,4 @@
+// crates/procedural_textures/src/error.rs
 #[derive(Debug, thiserror::Error)]
 pub enum TextureGenerationError {
     #[error("texture dimensions must be non-zero")]

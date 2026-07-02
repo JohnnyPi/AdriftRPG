@@ -1,3 +1,4 @@
+// crates/voxel_core/src/sample.rs
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]

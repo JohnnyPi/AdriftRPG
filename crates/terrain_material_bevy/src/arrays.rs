@@ -1,3 +1,4 @@
+// crates/terrain_material_bevy/src/arrays.rs
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{Image, ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::prelude::*;

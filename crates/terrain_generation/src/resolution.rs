@@ -1,3 +1,4 @@
+// crates/terrain_generation/src/resolution.rs
 //! Generation resolution tiers (PhasedExpansionPlan §2.2).
 
 use std::fmt;
@@ -152,7 +153,8 @@ fn integer_ratio(coarse: f32, fine: f32) -> bool {
 }
 
 fn check_grid_size(extent_m: f32, spacing_m: f32, tier: &'static str) -> Result<(), ResolutionError> {
-    let cells = grid_dims(extent_m, spacing_m).0.max(grid_dims(extent_m, spacing_m).1);
+    let dims = grid_dims(extent_m, spacing_m);
+    let cells = dims.0.max(dims.1);
     if cells > MAX_GRID_AXIS {
         return Err(ResolutionError::GridTooLarge { tier, cells });
     }

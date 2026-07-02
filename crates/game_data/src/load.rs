@@ -1,3 +1,4 @@
+// crates/game_data/src/load.rs
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -109,6 +110,8 @@ fn parse_yaml_file(path: &Path, text: &str) -> DataResult<RawDefinition> {
         RawDefinition::Biomes(deserialize(path, text)?)
     } else if id.starts_with("materials.") {
         RawDefinition::TerrainMaterials(deserialize(path, text)?)
+    } else if id.starts_with("surface.") {
+        RawDefinition::SurfaceRules(deserialize(path, text)?)
     } else if id.starts_with("vegetation.") {
         RawDefinition::Vegetation(deserialize(path, text)?)
     } else if id.starts_with("cave.") {

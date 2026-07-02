@@ -1,3 +1,4 @@
+// crates/game_bevy/src/state.rs
 use bevy::prelude::*;
 
 #[derive(Clone, Copy, Default, Eq, PartialEq, Debug, Hash, States)]

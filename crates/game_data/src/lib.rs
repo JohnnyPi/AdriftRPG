@@ -1,3 +1,4 @@
+// crates/game_data/src/lib.rs
 //! Typed YAML definitions, validation, and compiled configuration registry.
 
 mod compile;
@@ -13,7 +14,7 @@ pub use compile::{
     CompiledLandmarkFact, CompiledLandmarks, CompiledLandmarkSign, CompiledLighting,
     CompiledOptions, CompiledPerformance, CompiledPhysics, CompiledPlayer, CompiledRiver,
     CompiledRoute, CompiledRoutes, CompiledSetupGroup, CompiledSetupParameter,
-    CompiledSetupPreviewMode, CompiledSetupSchema, CompiledSky, CompiledStructure, CompiledStructurePart, CompiledTerrain, CompiledTerrainMaterials,
+    CompiledSetupPreviewMode, CompiledSetupSchema, CompiledSky, CompiledStructure, CompiledStructurePart, CompiledTerrain, CompiledTerrainMaterials, CompiledSurfaceRules,
     CompiledVegetation, CompiledWater, CompiledWaterBodyMaterial, CompiledWorld,
 };
 pub use definitions::*;

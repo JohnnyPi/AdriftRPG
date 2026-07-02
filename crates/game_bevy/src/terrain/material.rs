@@ -1,7 +1,8 @@
+// crates/game_bevy/src/terrain/material.rs
 use bevy::prelude::*;
 use game_data::{CompiledTerrainMaterials, TerrainMaterialEntryDefinition};
 use procedural_textures::{
-    CobblestoneConfig, GroundConfig, RockConfig, SandConfig, TerrainMaterialIdName,
+    texture_recipe_from_yaml_value, CobblestoneConfig, GroundConfig, RockConfig, SandConfig,
     TerrainMaterialRecipe, TextureRecipe,
 };
 use terrain_material_bevy::{
@@ -47,7 +48,10 @@ fn sync_chunk_terrain_materials(
     handle: Res<TerrainMaterialHandle>,
     mut chunks: Query<
         &mut MeshMaterial3d<TerrainPbrMaterial>,
-        With<crate::terrain::TerrainChunkEntity>,
+        (
+            With<crate::terrain::TerrainChunkEntity>,
+            Without<crate::terrain::TerrainChunkMaterial>,
+        ),
     >,
 ) {
     for mut material in &mut chunks {
@@ -94,40 +98,61 @@ fn sync_world_terrain_material_recipes(
     let Some(compiled) = registry.0.materials.get(&world.materials) else {
         return;
     };
-    override_recipes.0 = Some(recipes_from_compiled_materials(compiled));
+    override_recipes.recipes = Some(recipes_from_compiled_palette(compiled));
+    override_recipes.layer_order = Some(
+        compiled
+            .layer_order
+            .iter()
+            .map(|id| id.as_str().to_string())
+            .collect(),
+    );
     state.ready = false;
     pending.task = None;
 }
 
-fn recipes_from_compiled_materials(
+pub fn recipes_from_compiled_palette(
     compiled: &CompiledTerrainMaterials,
 ) -> Vec<TerrainMaterialRecipe> {
-    let max_id = compiled
-        .materials
-        .iter()
-        .map(|entry| entry.id as usize)
-        .max()
-        .unwrap_or(0);
-    let mut recipes = Vec::with_capacity(max_id + 1);
-    for id in 0..=max_id {
-        let recipe = compiled
-            .materials
-            .iter()
-            .find(|entry| entry.id as usize == id)
-            .map(recipe_from_entry)
-            .unwrap_or_else(|| placeholder_recipe(id as u16));
-        recipes.push(recipe);
+    let mut recipes = Vec::with_capacity(compiled.materials.len());
+    for entry in &compiled.materials {
+        recipes.push(recipe_from_entry(entry));
     }
     recipes
 }
 
 fn recipe_from_entry(entry: &TerrainMaterialEntryDefinition) -> TerrainMaterialRecipe {
-    let semantic = classify_material_name(&entry.name);
+    let key = entry.resolved_key();
     let albedo = entry.albedo;
     let roughness = entry.roughness.clamp(0.02, 1.0);
-    let generator = match semantic {
+    let legacy_id = entry.resolved_legacy_id();
+    let generator = if let Some(ref value) = entry.generator {
+        texture_recipe_from_yaml_value(value).unwrap_or_else(|_| {
+            synthesized_generator(&entry.name, legacy_id, albedo, roughness)
+        })
+    } else {
+        synthesized_generator(&entry.name, legacy_id, albedo, roughness)
+    };
+
+    TerrainMaterialRecipe {
+        id: key.as_str().to_string(),
+        resolution: 256,
+        meters_per_repeat: (1.0 / entry.triplanar_scale.max(0.12)).clamp(0.8, 8.0),
+        generator,
+        normal_strength: normal_strength_for_name(&entry.name),
+        tint: [1.0, 1.0, 1.0],
+    }
+}
+
+fn synthesized_generator(
+    name: &str,
+    legacy_id: u16,
+    albedo: [f32; 3],
+    roughness: f32,
+) -> TextureRecipe {
+    let semantic = classify_material_name(name);
+    match semantic {
         MaterialSemantic::Sand => TextureRecipe::Sand(SandConfig {
-            seed: 3_000 + entry.id as u32,
+            seed: 3_000 + legacy_id as u32,
             ripple_scale: 6.0,
             grain_scale: 24.0,
             color_light: brighten(albedo, 1.08),
@@ -136,7 +161,7 @@ fn recipe_from_entry(entry: &TerrainMaterialEntryDefinition) -> TerrainMaterialR
             roughness,
         }),
         MaterialSemantic::Gravel => TextureRecipe::Cobblestone(CobblestoneConfig {
-            seed: 4_000 + entry.id as u32,
+            seed: 4_000 + legacy_id as u32,
             scale: 5.0,
             octaves: 5,
             color_light: brighten(albedo, 1.04),
@@ -145,7 +170,7 @@ fn recipe_from_entry(entry: &TerrainMaterialEntryDefinition) -> TerrainMaterialR
             roughness,
         }),
         MaterialSemantic::Rock | MaterialSemantic::Cave => TextureRecipe::Rock(RockConfig {
-            seed: 1_000 + entry.id as u32,
+            seed: 1_000 + legacy_id as u32,
             scale: 3.0,
             octaves: 6,
             attenuation: 2.0,
@@ -160,7 +185,7 @@ fn recipe_from_entry(entry: &TerrainMaterialEntryDefinition) -> TerrainMaterialR
             metallic: 0.0,
         }),
         MaterialSemantic::Wet | MaterialSemantic::Ground => TextureRecipe::Ground(GroundConfig {
-            seed: 2_000 + entry.id as u32,
+            seed: 2_000 + legacy_id as u32,
             macro_scale: 2.0,
             macro_octaves: 5,
             micro_scale: 10.0,
@@ -186,26 +211,7 @@ fn recipe_from_entry(entry: &TerrainMaterialEntryDefinition) -> TerrainMaterialR
             },
             roughness,
         }),
-    };
-
-    TerrainMaterialRecipe {
-        id: recipe_id_for_name(&entry.name),
-        resolution: 256,
-        meters_per_repeat: (1.0 / entry.triplanar_scale.max(0.12)).clamp(0.8, 8.0),
-        generator,
-        normal_strength: normal_strength_for_semantic(semantic),
-        tint: [1.0, 1.0, 1.0],
     }
-}
-
-fn placeholder_recipe(id: u16) -> TerrainMaterialRecipe {
-    recipe_from_entry(&TerrainMaterialEntryDefinition {
-        id,
-        name: format!("material_{id}"),
-        albedo: [0.34, 0.52, 0.28],
-        triplanar_scale: 0.5,
-        roughness: 0.9,
-    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -220,7 +226,7 @@ enum MaterialSemantic {
 
 fn classify_material_name(name: &str) -> MaterialSemantic {
     let lower = name.to_ascii_lowercase();
-    if lower.contains("cave") {
+    if lower.contains("cave") || lower.contains("flowstone") || lower.contains("limestone") {
         MaterialSemantic::Cave
     } else if lower.contains("gravel") || lower.contains("cobble") {
         MaterialSemantic::Gravel
@@ -235,19 +241,8 @@ fn classify_material_name(name: &str) -> MaterialSemantic {
     }
 }
 
-fn recipe_id_for_name(name: &str) -> TerrainMaterialIdName {
+fn normal_strength_for_name(name: &str) -> f32 {
     match classify_material_name(name) {
-        MaterialSemantic::Cave => TerrainMaterialIdName::CaveBasalt,
-        MaterialSemantic::Gravel => TerrainMaterialIdName::RiverGravel,
-        MaterialSemantic::Sand => TerrainMaterialIdName::CoralSand,
-        MaterialSemantic::Wet => TerrainMaterialIdName::Mud,
-        MaterialSemantic::Rock => TerrainMaterialIdName::WeatheredBasalt,
-        MaterialSemantic::Ground => TerrainMaterialIdName::JungleLoam,
-    }
-}
-
-fn normal_strength_for_semantic(semantic: MaterialSemantic) -> f32 {
-    match semantic {
         MaterialSemantic::Sand => 0.7,
         MaterialSemantic::Wet => 0.85,
         MaterialSemantic::Ground => 0.95,
@@ -287,16 +282,18 @@ mod tests {
     }
 
     #[test]
-    fn compiled_world_materials_become_dense_recipe_layers() {
+    fn compiled_world_materials_become_palette_recipes() {
         let registry = load_registry_from_directory(workspace_assets()).expect("registry");
         let compiled = registry
             .materials
             .get(&shared::StableId::new("materials.expanded_slice"))
             .expect("materials");
-        let recipes = recipes_from_compiled_materials(compiled);
-        assert_eq!(recipes.len(), 7);
-        assert!(recipes[0].meters_per_repeat > recipes[1].meters_per_repeat);
+        let recipes = recipes_from_compiled_palette(compiled);
+        assert_eq!(recipes.len(), compiled.materials.len());
         assert!(recipes.iter().all(|recipe| recipe.resolution == 256));
         assert!(recipes.iter().any(|recipe| recipe.normal_strength > 0.0));
+        let keys: Vec<_> = recipes.iter().map(|r| r.id.as_str()).collect();
+        assert!(keys.contains(&"grass"));
+        assert!(keys.contains(&"flowstone"));
     }
 }

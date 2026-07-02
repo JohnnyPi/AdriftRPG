@@ -1,3 +1,4 @@
+// crates/voxel_core/src/extensions.rs
 use std::collections::BTreeSet;
 
 use crate::ChunkCoord;

@@ -1,3 +1,4 @@
+// crates/game_bevy/src/environment/lighting.rs
 use bevy::prelude::*;
 
 use crate::data::ConfigRegistryResource;

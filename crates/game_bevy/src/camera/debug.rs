@@ -1,3 +1,4 @@
+// crates/game_bevy/src/camera/debug.rs
 use bevy::prelude::*;
 
 use crate::debug_tools::DebugOverlayState;

@@ -1,3 +1,4 @@
+// crates/game_bevy/src/ui/tweaks.rs
 //! Runtime tweak resources mutated by the options panel.
 
 use bevy::prelude::*;

@@ -1,0 +1,83 @@
+# Installment 10: material runtime — layers, arrays, bake, and the vertex format verdict
+
+**Files:** `game_bevy/terrain/material.rs` (87), `terrain_surface/material_id.rs` (69), `procedural_textures/material_recipe.rs` (183), `game_bevy/terrain/bake.rs` (130), `bake_materials.rs` (45, CLI), `game_bevy/terrain/island_params.rs` (126), `atlas_runtime.rs` (320), `game_data/registry.rs` (526, skimmed — it's the config registry, BTreeMap-based, deterministic).
+
+## Review gap #4: `shaders/terrain_material.wgsl` is not in the upload
+
+`material.rs` declares the contract — albedo/normal/ORMH `2d_array` textures, settings + per-layer scale uniforms, fragment shader at `shaders/terrain_material.wgsl` — but the shader itself is missing, and it's the definitive subject of the Part 19 audit: triplanar weight construction, per-projection normal reorientation, and above all **how UV_0/UV_1 float indices and COLOR weights are decoded per fragment**. Please attach it (rename to `terrain_material.wgsl.txt` if the uploader dislikes the extension). The two findings below are what can be established from the Rust side alone — and they're enough to act on.
+
+## Bug 41: the vertex material format is structurally unsound at transitions (installment 3's suspicion, now upgraded)
+
+**Confidence / Severity:** Confirmed as a format defect (shader can mitigate but not fix) / **High for material visuals**
+**Files:** `mesh_convert.rs` (format), `surface.rs::vertex_blend` (per-vertex ranked indices), `material.rs` (consumer contract)
+
+**Evidence chain, now complete:** the resolver emits **per-vertex ranked** layer indices (`resolved.indices` ordered by that vertex's blend weights) into `UV_0`/`UV_1` as `f32`, with weights in `COLOR`. Between two vertices at any material transition — beach edge, river bank — the slot orders necessarily differ (vertex A: slot0 = CoralSand; vertex B: slot0 = JungleLoam). The GPU then interpolates both attributes across the triangle, producing (a) fractional layer indices that decode to a layer *neither* vertex referenced mid-triangle, and (b) slot-k weights blending two different materials' influence curves. This is the Part 17 anti-pattern verbatim ("material IDs stored as floating-point vertex attributes, interpolated, converted back to integers"), compounded by the "IDs and weights reordered independently" violation. Expected visuals: single-texel-wide stripes, wrong-texture flecks, and shimmer exactly along every material boundary.
+
+**Repair — and this codebase is unusually well-positioned for the clean one:** the live palette is exactly **8 layers** (`CORE_TERRAIN_MATERIALS`, matching `TerrainLayerScales`' 8 slots). With ≤ 8 fixed layers, indices are unnecessary: emit **8 fixed-slot weights** — `COLOR` carries layers 0–3, and the two UV attribute slots currently wasted on indices carry layers 4–7. Fixed slots interpolate *exactly* (weight k always means layer k), the shader indexes the texture array by constant, and the entire failure class vanishes. `vertex_blend` becomes "scatter the 4-way blend into an 8-channel vector, normalize" — a small diff in `surface.rs`/`mesh_convert.rs` plus the shader. Keep the indexed format only if the layer count is expected to exceed ~8 soon, in which case use a per-chunk canonical slot table (all vertices in a chunk share one id→slot mapping) so slots never disagree within a triangle. **Regression test:** render (or CPU-rasterize) a two-material transition strip and assert no fragment samples a layer absent from all three triangle vertices.
+
+## Bug 42: texture-array layer order is correct today only by unenforced convention
+
+**Confidence / Severity:** Confirmed latent / Medium
+**Files:** `bake_materials.rs`/`bake.rs` (arrays baked in **YAML document order**), `material_id.rs` (`CORE_TERRAIN_MATERIALS` order), `terrain_surface/registry.rs` (`from_core_set`, collided — presumed to index in core order)
+
+**Evidence:** vertex indices come from `MaterialLayerRegistry::from_core_set()` — i.e., positions in `CORE_TERRAIN_MATERIALS` (FreshBasalt=0 … RiverSilt=7). The GPU texture array is built by `build_cpu_arrays(&doc.materials)` in **`procedural_island.yaml` file order**, as are the per-layer `meters_per_repeat` scales. I diffed them: the YAML currently lists exactly the eight core materials in exactly core order — so everything lines up **today, with zero enforcement**. Reorder two YAML entries, insert `CaveBasalt`, or trim the list, and every vertex index silently points at the wrong texture layer and the wrong repeat scale — grass textured as basalt, with no error anywhere. This is Part 17's first checklist item ("IDs correspond to the correct texture-array layers") failed structurally.
+
+**Repair:** make the registry the single source of order — build the array *by looking up each `CORE_TERRAIN_MATERIALS` entry in the YAML by `id`* (error on missing), rather than trusting file order; or validate at load: `assert_eq!(doc.materials.map(id), CORE_TERRAIN_MATERIALS.map(name))` with a clear message. Same guard for `layer_scales_from_recipes`. **Regression test:** shuffle the YAML in a test fixture and assert load fails (today it loads and mis-textures).
+
+## Bug 43: the diagnostic harness builds a different world than the runtime
+
+**Confidence / Severity:** Confirmed / Medium (test infrastructure — but this is a *diagnostics* codebase)
+**File:** `atlas_runtime.rs`
+
+**Evidence:** the harness reimplements recipe compilation with its own `convert_op` copy and hand-copies `IslandGenParams` field-by-field — but only island shape, volcano, and (elsewhere) surface noise. **`hydrology`, `erosion`, `coast`, `beaches`, `caves`, and `resolution` are left at `IslandGenParams::default()`**, and generated island caves are never appended. Meanwhile the real path (`island_params_from_compiled` — which I verified is a complete, faithful mapping, including the resolution fallback chain and recipe→world coordinate conversion) uses the YAML values. Every atlas diagnostic run through this harness therefore validates a world with default erosion/hydrology/coast parameters — conclusions from it don't transfer to the shipped world, and YAML regressions in the uncopied sections are invisible to it. Given how much of this review's repair plan depends on trustworthy diagnostics (Stage 0: "preserve a reproducible failure"), this one is worth fixing early.
+
+**Repair:** delete the duplicate — export `island_params_from_compiled` and `compile_terrain_recipe` from a shared location (they're pure functions over `game_data` types) and call them from the harness. **Regression test:** `assert_eq!` (or field-wise compare) harness params vs. runtime params for `world.vs3_island`.
+
+## Minor findings
+
+**M33 — `bake_materials.rs` cache keyed by fingerprint, good — but `TextureRecipe::fingerprint` still has the `unwrap_or_default()` hole from installment 4:** a serialization failure fingerprints as empty → all failing recipes share one cache slot. Fix alongside.
+
+**M34 — `TerrainMaterialSettings.debug_mode: 2` in the fallback material:** good failure visibility, but verify (wgsl pending) that mode 2 renders something visibly "wrong" rather than plausible — silent fallbacks are how Bug 42-class problems hide.
+
+**M35 — `material_recipe.rs` tint defaults to `[0,0,0]`** via `#[serde(default)]` — if the shader multiplies by tint, an omitted tint renders black. Either default to `[1,1,1]` or verify the shader adds. (wgsl check.)
+
+## What's verified good
+
+`island_params_from_compiled` is the model citizen: complete field mapping, explicit resolution fallback chain (island → world → extent defaults, all through the *validated* `GenerationResolution`), and correct recipe→world conversion of the volcano center consistent with `coord_offset` — the exact opposite of the harness's partial copy. `material_id.rs` is well-built: explicit stable discriminants, exhaustive compiler-enforced `from_name`, and I verified the `island.rs` classifier emits only core-set materials — all 8 core layers are used and nothing outside them. `material.rs`'s bind layout is coherent (arrays + samplers + 2 uniforms, opaque, 8-slot scales matching the core set) and the placeholder-array fallback means a missing bake renders *something* debuggable. The bake cache (blake3 fingerprint → bincode) is the right shape for deterministic regeneration. And `game_data/registry.rs`'s BTreeMap-everywhere discipline keeps config iteration deterministic — the property `cell_material_blend` (Bug 11) still needs to learn.
+
+Exactly what was needed — this closes the Part 19 audit and delivers the final verdict on Bug 41. Water/sky shaders look out of terrain scope; I'll note only that they exist and focus on `terrain_material.wgsl` + `terrain_triplanar.wgsl`.
+
+# Installment 10 — Addendum: shader audit (`terrain_material.wgsl`, `terrain_triplanar.wgsl`)
+
+## Bug 41 — final confirmation, end to end
+
+```wgsl
+let layer = u32(ids[i] + 0.5);   // ids = interpolated UV_0/UV_1 floats
+```
+The fragment shader rounds **interpolated** float indices. Concrete failure with the core layer table: vertex A's slot 0 = CoralSand (index 5), vertex B's slot 0 = JungleLoam (index 3) — halfway across the triangle `ids[0]` interpolates to 4.0 and the fragment samples **JungleMoss**, a material neither vertex carries. Meanwhile `weights = in.color` interpolates independently of the ids, so slot-k weights blend across mismatched materials exactly as predicted. The chain is now confirmed at every link: ranked per-vertex ids (`surface.rs`) → float UV attributes (`mesh_convert.rs`) → interpolation → per-fragment rounding (here). The repair stands as scoped in installment 10 — with 8 fixed layers, drop indices entirely and carry **8 fixed-slot weights** (COLOR = layers 0–3, the two UV slots = layers 4–7); slot k always means layer k, interpolation becomes exact, and this loop becomes a constant-indexed loop over 8 channels.
+
+## Bug 44: every texture sample forces LOD 0 — no mipmapping on terrain
+
+**Confidence / Severity:** Confirmed / Medium-High (visual quality + bandwidth)
+
+All nine samples per layer use `textureSampleLevel(..., 0.0)`. That's presumably a workaround for WGSL's non-uniform-control-flow restriction (the `if w > 0.001` branch forbids `textureSample`), but the cost is no mip selection at all: distant terrain shimmers with Moiré aliasing, and full-res fetches thrash bandwidth. **Repair:** compute the screen-space gradients *outside* the branch — `let ddx_p = dpdx(world_pos); let ddy_p = dpdy(world_pos);` once per fragment, derive per-projection UV gradients (scaled per layer), and use `textureSampleGrad` inside the loop. This composes cleanly with the Bug 41 fixed-slot refactor (the loop bounds become uniform anyway). **Test:** GPU capture asserting non-zero mip levels on distant fragments, or simply the before/after screenshot at 100 m.
+
+## Bug 45: height-blend and occlusion are wired to nothing
+
+**Confidence / Severity:** Confirmed / Medium (dead-config family, plus free quality forfeited)
+
+`settings.height_blend_strength` is uploaded and never read; the ORMH texture's **height channel (`.a`) is never sampled into anything**, and **occlusion (`.r`) is never fed to `pbr_input`** (only `.g` roughness and `.b` metallic are used). So the setting whose name promises height-based material blending — the single biggest visual upgrade for terrain transitions — is a no-op, and baked AO is discarded. **Repair:** height-weighted blending is ~6 lines once weights are fixed-slot: `w' = w * pow(max(h, 0.01), k·height_blend_strength)`, renormalize; and `pbr_input.diffuse_occlusion = vec3(occ)`.
+
+## Minor findings
+
+**M36 — the failure fallback renders plausible grass-green.** `debug_mode == 2` returns `(0.34, 0.52, 0.28)` — a missing/failed material bake looks like intentional untextured grass (this answers M34's concern in the bad direction). Make it magenta; failure states should look like failures.
+
+**M37 — `tint` is fully dead** (resolves M35): grep confirms no generator, bake step, or shader reads `TerrainMaterialRecipe.tint`. The `[0,0,0]` default is therefore harmless — but the field is parse-only config, instance #8 of the family. Remove it or implement it in the bake.
+
+**M38 — `terrain_triplanar.wgsl` has no referents in the uploaded Rust.** It's an older 5-color vertex-attribute shader that repeats the interpolated-index pattern (`terrain_color(idx)` from an interpolated attribute). If nothing loads it, delete it — dead shaders that embody known-bad patterns get copy-pasted.
+
+**M39 — under-normalized accumulation on skipped channels:** when a channel is skipped (`w ≤ 0.001` or `layer ≥ layer_count`), albedo/roughness keep the deficit (only `detail_normal` is renormalized) — fragments darken slightly wherever an id is out of range (i.e., precisely in Bug 42's failure mode, making it *harder* to spot). After the fixed-slot refactor, divide albedo/roughness/metallic by the accumulated weight too.
+
+## What's verified good — the Part 19 checklist, mostly passed
+
+This shader clears most of the audit: triplanar weights are `pow(abs(n), sharpness)`, normalized, with a degenerate-normal fallback; projection axis pairs are correct (`zy`/`xz`/`xy`); texture scale is applied exactly once (global ÷ per-layer meters-per-repeat, guarded against 0); and — important given Bug 8's seams — UVs derive from **world position** with translation-only chunk transforms, so texturing is continuous across chunk boundaries by construction. The normal handling is genuinely careful: correct UDN-style per-projection swizzles for each axis pair, **including the negative-axis sign flip** the doc lists as a commonly-missed case; decode convention matches `normal.rs`'s OpenGL-style green channel; blended normal renormalized. Material transitions are computed per-fragment, not per-vertex (doc's interpolation-artifact check). `bake.rs` uploads sane real settings (sharpness 4.0, scale 1.0, averaged normal strength), and the all-zeros `Default` hazard is unreachable because the fallback material short-circuits on `debug_mode = 2` before any zero-scale sampling. At 256 m world scale there's no f32-precision/origin-rebase concern (revisit if the archipelago target arrives). Fix Bugs 41/44/45 and this becomes a solid terrain shader.

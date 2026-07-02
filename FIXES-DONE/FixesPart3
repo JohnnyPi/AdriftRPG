@@ -1,0 +1,114 @@
+Both suspicions confirmed numerically. This installment covers the `ValueNoise` addendum plus the meshing layer — and it contains the most important finding of the review so far.
+
+# Installment 3: noise addendum + meshing, seams, and normals
+
+**Files:** `terrain_generation/src/noise.rs` (`ValueNoise`, 73), `terrain_meshing/src/surface_nets.rs` (536), `game_bevy/src/terrain/mesh_convert.rs` (~90), `normal.rs` (texture crate, 34)
+
+## Bug 7: `ValueNoise::hash` has severe axis-aligned correlation — terrain-wide banding
+
+**Confidence / Severity:** Confirmed numerically / **High — this contaminates every terrain field in the engine**
+**File:** `terrain_generation/src/noise.rs`, `ValueNoise::hash`
+
+**Evidence:** I simulated the exact hash (u64 wrapping arithmetic) and measured consecutive lattice values along each axis. Along **z** at fixed (x, y), the first 16 consecutive hash differences are *all exactly 0.3774* — the lattice is a linear sawtooth, not noise. Over 3,200 z-pairs, 66% of differences are one of just two values (0.623 / 0.377). The **y** axis shows the identical pathology. Only x behaves acceptably.
+
+**Mechanism:** the coordinates are folded in as `((seed·A + x)·B + y)·C + z`, so z receives no multiply before the finalizer, and the finalizer is one weak round (`h ^= h>>13; h *= M`) followed by extracting the **low** 16 bits. Low bits of a product depend only on low bits of the operands: `(h·M) mod 2¹⁶ = (h mod 2¹⁶ · M mod 2¹⁶) mod 2¹⁶`. So for consecutive z (which just increments `h`), the output steps by a near-constant `M mod 2¹⁶ = 40801`, and 40801/65535 = **0.6225 — exactly the measured stride**. The y axis inherits the same problem because its only subsequent multiplier is `C = 2³¹−1`, and `C mod 2¹⁶ = 65535 ≡ −1`: multiplying by C merely *negates* the low 16 bits (hence the mirrored 0.377/0.623 pair).
+
+**Why it causes the symptom:** every octave of `fbm`/`fbm_2d` interpolates this sawtooth lattice, so all seven consumers — `footprint.rs`, `topology.rs`, `volcano.rs`, `surface_height.rs`, `field_stack.rs`, `biome_context.rs`, `route_validation.rs` — inherit periodic striping along z, and 3D density detail inherits *horizontal banding along y* (reads as fake strata/terracing). This is the diagnostics doc's "repeating grid or checkerboard patterns" category with a confirmed structural cause, not a tuning issue.
+
+**Minimal confirmation test:** hash a line of 32 lattice points along z at fixed (x,y); assert consecutive differences aren't constant. (Currently they are.)
+
+**Repair:** use a full-avalanche finalizer. Note your *other* noise (`SeamlessNoise::hash` in the texture crate) already does this correctly — mirror it:
+```rust
+fn hash(&self, x: i32, y: i32, z: i32) -> f32 {
+    let mut h = self.seed
+        ^ (x as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        ^ (y as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
+        ^ (z as u64).wrapping_mul(0x1656_67B1_9E37_79F9);
+    h ^= h >> 30; h = h.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    h ^= h >> 27; h = h.wrapping_mul(0x94D0_49BB_1331_11EB);
+    h ^= h >> 31;
+    ((h >> 40) as f32) / (1u64 << 24) as f32
+}
+```
+One caution from my testing: don't "fix" this by just extracting high bits from the *current* finalizer — I tested that too, and `h >> 48` is nearly **constant** along z (small z only perturbs low bits; one weak round never propagates them up). The finalizer replacement is the fix. **This changes every generated world for a given seed** — do it as a Stage 1 correctness fix per your repair plan, capture before/after screenshots, and expect to retune amplitudes afterward. Also document the range contract while you're in there: `fbm` returns [0,1], `fbm_2d` returns [−1,1].
+
+**Regression test:** the stride test above, plus a serial-correlation bound (|r| < 0.1 over 4,000 consecutive lattice samples per axis).
+
+## Bug 8: chunk-boundary quads are emitted twice (by both neighboring chunks)
+
+**Confidence / Severity:** Confirmed structurally / High
+**File:** `terrain_meshing/src/surface_nets.rs`, `emit_face_quads`
+
+**Evidence:** each emission loop runs its *transverse* axes over `0..=cells` — both 0 and 16 inclusive. A Y-aligned (vertical) edge at local x = 16 is the same world edge as the +X neighbor's x = 0 edge; both chunks' loops include it, both have all four adjacent cell vertices available (that's what the halo layer provides), so both emit the quad. Same at x = 0 versus the −X neighbor's x = 16, and likewise for z and for the other edge orientations. Edges lying on a shared chunk *edge column* are emitted by **four** chunks.
+
+**Runtime effect:** wherever the terrain surface crosses a chunk face — i.e., along every 16 m grid line — there's a strip of exactly coincident duplicate triangles from two meshes: z-fighting shimmer in a world-aligned grid pattern, doubled triangles in the avian3d colliders along those strips (contact jitter), and inflated index counts.
+
+**Minimal confirmation test:** mesh two adjacent chunks of a flat plane, transform both to world space, canonicalize triangles (sorted vertex tuples, quantized), assert zero intersection between the two sets. Currently the boundary strip appears in both.
+
+**Repair:** make edge ownership half-open — transverse loops become `0..cells` (each chunk owns its min-face edges; the max-face edges belong to the +neighbor as its 0):
+```rust
+// X-aligned edges:  z in 0..cells, y in 0..cells, x in 0..cells
+// Y-aligned edges:  z in 0..cells, x in 0..cells, y in 0..cells
+// Z-aligned edges:  y in 0..cells, x in 0..cells, z in 0..cells
+```
+After this, the `+cells` halo cell layer is never referenced, so the vertex loop can shrink from `-1..=cells` to `-1..cells` — less duplicated vertex work per chunk as a bonus. Keep the `-1` halo; min-face quads need it.
+
+**Regression test:** the two-chunk duplicate-triangle test, run for a plane, a sphere straddling the boundary, and a diagonal slab — plus an assert that the boundary is still watertight (every boundary edge referenced by exactly 2 triangles across the pair).
+
+## Bug 9: the quad-winding predicate is inverted — currently masked by a per-triangle repair pass
+
+**Confidence / Severity:** Confirmed numerically / Medium (masked), but it makes the mesher fragile and slow
+**File:** `surface_nets.rs`, `emit_face_quads` (`reversed = da >= 0.0`) and `orient_triangles_toward_air`
+
+**Evidence:** I replicated the Y-aligned emission path exactly for a solid-below plane with the orientation pass disabled: **162 of 162 triangles face down** (into the solid). The predicate should be `reversed = da <= 0.0` — solid at the edge's low corner means the surface faces the positive direction, which requires the reversed order under this quad layout. I verified the same inversion by hand for the X-aligned layout. The reason your `plane_triangles_face_air_side` and `sphere_triangles_face_outward` tests pass is that `orient_triangles_toward_air` runs afterward and flips *every* triangle by comparing its geometric normal against a density gradient at the triangle center.
+
+**Why this matters even though it's masked:** the mask costs 6 density samples + a normalize per triangle on every mesh build; and it delegates a *topological* decision (which side is solid — knowable exactly from the edge's sign pair) to a *numerical* gradient estimate, which is wrong in exactly the places that matter (see Bug 10). Where the gradient estimate degenerates, the pass flips triangles the wrong way — sporadic inverted/black triangles.
+
+**Repair:** flip the predicate to `da <= 0.0` (note `0.0` counts as solid everywhere else — `cell_has_surface`, `edge_vertex`, `edge_crosses` — so use `<=`, keeping the convention uniform). Then demote `orient_triangles_toward_air` to a `#[cfg(debug_assertions)]` validator that *asserts* instead of silently repairing.
+
+**Regression test:** run the existing plane and sphere winding tests against raw emission output with the orientation pass compiled out. They would have caught this on day one.
+
+## Bug 10: `estimate_normal` truncates instead of flooring — zero gradients near cell 0 of every axis
+
+**Confidence / Severity:** Confirmed by inspection / Medium-High (chunk-border lighting seams; feeds Bug 9's mask)
+**File:** `surface_nets.rs`, `estimate_normal`
+
+**Evidence:**
+```rust
+let dx = sample_at(input, (px + eps) as i32, ...) - sample_at(input, (px - eps) as i32, ...);
+```
+`as i32` truncates toward zero. For any vertex coordinate `px ∈ (−0.5, 0.5)` — which every vertex in the −1 halo boundary region can have — `(px + 0.5) as i32` and `(px − 0.5) as i32` **both evaluate to 0**, so that axis's gradient component is exactly zero. Elsewhere the truncation gives an asymmetric one-cell stencil. Consequences: vertex normals are flattened or skewed specifically along the min faces of every chunk (visible as lighting discontinuities in a 16 m grid — compounding Bug 8's geometric shimmer with a shading seam), and `orient_triangles_toward_air` consumes these broken gradients right where duplicate/boundary triangles live.
+
+**Minimal confirmation test:** `estimate_normal` on a plane density at `pos = [0.2, 8.5, 0.2]` — the x and z components come back 0.0 when they should be 0.
+
+**Repair:** floor-based symmetric stencil (floor handles negatives correctly):
+```rust
+let gx = |p: f32| p.round() as i32; // or (p + eps).floor() as i32 / (p - eps).floor() as i32
+let xi = gx(px); let yi = gx(py); let zi = gx(pz);
+let dx = sample_at(input, xi + 1, yi, zi, padded) - sample_at(input, xi - 1, yi, zi, padded);
+// same for dy, dz
+```
+`xi − 1` reaches lattice −2 in the worst case (`px ≈ −1`), which is outside the padded range — clamp lattice coords to `[-1, cells+1]`, or (better) do a true trilinear density interpolation at `pos ± eps`. If you fix Bug 8's loop ranges first, halo vertices at the min face still exist, so keep the clamp.
+
+**Regression test:** normals on a tilted plane density: assert every vertex normal is within 1° of the analytic plane normal, including halo-region vertices.
+
+## Bug 11: material blend ranking is nondeterministic on ties
+
+**Confidence / Severity:** Confirmed by inspection / Medium (violates the determinism requirement)
+**File:** `surface_nets.rs`, `cell_material_blend`
+
+**Evidence:** corner materials are counted in a `std::collections::HashMap` and sorted by weight with `partial_cmp` only. `HashMap` iteration order is randomized per process (`RandomState`), and with 8 corner samples, ties are the *common* case (4/4 and 2/2 splits at every material boundary). On a tie, which material lands in `ids[0]` — the dominant material, also pushed into `materials` — differs between runs and between regenerations of the same chunk.
+
+**Runtime effect:** the doc's "materials changing between chunks / terrain regenerated differently between runs" category — material flicker at every material boundary when chunks stream out and back in, and `density_hash`-style regression comparisons of mesh output can never be stable.
+
+**Repair:** count into a fixed `[(u16, f32); 8]` scratch array (at most 8 distinct values — no allocation, no HashMap), and sort with a total order: weight descending, then material id ascending as the tiebreak. **Regression test:** mesh a two-material checkerboard chunk 50 times in fresh processes (or just assert the tiebreak: equal counts must rank the lower material id first).
+
+## Suspected defect (to confirm in the shader installment): material IDs ride interpolated float attributes
+
+**File:** `mesh_convert.rs` — ids into `UV_0`/`UV_1` as `f32`, weights into `COLOR`, with per-vertex *ranked* id order from `cell_material_blend`/`vertex_blend`.
+
+This is verbatim the failure pattern Part 17 of your diagnostics doc calls out: float-interpolated IDs converted back to integers per fragment, *plus* ids and weights that can be reordered independently per vertex (vertex A's slot 0 = grass, vertex B's slot 0 = rock — the interpolated weight in slot 0 then blends two different materials' weights). Expected visual: stripe/rainbow artifacts exactly along material transitions. Whether it's live depends on how the terrain shader consumes UV_0/UV_1/COLOR — I'll confirm in installment 8 (`atlas_runtime.rs`/`material.rs`), and the right fix (chunk-level material palette with fixed slots vs. flat attributes) depends on what I find there.
+
+## What's verified good
+
+The padded-sample layout is coherent: 19³ samples indexed with a uniform +1 offset, halo cell bookkeeping in `halo_cell_index` is correct, and cell loops stay within the padded range. The solid convention (`d ≤ 0`) is applied consistently across `cell_has_surface`, `edge_vertex`, and `edge_crosses` — no mixed `<`/`≤` mismatches. `t = da/(da−db)` is division-safe given the sign filter. `maybe_quad` can't create holes: any crossing edge guarantees all four adjacent cells have sign changes and therefore vertices. `mesh_convert.rs` scales positions by `cell_size_m` with a correct negative-coordinate transform test, and leaving normals unscaled is right for uniform scale. `normal.rs` is clean: toroidal wrap consistent with `SeamlessNoise` textures, symmetric differences, OpenGL-style +Y green channel (verify against the shader's expectation in installment 8). And the meshing tests that exist are genuinely good tests — they just need variants that run against raw emission so the orientation pass can't hide winding bugs.

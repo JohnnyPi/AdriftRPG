@@ -1,3 +1,4 @@
+// crates/terrain_generation/src/island_gen/carving.rs
 //! Channel and valley carving (VS3 §6).
 
 use crate::field2d::Field2D;
@@ -10,14 +11,14 @@ pub fn carve_river_channels(
     river: &RiverSpline,
     params: &IslandGenParams,
 ) {
-    let bank_width = 3.5f32;
+    let bank_width = params.erosion.river_bank_width_m;
+    let strength = params.erosion.river_carve_strength;
     elevation.for_each_world(|wx, wz, h| {
         let (dist, half_width, depth) = river_channel_at(river, wx, wz);
         let offset = river_carve_offset(dist, half_width, bank_width, depth);
         if offset > 0.0 {
-            *h -= offset * 1.2;
+            *h -= offset * strength;
         }
-        let _ = params;
     });
 }
 

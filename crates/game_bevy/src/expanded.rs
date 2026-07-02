@@ -1,3 +1,4 @@
+// crates/game_bevy/src/expanded.rs
 //! VS2 §20 expanded vertical slice plugin entry point.
 
 use bevy::prelude::*;

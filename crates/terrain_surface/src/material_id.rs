@@ -1,69 +1,34 @@
-use procedural_textures::TerrainMaterialIdName;
+// crates/terrain_surface/src/material_id.rs
+use std::fmt;
 
-#[repr(u16)]
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    Hash,
-    PartialOrd,
-    Ord,
-    serde::Serialize,
-    serde::Deserialize,
-)]
-pub enum TerrainMaterialId {
-    FreshBasalt = 0,
-    WeatheredBasalt = 1,
-    CaveBasalt = 2,
-    TropicalRedSoil = 3,
-    JungleLoam = 4,
-    JungleMoss = 5,
-    LeafLitter = 6,
-    CoralSand = 7,
-    BlackSand = 8,
-    CoralRubble = 9,
-    RiverGravel = 10,
-    RiverSilt = 11,
-    Mud = 12,
-    Limestone = 13,
-    Flowstone = 14,
-    VolcanicAsh = 15,
-}
+/// Stable string key for a terrain material (matches game_data palette keys).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct MaterialKey(pub String);
 
-impl TerrainMaterialId {
-    pub fn from_name(name: &TerrainMaterialIdName) -> Self {
-        match name {
-            TerrainMaterialIdName::FreshBasalt => Self::FreshBasalt,
-            TerrainMaterialIdName::WeatheredBasalt => Self::WeatheredBasalt,
-            TerrainMaterialIdName::CaveBasalt => Self::CaveBasalt,
-            TerrainMaterialIdName::TropicalRedSoil => Self::TropicalRedSoil,
-            TerrainMaterialIdName::JungleLoam => Self::JungleLoam,
-            TerrainMaterialIdName::JungleMoss => Self::JungleMoss,
-            TerrainMaterialIdName::LeafLitter => Self::LeafLitter,
-            TerrainMaterialIdName::CoralSand => Self::CoralSand,
-            TerrainMaterialIdName::BlackSand => Self::BlackSand,
-            TerrainMaterialIdName::CoralRubble => Self::CoralRubble,
-            TerrainMaterialIdName::RiverGravel => Self::RiverGravel,
-            TerrainMaterialIdName::RiverSilt => Self::RiverSilt,
-            TerrainMaterialIdName::Mud => Self::Mud,
-            TerrainMaterialIdName::Limestone => Self::Limestone,
-            TerrainMaterialIdName::Flowstone => Self::Flowstone,
-            TerrainMaterialIdName::VolcanicAsh => Self::VolcanicAsh,
-        }
+impl MaterialKey {
+    pub fn new(key: impl Into<String>) -> Self {
+        Self(key.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 
-pub const CORE_TERRAIN_MATERIALS: &[TerrainMaterialId] = &[
-    TerrainMaterialId::FreshBasalt,
-    TerrainMaterialId::WeatheredBasalt,
-    TerrainMaterialId::TropicalRedSoil,
-    TerrainMaterialId::JungleLoam,
-    TerrainMaterialId::JungleMoss,
-    TerrainMaterialId::CoralSand,
-    TerrainMaterialId::RiverGravel,
-    TerrainMaterialId::RiverSilt,
-];
+impl fmt::Display for MaterialKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
 
-pub const INITIAL_ISLAND_LAYERS: &[TerrainMaterialId] = CORE_TERRAIN_MATERIALS;
+impl From<&str> for MaterialKey {
+    fn from(value: &str) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<String> for MaterialKey {
+    fn from(value: String) -> Self {
+        Self::new(value)
+    }
+}

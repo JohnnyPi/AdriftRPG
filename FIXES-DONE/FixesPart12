@@ -1,0 +1,46 @@
+# Installment 12: terrain edits and persistence
+
+**Files:** `voxel_core/src/edits.rs` (308), `voxel_core/tests(edit_boundary.rs)` (21), `game_bevy/src/interaction/editing.rs` (143), `terrain_generation/src/chunk_gen.rs` (69)
+
+## Bug 1's contract — verdict: architecturally avoided (good news)
+
+The open question from installment 1 — whether boundary-sample edits fan out to every chunk sharing the sample — turns out to be moot by design: `TerrainEditStore` is keyed by **world sample coordinates** (`HashMap<(i32,i32,i32), TerrainSample>`), not per-chunk storage. A face sample is one override; every chunk's padded generation (`generate_padded_samples_with_biomes` and `chunk_gen.rs` both query `sample_override(wx, wy, wz)` with world integers) reads the same value. Post-edit chunk seams are impossible at the storage level, and `expand_neighbor_chunks` invalidates the full 27-neighborhood so halo-affected neighbors always re-mesh. `WorldSample::local_sample` (Bug 1's unchecked cast) has no callers in the edit path at all — downgrading Bug 1 to "harden the API before someone uses it," severity Low.
+
+That said, the layer has three real problems.
+
+## Bug 50: the paint tool does nothing in the live rendering path
+
+**Confidence / Severity:** Confirmed (direct consequence of Bug 36's wiring) / Medium — a whole feature is inert
+**Files:** `edits.rs` (`PaintMaterial`), `pipeline.rs`, `surface_nets.rs`
+
+**Evidence:** `PaintMaterial` writes material overrides into the edit store; `generate_padded_samples_with_biomes` faithfully copies them into `samples[].material`. But as established in installment 11, the runtime mesh path always passes `surface_resolver: Some(...)`, and with a resolver present the mesher **never reads sample materials** — `cell_material_blend` is skipped and `ChunkSurfaceResolver::vertex_blend` classifies purely from climate context, which knows nothing about the edit store. Painted materials land in a buffer nothing consumes. (Density edits *do* work — `sample_override` short-circuits density generation — so subtract/add spheres function; only paint is dead.)
+
+**Repair:** fold into the Bug 36 consolidation — the resolver needs an edit-material overlay: `vertex_blend` checks the edit store at the vertex's nearest world sample and, on a hit, returns/blends the painted material. (Pass the same `TerrainEditStore` snapshot into `ChunkSurfaceResolver::new`; the pipeline already clones one per job.) **Regression test:** paint a sphere, regenerate the chunk, assert some vertex's dominant material id equals the painted layer — a test that would currently fail, proving the tool is dead.
+
+## Bug 51: edit base density is sampled without micro-detail — a faint seam ring around every edit
+
+**Confidence / Severity:** Confirmed / Medium-Low (atlas worlds with `voxel_amplitude_m > 0`)
+**File:** `editing.rs`, the closure passed to `apply_command`
+
+**Evidence:** edits bake absolute overrides as `base + strength·2.5`, where `base` comes from the closure `|wx,wy,wz| source.density_at(...)`. But chunk generation samples the field through `source.sample_density(...)`, which **adds the voxel micro-detail noise** on atlas worlds. So every edited sample's baseline differs from the generated field by the micro term — including the outermost samples of the sphere where `strength → 0`, which should be no-ops but instead snap the surface by up to ±`voxel_amplitude_m/2`. Visually: a subtle ring/collar of surface displacement at the boundary of every edit. **Repair:** one token — pass `source.sample_density` as the base closure. **Regression test:** apply a sphere edit with `radius` such that a known sample sits exactly at the boundary (t = 0); assert its override equals `sample_density` at that point bit-for-bit.
+
+## Bug 52: edit strength is expressed in density units, which aren't uniform (M8 strikes again)
+
+**Confidence / Severity:** Confirmed mechanism / Low-Medium (feel/consistency)
+**File:** `edits.rs`, `apply_sphere` (`strength · 2.5`)
+
+**Evidence:** the subtract/add magnitude `2.5` is a *density* delta, but the field's density-per-meter varies by regime: ~1.0 near the heightfield plane (metric SDF) versus ~1/radius near union ellipsoids (`ellipsoid_sdf` is normalized — finding M8). Near the vertical-slice headland ellipsoids (radii 18–22 m), ambient density magnitudes are ~0.05/m, so a +2.5 spike doesn't carve a smooth t²-falloff crater — it blows the whole sphere to strongly-air against near-zero neighbors, while the same keypress on open ground digs a gentle dimple. Same tool, wildly different craters depending on which primitive dominates locally. **Repair:** this resolves for free once M8 lands (metric-ish ellipsoid SDF makes 2.5 mean ~2.5 m everywhere); until then, note it as a known inconsistency rather than patching locally.
+
+## Minor findings
+
+**M43 — 27-chunk invalidation per edit.** `expand_neighbor_chunks` unconditionally dilates the affected set by the full 3³ neighborhood — a 2.5 m interior edit re-meshes up to 27 chunks. Correct but ~20× over-broad for interior edits. Tighter: expand the edit's *sample AABB* by 1 sample, map that box to chunks (1–8 typically). Matters because each re-mesh currently costs two column caches (Bug 36/M28).
+
+**M44 — the cross-chunk edit test is a tautology.** `edit_boundary.rs` fetches `sample_override(face_x, 8, 8)` twice and asserts equality with itself. The property worth testing is the end-to-end one: after a face-straddling edit, generate padded samples for *both* neighboring chunks and assert the shared-face densities match, and (post Bug 8 fix) that the two meshes stay watertight. `subtract_sphere_marks_neighbor_chunks` in `edits.rs` is the better existing test; extend that.
+
+**M45 — `MaterialId(2)` hardcoded as the paint material** (`editing.rs`) — M30's family; route through the catalog, and once Bug 50 is fixed, paint in `TerrainMaterialId` terms rather than System A's small-int ids, since System B is the surviving material authority.
+
+**M46 — duplicate padded-sample generators.** `chunk_gen.rs::generate_padded_samples` and `pipeline.rs::generate_padded_samples_with_biomes` share layout logic (`padded = cells + 3`, `-1..=cells+1`, +1-offset indexing) by copy. They agree today; extract the loop skeleton so a future halo change can't split them. (`padded_index` in `chunk_gen.rs` matches the mesher's `sample_at` indexing — verified.)
+
+## What's verified good
+
+The edit layer's core decisions are the right ones. World-keyed overrides make cross-chunk consistency structural rather than procedural — the exact design the diagnostics doc's edit-seam checklist is trying to push people toward. Edits compose correctly (subsequent edits read prior overrides as their base), the store snapshot is cloned per generation job (no torn chunks — verified in installment 11), F8 regeneration clears the store so overrides can't be applied against a different seed's terrain, and `chunk_deltas()` produces deterministic, chunk-bucketed, serde-ready output through `BTreeMap` — the persistence stub is already the right shape for the "persistent terrain edits" roadmap item. `PaintMaterial` correctly refuses to paint air (`density > 0.0 → skip`). The invalidation path plugs into the pipeline's revision system, which installment 11 verified handles stale in-flight results. And `iter_world_chunk_coords`/`chunk_axis_range` center the world on the origin consistently with `chunk_world_transform` — coordinate audit clean.

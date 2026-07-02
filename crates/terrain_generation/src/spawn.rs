@@ -1,3 +1,4 @@
+// crates/terrain_generation/src/spawn.rs
 //! Player spawn resolution and object placement against terrain-only density.
 
 use crate::recipe::RecipeDensitySource;

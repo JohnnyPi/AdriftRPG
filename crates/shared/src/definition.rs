@@ -1,3 +1,4 @@
+// crates/shared/src/definition.rs
 use serde::{Deserialize, Serialize};
 
 pub const SUPPORTED_SCHEMA_VERSION: u32 = 1;
@@ -12,11 +13,15 @@ pub struct DefinitionHeader {
 
 impl DefinitionHeader {
     pub fn validate(&self) -> crate::DataResult<()> {
-        if self.schema_version != SUPPORTED_SCHEMA_VERSION {
+        self.validate_schema(&[SUPPORTED_SCHEMA_VERSION])
+    }
+
+    pub fn validate_schema(&self, allowed: &[u32]) -> crate::DataResult<()> {
+        if !allowed.contains(&self.schema_version) {
             return Err(crate::DataError::UnsupportedSchemaVersion {
                 id: self.id.clone(),
                 found: self.schema_version,
-                expected: SUPPORTED_SCHEMA_VERSION,
+                expected: *allowed.first().expect("allowed schema versions"),
             });
         }
         Ok(())

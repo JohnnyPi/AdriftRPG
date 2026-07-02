@@ -1,3 +1,4 @@
+// crates/game_bevy/src/debug_tools/bindings.rs
 use bevy::prelude::*;
 use game_data::{CompiledDebug, ConfigRegistry, DebugBindingsDefinition};
 

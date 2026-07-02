@@ -1,3 +1,4 @@
+// crates/game_bevy/src/environment/fog.rs
 //! Layered fog stack (VS2 §14).
 
 use bevy::prelude::*;

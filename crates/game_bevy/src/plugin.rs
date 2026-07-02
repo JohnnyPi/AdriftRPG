@@ -1,3 +1,4 @@
+// crates/game_bevy/src/plugin.rs
 use bevy::asset::AssetPlugin;
 use bevy::prelude::*;
 use tracing::info;

@@ -1,3 +1,4 @@
+// crates/game_bevy/src/camera/plugin.rs
 use bevy::prelude::*;
 use bevy::input::InputSystems;
 

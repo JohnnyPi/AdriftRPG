@@ -1,3 +1,4 @@
+// crates/game_bevy/src/data/mod.rs
 mod hot_reload;
 mod plugin;
 mod user_prefs;

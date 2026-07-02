@@ -1,3 +1,4 @@
+// crates/terrain_generation/src/noise.rs
 /// Deterministic 3D value noise for terrain detail (no external deps).
 pub struct ValueNoise {
     seed: u64,
@@ -9,13 +10,17 @@ impl ValueNoise {
     }
 
     fn hash(&self, x: i32, y: i32, z: i32) -> f32 {
-        let mut h = self.seed;
-        h = h.wrapping_mul(374761393).wrapping_add(x as u64);
-        h = h.wrapping_mul(668265263).wrapping_add(y as u64);
-        h = h.wrapping_mul(2147483647).wrapping_add(z as u64);
-        h ^= h >> 13;
-        h = h.wrapping_mul(1274126177);
-        (h & 0xFFFF) as f32 / 65535.0
+        let mut h = self
+            .seed
+            ^ (x as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            ^ (y as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
+            ^ (z as u64).wrapping_mul(0x1656_67B1_9E37_79F9);
+        h ^= h >> 30;
+        h = h.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        h ^= h >> 27;
+        h = h.wrapping_mul(0x94D0_49BB_1331_11EB);
+        h ^= h >> 31;
+        ((h >> 40) as f32) / (1u64 << 24) as f32
     }
 
     fn smoothstep(t: f32) -> f32 {
@@ -48,10 +53,7 @@ impl ValueNoise {
         y0v + (y1v - y0v) * tz
     }
 
-    pub fn fbm_2d(&self, x: f32, z: f32, octaves: u32) -> f32 {
-        self.fbm(x, 0.0, z, octaves, 2.0, 0.5) * 2.0 - 1.0
-    }
-
+    /// Fractal sum in **[0, 1]** (normalized per octave amplitude).
     pub fn fbm(&self, x: f32, y: f32, z: f32, octaves: u32, lacunarity: f32, gain: f32) -> f32 {
         let mut sum = 0.0;
         let mut amp = 1.0;
@@ -67,6 +69,68 @@ impl ValueNoise {
             sum / norm
         } else {
             0.0
+        }
+    }
+
+    /// 2D fractal sum in **[-1, 1]** (fbm at y = 0, remapped).
+    pub fn fbm_2d(&self, x: f32, z: f32, octaves: u32) -> f32 {
+        self.fbm(x, 0.0, z, octaves, 2.0, 0.5) * 2.0 - 1.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hash_line(noise: &ValueNoise, axis: u8, fixed: (i32, i32), len: i32) -> Vec<f32> {
+        (0..len)
+            .map(|i| match axis {
+                0 => noise.hash(i, fixed.0, fixed.1),
+                1 => noise.hash(fixed.0, i, fixed.1),
+                _ => noise.hash(fixed.0, fixed.1, i),
+            })
+            .collect()
+    }
+
+    fn serial_correlation(values: &[f32]) -> f32 {
+        if values.len() < 2 {
+            return 0.0;
+        }
+        let mean = values.iter().sum::<f32>() / values.len() as f32;
+        let mut num = 0.0f32;
+        let mut var = 0.0f32;
+        for window in values.windows(2) {
+            let a = window[0] - mean;
+            let b = window[1] - mean;
+            num += a * b;
+            var += a * a;
+        }
+        let denom = var + f32::EPSILON;
+        (num / denom).clamp(-1.0, 1.0)
+    }
+
+    #[test]
+    fn hash_along_z_is_not_constant_stride() {
+        let noise = ValueNoise::new(12345);
+        let line = hash_line(&noise, 2, (5, 10), 32);
+        let strides: Vec<f32> = line.windows(2).map(|w| (w[1] - w[0]).abs()).collect();
+        let first = strides[0];
+        assert!(
+            !strides.iter().all(|s| (*s - first).abs() < 1e-6),
+            "consecutive z hashes must not share a constant stride"
+        );
+    }
+
+    #[test]
+    fn hash_serial_correlation_is_bounded_per_axis() {
+        let noise = ValueNoise::new(98765);
+        for axis in 0..3 {
+            let line = hash_line(&noise, axis, (11, 23), 4000);
+            let r = serial_correlation(&line);
+            assert!(
+                r.abs() < 0.1,
+                "axis {axis} serial correlation {r} exceeds bound"
+            );
         }
     }
 }

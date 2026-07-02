@@ -1,3 +1,4 @@
+// crates/game_bevy/src/ui/main_menu.rs
 //! Title / startup screen shown before entering the playable world.
 
 use bevy::prelude::*;

@@ -1,3 +1,4 @@
+// crates/terrain_generation/tests/vs3_elevation_diag.rs
 use game_data::load_registry_from_directory;
 use std::path::PathBuf;
 use terrain_generation::{build_island_atlas, iter_world_chunk_coords, RecipeDensitySource};
@@ -60,7 +61,7 @@ fn vs3_island_has_peak_and_chunk_coverage() {
         coord_offset: world.coord_offset,
         ops: vec![],
     };
-    let source = RecipeDensitySource::new(recipe).with_atlas(atlas);
+    let source = RecipeDensitySource::new(recipe).with_atlas(atlas, 3.5);
 
     let mut max_h = f32::MIN;
     let mut min_land_h = f32::MAX;

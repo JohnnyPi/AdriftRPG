@@ -1,6 +1,9 @@
+// crates/terrain_generation/src/river.rs
 //! Small river routing and carving (VS2 §6).
 
-use crate::field_stack::{stack_surface_height, FieldStackParams};
+use crate::field_stack::FieldStackParams;
+use crate::surface_height::land_surface_height;
+use crate::TerrainRecipe;
 use crate::water_body::{RiverControlPoint, RiverSpline};
 
 #[derive(Clone, Debug)]
@@ -18,6 +21,7 @@ pub struct RiverGenConfig {
     pub maximum_breach_depth_m: f32,
     pub seed: u64,
     pub field_stack: FieldStackParams,
+    pub surface_recipe: Option<TerrainRecipe>,
 }
 
 impl Default for RiverGenConfig {
@@ -36,6 +40,7 @@ impl Default for RiverGenConfig {
             maximum_breach_depth_m: 1.5,
             seed: 48129,
             field_stack: FieldStackParams::default(),
+            surface_recipe: Some(crate::default_vertical_slice_recipe(48129, 0.0)),
         }
     }
 }
@@ -87,7 +92,7 @@ fn trace_downhill(config: &RiverGenConfig, sea_level: f32) -> Option<Vec<(f32, f
 
     for _ in 0..200 {
         let (x, z, _) = *path.last()?;
-        if stack_surface_height(x, z, sea_level, config.seed, &config.field_stack) <= sea_level + 0.5 {
+        if surface_at(config, x, z, sea_level) <= sea_level + 0.5 {
             break;
         }
         let neighbors = [
@@ -127,10 +132,13 @@ fn trace_downhill(config: &RiverGenConfig, sea_level: f32) -> Option<Vec<(f32, f
 }
 
 fn surface_at(config: &RiverGenConfig, x: f32, z: f32, sea_level: f32) -> f32 {
-    stack_surface_height(x, z, sea_level, config.seed, &config.field_stack)
+    if let Some(recipe) = &config.surface_recipe {
+        land_surface_height(recipe, x, z)
+    } else {
+        sea_level
+    }
 }
 
-/// Fill local depressions along the traced path so water can flow downhill (VS2 §6.5).
 fn repair_depressions(path: &mut Vec<(f32, f32, f32)>, config: &RiverGenConfig) {
     if path.len() < 3 {
         return;
@@ -229,7 +237,6 @@ pub fn distance_to_river_centerline(spline: &RiverSpline, x: f32, z: f32) -> f32
     min_dist
 }
 
-/// Nearest channel half-width and bed carve depth along the river spline.
 pub fn river_channel_at(spline: &RiverSpline, x: f32, z: f32) -> (f32, f32, f32) {
     let mut best_dist = f32::MAX;
     let mut half_width = 1.0;
@@ -336,7 +343,7 @@ mod tests {
     }
 
     #[test]
-    fn river_carve_lowers_density_near_channel() {
+    fn river_carve_lowers_surface_near_channel() {
         use crate::recipe::{default_vertical_slice_recipe, RecipeDensitySource, RiverCarveContext};
 
         let config = RiverGenConfig::default();
@@ -352,12 +359,19 @@ mod tests {
             spline,
             bank_width_m: config.bank_width_m,
         });
-        let y = base.surface_height_at(x, z);
-        let base_density = base.density_at(x, y, z);
-        let carved_density = carved.density_at(x, y, z);
+        let base_height = base.terrain_surface_height_at(x, z);
+        let carved_height = carved.terrain_surface_height_at(x, z);
         assert!(
-            carved_density < base_density,
-            "carve should reduce density at surface sample ({carved_density} vs {base_density})"
+            carved_height < base_height - 0.05,
+            "centerline surface should drop (base={base_height}, carved={carved_height})"
+        );
+
+        let bank_x = x + half_w * 0.5;
+        let bank_base = base.terrain_surface_height_at(bank_x, z);
+        let bank_carved = carved.terrain_surface_height_at(bank_x, z);
+        assert!(
+            bank_carved < bank_base - 0.02,
+            "bank surface should also drop (base={bank_base}, carved={bank_carved})"
         );
     }
 }

@@ -1,0 +1,82 @@
+The uploaded `mod.rs` is exactly the missing orchestrator — and it settles several open questions, resolves one suspicion in your favor, and confirms two High bugs as live-wired. Given its weight, this installment is the **pass-ordering audit of `island_gen/mod.rs`** (Parts 9–10 skeleton); the hydrology/erosion/carving internals follow next.
+
+# Installment 7: atlas orchestration — `terrain_generation/src/island_gen/mod.rs` (537)
+
+## The actual pass order (reconstructed)
+
+```text
+1. island_mask (regional tier)
+2. elevation_regional = volcanic_height + regional_detail·mask
+3. coast_distance   ← from mask, regional spacing      [water-side, 20 m horizon]
+4. bathymetry       ← from coast_distance
+5. filled = priority_flood(elevation_regional)
+6. flow_direction/accumulation ← filled
+7. river_mask ← accumulation
+8. river_graph = trace_primary_river(filled, …)
+9. slope (pre-erosion)
+10. stream-power erosion  → MUTATES elevation_regional
+11. thermal erosion       → MUTATES elevation_regional
+12. sediment = accumulation·0.001
+13. local_abs = bilinear-upsample(regional) + local_detail·mask
+14. carve_river_channels(local_abs, river_graph)       [stale graph]
+15. classify_coast → cliff/beach masks                 [broken distance]
+16. apply_beach_profiles → MUTATES local_abs
+17. slope recomputed ✓
+18. wetness = accumulation resampled                   [pre-erosion]
+19. soil_depth = zeros                                 [never computed]
+20. biome_weights
+21. elevation_local = residual(regional, local_abs)
+22. validate_atlas
+```
+
+**Confirmation upgrades from this wiring:** Bug 25 and Bug 26 are now fully confirmed live — `classify_coast` receives the resampled water-side-only distance field, and `bathymetry` is built from the saturating one. Worse than my earlier numbers: `compute_coast_distance` runs at **regional** spacing, so the search horizon `ceil(20/spacing)` is 1–3 cells (one cell at 32 m spacing) — the shelf profile gets at most one or two valid distance rings before the jump to the constant.
+
+## Bug 29: hydrology is computed before erosion and never recomputed — rivers carved from a stale surface
+
+**Confidence / Severity:** Confirmed / **High (ordering — the doc's verbatim failure case)**
+**File:** `mod.rs`, steps 5–14 above
+
+**Evidence:** `priority_flood`, `compute_flow`, `extract_river_mask`, and `trace_primary_river` all run against the *pre-erosion* regional elevation (steps 5–8). Stream-power and thermal erosion then mutate that elevation (10–11) — stream-power even *consumes* the pre-erosion flow to decide where to erode, which is fine for one iteration, but nothing recomputes flow afterward. The stale `river_graph` is then carved into the post-erosion, post-local-detail surface at step 14. Your diagnostics doc lists exactly this twice: "Rivers extracted before erosion and never updated" and "Erosion changing elevation after flow… fields are cached."
+
+**Runtime effect:** wherever erosion (or the added local detail, which the river also never saw) meaningfully reshapes a valley, the carved channel no longer follows the descent of the final surface — river segments run along contours or locally uphill, and the channel can perch on eroded-away ridges or undercut into deepened valleys with the wrong depth. Additionally, the atlas ships **pre-erosion** `filled_elevation`, `flow_direction`, `flow_accumulation`, `wetness`, and `sediment` alongside **post-erosion** elevation — every downstream consumer of those fields (wetness → biomes, sediment → coast classification) reasons about a surface that no longer exists. (Slope, notably, *is* recomputed after the beach mutation — step 17 — so whoever wrote this knew the rule; it just wasn't applied to hydrology.)
+
+**Repair (ordering, minimal churn):**
+```text
+elevation → fill → flow → stream-power erosion → thermal erosion
+→ REFILL → RECOMPUTE flow/accumulation → extract river_mask → trace river_graph
+→ upsample + local detail → carve channels
+→ recompute wetness/sediment from the final accumulation
+```
+i.e., move steps 7–8 (and the wetness/sediment derivations) after step 11, with a refill+reflow between. If stream-power should respond to its own carving, wrap {fill, flow, erode} in 2–3 iterations — but the single mandatory fix is that *extraction* happens on the final surface.
+
+**Regression test:** synthetic cone island with one eroded flank — assert every consecutive pair of `river_graph` control points is non-increasing in `filled(final)` elevation (a "rivers flow downhill on the *final* surface" invariant; today it can fail on the eroded flank).
+
+## Bug 30: `soil_depth` is all zeros — an entire classifier input is dead
+
+**Confidence / Severity:** Confirmed / Medium-High (materials)
+**File:** `mod.rs` step 19: `let soil_depth = Field2D::from_extent(extent, origin, local_spacing);` — created and never written.
+
+**Runtime effect:** `island.rs` consumes it in three places: `classify_cliff`'s soil accent (`saturate(soil/1.5)·0.10`) is always 0; `classify_land`'s `exposed_rock = smoothstep(10°,34°, slope)·(1 − saturate(soil/2))` — with soil ≡ 0 the damping term is 1, so **every moderate slope island-wide classifies as maximally exposed rock**, suppressing loam/grass on hillsides. Combined with Bug 25 (cliff mask empty, beach mask everywhere) the material layer is effectively running on two broken inputs and one missing one.
+
+**Repair:** compute it — even a first-order model transforms the output: `soil = clamp(base − k·slope_norm + sediment·s, 0, max)` (thin on steep slopes, thick where sediment accumulates, zero on the volcanic summit band). Then invalidate it after erosion/beach passes per Bug 29's ordering. **Test:** assert `soil_depth` variance > 0 and that mean soil on <10° cells exceeds mean on >35° cells.
+
+## Bug 31: the atlas mixes field tiers and epochs without declaring them
+
+**Confidence / Severity:** Confirmed / Medium (correctness-adjacent; a maintenance trap)
+**File:** `mod.rs` atlas construction
+
+`coast_distance`, `bathymetry`, `sediment`, `flow_direction`, `flow_accumulation`, `filled_elevation` are stored at **regional** spacing and **pre-erosion** epoch; `island_mask`, `slope`, `wetness`, masks, and `elevation_local` are **local**-tier and mostly post-mutation; `elevation_regional` is regional-tier post-erosion. World-space samplers make mixed tiers *functionally* legal, but nothing marks which epoch each field reflects, and installment 8+ consumers (`biome_context`, `surface.rs`, preview overlays) can't tell stale from fresh. After Bug 29's reorder, adopt the rule the doc prescribes: every derived field is (re)computed from the final elevation, and the struct doc-comments state each field's tier and epoch. Cheap enforcement: `validate_atlas` asserts `filled_elevation ≥ elevation_regional` everywhere (fill invariant) — it will fail today wherever erosion cut below the stale fill, which is exactly the staleness detector you want.
+
+## Minor findings
+
+**M20 — `elevation_regional` re-evaluates `build_island_mask` per sample** (step 2) instead of reading the just-built mask field — doubling the most expensive regional pass (each call constructs warp fbm). Pass the field in; identical results, half the cost.
+
+**M21 — `sediment`'s `for_each_world` re-derives the grid index it's already iterating** (`round((wx − origin)/spacing)` inside the closure that was handed exactly that cell). Harmless; index directly.
+
+**M22 — `validate_atlas` runs and its report is stored — verify someone reads it.** `validation_passed: false → report.passed` is good discipline; if the pipeline ignores the flag (installment 9 will check), validation is decorative.
+
+**M23 — dead-code retraction and cleanup:** `resample_to_spacing` and `residual_from_absolute` now have their callers (here) — retracting installment 2's dead-code note for those. `upsample_preserving_peaks` remains uncalled; delete it (its terracing semantics — finding F3 — shouldn't be left lying around). Note the bilinear upsample at step 13 does mean regional peaks (volcano summit) lose curvature-height at coarse spacing; `local_detail_at` papers over it, which is acceptable, but worth one comment in code.
+
+## What's verified good (including one resolved suspicion)
+
+The **coast seam suspicion from installment 6 is resolved — the switch is continuous by construction.** `volcanic_height` returns exactly `sea_level_m` where the mask ≤ 0 and scales all relief by `mask^1.6`, so land elevation descends to sea level as the mask → 0; `bathymetry_height` returns `sea` at coast_distance ≤ 0. Both sides of `surface_height_at`'s mask-0.01 switch approach sea level, so no cliff seam at the coastline. (The **atlas-boundary rim** remains: beyond the field extents, Bug 4 returns 0.0 for both elevation and bathymetry, so with sea = 2.0 the seabed steps from ~−28 up to 0 at the atlas edge — that fix is still Bug 4's clamp.) Also good: slope is recomputed after the beach mutation (the one place derived-field invalidation was done right); `residual_from_absolute` is used correctly, dodging `add_residual`'s truncation hazard (Bug 5); river carving happens *before* material/biome classification (right relative order, doc Part 9); the preview tooling normalizes per-mode and exposes the exact debug overlays Part 14 asks for; and `sample_atlas_surface` delegating to one function keeps a single surface authority for the atlas path — the anchor the Bug 13/23 repairs should route everything through.

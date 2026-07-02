@@ -1,3 +1,4 @@
+// crates/shared/src/lib.rs
 //! Shared types used across engine crates without Bevy dependencies.
 
 mod definition;

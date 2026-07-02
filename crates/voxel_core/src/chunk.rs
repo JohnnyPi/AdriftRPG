@@ -1,3 +1,4 @@
+// crates/voxel_core/src/chunk.rs
 pub const CHUNK_CELLS: usize = 16;
 pub const CHUNK_SAMPLES: usize = CHUNK_CELLS + 1;
 

@@ -1,3 +1,4 @@
+// crates/game_data/src/definitions.rs
 use serde::{Deserialize, Serialize};
 use shared::{DefinitionHeader, StableId};
 
@@ -210,6 +211,8 @@ pub struct WorldDefinition {
     pub terrain: StableId,
     pub biomes: StableId,
     pub materials: StableId,
+    #[serde(default)]
+    pub surface: Option<StableId>,
     pub water: StableId,
     pub lighting: StableId,
     #[serde(default)]
@@ -497,18 +500,186 @@ pub struct TerrainMaterialsDefinition {
     pub description: String,
     #[serde(default)]
     pub materials: Vec<TerrainMaterialEntryDefinition>,
+    /// Explicit texture-array layer order (required for schema_version >= 2).
+    #[serde(default)]
+    pub layers: Vec<StableId>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct TerrainMaterialEntryDefinition {
-    pub id: u16,
+    /// Stable material key used by surface rules and layer ordering.
+    #[serde(default)]
+    pub key: Option<StableId>,
+    /// Legacy numeric id (biome rules).
+    #[serde(default)]
+    pub id: Option<u16>,
     pub name: String,
     pub albedo: [f32; 3],
     #[serde(default = "default_one")]
     pub triplanar_scale: f32,
     #[serde(default = "default_roughness")]
     pub roughness: f32,
+    /// Optional procedural generator block (Rock/Ground/Sand/Cobblestone).
+    #[serde(default)]
+    pub generator: Option<serde_yaml::Value>,
+}
+
+impl TerrainMaterialEntryDefinition {
+    pub fn resolved_key(&self) -> StableId {
+        if let Some(ref key) = self.key {
+            return key.clone();
+        }
+        if let Some(id) = self.id {
+            return StableId::new(&format!("material_{id}"));
+        }
+        StableId::new(&self.name)
+    }
+
+    pub fn resolved_legacy_id(&self) -> u16 {
+        self.id.unwrap_or_else(|| {
+            self.name
+                .chars()
+                .fold(0u16, |acc, c| acc.wrapping_mul(31).wrapping_add(c as u16))
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SurfaceRulesDefinition {
+    #[serde(flatten)]
+    pub header: DefinitionHeader,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub gates: Vec<SurfaceGateDefinition>,
+    /// Named blend presets referenced by weighted gate entries.
+    #[serde(default)]
+    pub classifiers: Vec<SurfaceClassifierDefinition>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct SurfaceGateDefinition {
+    pub id: String,
+    /// When all conditions match, this gate contributes (or fully applies if exclusive).
+    #[serde(default)]
+    pub when: SurfaceConditionsDefinition,
+    /// Product of smooth ramps applied to this gate's contribution weight.
+    #[serde(default)]
+    pub gate_weight: SurfaceGateWeightDefinition,
+    /// If true, first matching gate wins and stops evaluation.
+    #[serde(default)]
+    pub exclusive: bool,
+    /// Inline blend entries (mutually exclusive with `classifier`).
+    #[serde(default)]
+    pub blend: Vec<SurfaceBlendEntryDefinition>,
+    /// Reference to a named classifier preset.
+    #[serde(default)]
+    pub classifier: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
+#[serde(deny_unknown_fields, default)]
+pub struct SurfaceConditionsDefinition {
+    #[serde(default)]
+    pub cave_exposure_min: Option<f32>,
+    #[serde(default)]
+    pub water_depth_min: Option<f32>,
+    #[serde(default)]
+    pub coast_distance_max: Option<f32>,
+    #[serde(default)]
+    pub river_distance_max: Option<f32>,
+    #[serde(default)]
+    pub slope_min: Option<f32>,
+    #[serde(default)]
+    pub slope_max: Option<f32>,
+    #[serde(default)]
+    pub elevation_min: Option<f32>,
+    #[serde(default)]
+    pub elevation_max: Option<f32>,
+    #[serde(default)]
+    pub elevation_above_sea_min: Option<f32>,
+    #[serde(default)]
+    pub elevation_above_sea_max: Option<f32>,
+    #[serde(default)]
+    pub moisture_min: Option<f32>,
+    #[serde(default)]
+    pub moisture_max: Option<f32>,
+    #[serde(default)]
+    pub geology: Option<String>,
+    #[serde(default)]
+    pub biome: Option<String>,
+    #[serde(default)]
+    pub soft_grassland_min: Option<f32>,
+    #[serde(default)]
+    pub soft_forest_min: Option<f32>,
+    #[serde(default)]
+    pub soft_wetland_min: Option<f32>,
+    #[serde(default)]
+    pub soft_alpine_min: Option<f32>,
+    #[serde(default)]
+    pub fallback: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
+#[serde(deny_unknown_fields, default)]
+pub struct SurfaceGateWeightDefinition {
+    #[serde(default)]
+    pub coast_distance: Option<SurfaceRampDefinition>,
+    #[serde(default)]
+    pub river_distance: Option<SurfaceRampDefinition>,
+    #[serde(default)]
+    pub slope: Option<SurfaceRampDefinition>,
+    #[serde(default)]
+    pub elevation_above_sea: Option<SurfaceRampDefinition>,
+    #[serde(default)]
+    pub moisture: Option<SurfaceRampDefinition>,
+    #[serde(default)]
+    pub cave_exposure: Option<SurfaceRampDefinition>,
+    #[serde(default)]
+    pub wave_exposure: Option<SurfaceRampDefinition>,
+    #[serde(default)]
+    pub soft_alpine: Option<SurfaceRampDefinition>,
+    #[serde(default)]
+    pub soft_wetland: Option<SurfaceRampDefinition>,
+    #[serde(default)]
+    pub constant: Option<f32>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct SurfaceRampDefinition {
+    pub from: f32,
+    pub to: f32,
+    #[serde(default)]
+    pub invert: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct SurfaceBlendEntryDefinition {
+    pub material: StableId,
+    pub weight: f32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct SurfaceClassifierDefinition {
+    pub id: String,
+    #[serde(default)]
+    pub blend: Vec<SurfaceBlendEntryDefinition>,
+    /// Weighted mix of other classifier ids.
+    #[serde(default)]
+    pub weighted_mix: Vec<SurfaceWeightedMixEntryDefinition>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct SurfaceWeightedMixEntryDefinition {
+    pub classifier: String,
+    pub weight: f32,
 }
 
 fn default_one() -> f32 {
@@ -1200,6 +1371,7 @@ pub enum RawDefinition {
     TerrainGeneration(TerrainGenerationDefinition),
     Biomes(BiomesDefinition),
     TerrainMaterials(TerrainMaterialsDefinition),
+    SurfaceRules(SurfaceRulesDefinition),
     Vegetation(VegetationDefinition),
     Cave(CaveDefinition),
     Debug(DebugDefinition),
@@ -1231,6 +1403,7 @@ impl RawDefinition {
             Self::TerrainGeneration(def) => &def.header.id,
             Self::Biomes(def) => &def.header.id,
             Self::TerrainMaterials(def) => &def.header.id,
+            Self::SurfaceRules(def) => &def.header.id,
             Self::Vegetation(def) => &def.header.id,
             Self::Cave(def) => &def.header.id,
             Self::Debug(def) => &def.header.id,
@@ -1261,7 +1434,8 @@ impl RawDefinition {
             Self::World(def) => def.header.validate(),
             Self::TerrainGeneration(def) => def.header.validate(),
             Self::Biomes(def) => def.header.validate(),
-            Self::TerrainMaterials(def) => def.header.validate(),
+            Self::TerrainMaterials(def) => def.header.validate_schema(&[1, 2]),
+            Self::SurfaceRules(def) => def.header.validate(),
             Self::Vegetation(def) => def.header.validate(),
             Self::Cave(def) => def.header.validate(),
             Self::Debug(def) => def.header.validate(),

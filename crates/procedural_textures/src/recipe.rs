@@ -1,3 +1,4 @@
+// crates/procedural_textures/src/recipe.rs
 use blake3::Hasher;
 
 use crate::error::TextureGenerationError;
@@ -66,7 +67,9 @@ impl TextureRecipe {
     }
 
     pub fn fingerprint(&self) -> [u8; 32] {
-        let json = serde_json::to_string(self).unwrap_or_default();
+        let json = serde_json::to_string(self).unwrap_or_else(|err| {
+            format!("TextureRecipe::fingerprint serialize error: {err}")
+        });
         *Hasher::new().update(json.as_bytes()).finalize().as_bytes()
     }
 }

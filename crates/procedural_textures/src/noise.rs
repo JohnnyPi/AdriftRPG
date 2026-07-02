@@ -1,3 +1,4 @@
+// crates/procedural_textures/src/noise.rs
 /// Toroidal seamless value noise for tileable textures.
 #[derive(Clone, Copy, Debug)]
 pub struct SeamlessNoise {
@@ -75,8 +76,8 @@ impl SeamlessNoise {
         let mut sum = 0.0;
         let mut norm = 0.0;
         for _ in 0..octaves {
-            let n = 1.0 - self.sample(u * freq, v * freq).abs() * 2.0;
-            let n = n.clamp(0.0, 1.0);
+            let sample = self.sample(u * freq, v * freq);
+            let n = 1.0 - (sample * 2.0 - 1.0).abs();
             sum += amp * n * n;
             norm += amp;
             amp *= gain;
@@ -87,5 +88,32 @@ impl SeamlessNoise {
         } else {
             0.0
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ridged_does_not_clamp_half_domain_to_zero() {
+        let noise = SeamlessNoise::new(1001);
+        let side = 256;
+        let mut exact_zeros = 0usize;
+        for y in 0..side {
+            for x in 0..side {
+                let u = x as f32 / side as f32;
+                let v = y as f32 / side as f32;
+                let value = noise.ridged(u * 3.0, v * 3.0, 7, 2.0, 0.5);
+                if value == 0.0 {
+                    exact_zeros += 1;
+                }
+            }
+        }
+        let zero_fraction = exact_zeros as f32 / (side * side) as f32;
+        assert!(
+            zero_fraction < 0.05,
+            "ridged noise clamped {zero_fraction:.1}% of samples to exactly zero"
+        );
     }
 }

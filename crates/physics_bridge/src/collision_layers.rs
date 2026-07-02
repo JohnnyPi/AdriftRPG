@@ -1,3 +1,4 @@
+// crates/physics_bridge/src/collision_layers.rs
 //! Project-owned collision layer definitions mapped to Avian.
 
 use avian3d::prelude::*;

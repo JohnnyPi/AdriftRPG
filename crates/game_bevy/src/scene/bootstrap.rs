@@ -1,3 +1,4 @@
+// crates/game_bevy/src/scene/bootstrap.rs
 use bevy::prelude::*;
 use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder};
 use tracing::info;

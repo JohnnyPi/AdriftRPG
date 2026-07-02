@@ -1,3 +1,4 @@
+// crates/terrain_material_bevy/src/plugin.rs
 use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task};
 use procedural_textures::TerrainMaterialRecipe;
@@ -15,12 +16,16 @@ pub struct PendingTextureBake {
             procedural_textures::CpuTextureArrays,
             [u8; 32],
             Vec<TerrainMaterialRecipe>,
+            Option<Vec<String>>,
         )>,
     >,
 }
 
 #[derive(Resource, Clone, Default)]
-pub struct ProceduralMaterialRecipeOverride(pub Option<Vec<TerrainMaterialRecipe>>);
+pub struct ProceduralMaterialRecipeOverride {
+    pub recipes: Option<Vec<TerrainMaterialRecipe>>,
+    pub layer_order: Option<Vec<String>>,
+}
 
 pub struct ProceduralTerrainMaterialPlugin {
     pub materials_yaml: Option<std::path::PathBuf>,
@@ -72,6 +77,7 @@ fn insert_fallback_material(
             ..Default::default()
         },
         layer_scales: crate::material::TerrainLayerScales::default(),
+        chunk_slots: crate::material::default_chunk_slots(),
     });
     state.material = handle;
     state.arrays = handles;
@@ -88,26 +94,36 @@ fn start_texture_bake(
         return;
     }
 
-    let Some(recipes) = recipe_override.0.clone().or_else(|| {
-        yaml_path
-            .0
-            .as_ref()
-            .map(|path| recipes_for_world(Some(path)))
-    }) else {
+    let Some(recipes) = recipe_override
+        .recipes
+        .clone()
+        .or_else(|| {
+            yaml_path
+                .0
+                .as_ref()
+                .map(|path| recipes_for_world(Some(path)))
+        })
+    else {
         return;
     };
+    let layer_order = recipe_override.layer_order.clone();
     let fingerprint = recipe_fingerprint_for(&recipes);
 
     if let Some(cached) = try_load_cache(fingerprint) {
-        pending.task =
-            Some(AsyncComputeTaskPool::get().spawn(async move { (cached, fingerprint, recipes) }));
+        pending.task = Some(AsyncComputeTaskPool::get().spawn(async move {
+            (cached, fingerprint, recipes, layer_order)
+        }));
         return;
     }
 
     pending.task = Some(AsyncComputeTaskPool::get().spawn(async move {
-        let arrays = bake_cpu_arrays(&recipes);
+        let arrays = if let Some(ref order) = layer_order {
+            crate::bake::bake_cpu_arrays_for_palette(order, &recipes)
+        } else {
+            bake_cpu_arrays(&recipes)
+        };
         write_cache(fingerprint, &arrays);
-        (arrays, fingerprint, recipes)
+        (arrays, fingerprint, recipes, layer_order)
     }));
 }
 
@@ -121,14 +137,19 @@ fn poll_texture_bake(
         return;
     };
 
-    if let Some((arrays, fingerprint, recipes)) =
+    if let Some((arrays, fingerprint, recipes, layer_order)) =
         bevy::tasks::block_on(bevy::tasks::futures_lite::future::poll_once(&mut task))
     {
         let handles = crate::arrays::upload_texture_arrays(&arrays, &mut images);
-        let material = build_material_from_arrays(&arrays, &recipes, &mut images, &mut materials);
+        let ordered = if let Some(ref order) = layer_order {
+            crate::bake::ordered_recipes_for_palette(order, &recipes)
+        } else {
+            recipes.clone()
+        };
+        let material = build_material_from_arrays(&arrays, &ordered, &mut images, &mut materials);
         state.material = material;
         state.arrays = handles;
-        state.layer_scales = crate::material::layer_scales_from_recipes(&recipes);
+        state.layer_scales = crate::material::layer_scales_from_recipes(&ordered);
         state.recipe_fingerprint = fingerprint;
         state.ready = true;
     } else {

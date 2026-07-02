@@ -1,3 +1,4 @@
+// crates/game_bevy/src/terrain/residency.rs
 //! Interest-based chunk residency (VS2 §3.3).
 
 use bevy::prelude::*;

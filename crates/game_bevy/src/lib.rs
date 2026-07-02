@@ -1,3 +1,4 @@
+// crates/game_bevy/src/lib.rs
 //! Bevy integration layer for the vertical slice.
 
 mod camera;

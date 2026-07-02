@@ -1,3 +1,4 @@
+// crates/game_bevy/src/physics/props.rs
 //! Dynamic props and moving platforms (VS2 Phase 2).
 
 use avian3d::prelude::*;

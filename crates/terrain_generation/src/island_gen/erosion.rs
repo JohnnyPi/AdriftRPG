@@ -1,3 +1,4 @@
+// crates/terrain_generation/src/island_gen/erosion.rs
 //! Stream-power and thermal erosion (VS3 §7).
 
 use crate::field2d::Field2D;
@@ -20,7 +21,7 @@ pub fn apply_stream_power_erosion(
                 }
                 let discharge = accumulation.get(x, z).max(0.1);
                 let sl = slope.get(x, z).to_radians().tan().max(0.0);
-                let erosion = discharge.powf(er.m) * sl.powf(er.n) * 0.00002;
+                let erosion = discharge.powf(er.m) * sl.powf(er.n) * er.stream_power_erodibility;
                 let step = erosion.min(er.maximum_step_m);
                 deltas[elevation.index(x, z)] -= step;
             }
@@ -38,7 +39,7 @@ pub fn apply_thermal_erosion(
     island_mask: &Field2D<f32>,
     params: &IslandGenParams,
 ) {
-    let talus_angle = 38.0f32.to_radians().tan();
+    let talus_angle = params.erosion.thermal_talus_deg.to_radians().tan();
     let rate = params.erosion.thermal_transfer_rate;
     for _ in 0..params.erosion.thermal_iterations {
         let mut transfers = vec![0.0f32; elevation.samples.len()];

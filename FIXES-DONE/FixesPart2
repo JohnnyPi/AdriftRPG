@@ -1,0 +1,106 @@
+# Installment 2: density CSG, noise, 2D fields, resolution tiers
+
+**Files:** `terrain_generation/src/density_ops.rs` (102), `…/field2d.rs` (258), `…/resolution.rs` (201), plus the uploaded `noise.rs` (91) — which turns out to be a problem, see below.
+
+## Review gap: the core terrain noise file is missing from the upload
+
+**Severity:** blocks part of the audit — please re-upload
+**Evidence:** `surface_height.rs`, `footprint.rs`, `topology.rs`, `biome_context.rs`, `route_validation.rs`, `volcano.rs`, and `field_stack.rs` all import `crate::noise::ValueNoise` (a 3D noise with `fbm(x, y, z, octaves, lacunarity, gain)`). The uploaded `noise.rs` contains a *different* type, `SeamlessNoise` (2D toroidal), used only by the procedural-texture files (`ground.rs:4`, `rock.rs:3`, `sand.rs:4`). Your workspace has (at least) two `noise.rs` files in different crates, and the flattened upload kept only the texture one.
+
+This matters because `ValueNoise` is the primitive under every macro/regional terrain field — Part 6 of the diagnostics doc (seed handling, value range, world-space continuity, "noise restarting per chunk") can't be audited without it. The same collision risk applies to other duplicated filenames: `mod.rs`, `plugin.rs`, `debug.rs`, `surface.rs`, `materials.rs`/`material.rs`, `environment.rs` — each likely exists in multiple crates and only one copy survived. **When convenient, please upload `terrain_generation/src/noise.rs` (the `ValueNoise` one), and any other collided files, ideally with crate-prefixed names.** I'll audit `ValueNoise` as an addendum when you do; meanwhile I'll continue with what's here.
+
+---
+
+## Bug 4: `Field2D::sample_bilinear` returns 0.0 outside — and *on* — the field boundary
+
+**Severity:** High (live in the primary elevation read path)
+**File:** `terrain_generation/src/field2d.rs`, `sample_bilinear`
+
+**Evidence:**
+```rust
+if lx < 0.0 || lz < 0.0 { return 0.0; }
+...
+if lx >= w - 1.0 || lz >= h - 1.0 { return 0.0; }
+```
+Two defects in one. First, out-of-bounds queries return the sentinel `0.0` instead of clamping to the edge value. Second, the `>= w - 1.0` guard means a query at **exactly the last grid row/column** — a perfectly valid stored sample — also returns 0.0. And this is not a dormant helper: `island_atlas.rs:54` computes `land_height = elevation_regional.sample_bilinear(x,z) + elevation_local.sample_bilinear(x,z)`, and `:66` reads bathymetry the same way. `grid_dims` (`resolution.rs`) sizes fields as `ceil(extent/spacing) + 1` samples, so the last sample sits at or just past the world extent — meaning queries near the atlas boundary legitimately hit this code path.
+
+**Why it causes the symptom:** everywhere at the atlas rim, land elevation and ocean-floor depth snap discontinuously to 0.0. Visually: a cliff wall or moat ring at the world edge; underwater, the seabed jumps up to y=0 (a "shelf wall") wherever bathymetry queries cross the last row. If chunk residency ever loads chunks beyond the atlas extent, all of them evaluate against zero-height terrain. This is exactly Part 8's "edge behavior / sampling outside bounds" failure class, in its worst form (sentinel, not clamp).
+
+**Minimal confirmation test:**
+```rust
+let mut f = Field2D::new(4, 4, [0.0, 0.0], 8.0);
+f.for_each_world(|_, _, v| *v = 5.0);
+assert_eq!(f.sample_bilinear(24.0, 24.0), 5.0); // last grid point — currently returns 0.0
+assert_eq!(f.sample_bilinear(30.0, 12.0), 5.0); // beyond bounds — currently returns 0.0
+```
+
+**Repair:** clamp-to-edge sampling, which is the correct policy for terrain fields (categorical fields already correctly use `sample_nearest` with clamping):
+```rust
+pub fn sample_bilinear(&self, wx: f32, wz: f32) -> f32 {
+    let (lx, lz) = self.world_to_grid(wx, wz);
+    let max_x = (self.width - 1) as f32;
+    let max_z = (self.height - 1) as f32;
+    let lx = lx.clamp(0.0, max_x);
+    let lz = lz.clamp(0.0, max_z);
+    let x0 = (lx.floor() as u32).min(self.width - 2);
+    let z0 = (lz.floor() as u32).min(self.height - 2);
+    let fx = lx - x0 as f32;
+    let fz = lz - z0 as f32;
+    // ...unchanged bilinear blend
+}
+```
+(guard `width/height >= 2`, or early-return the single sample). If you *want* "beyond the atlas is open ocean," that policy belongs in `island_atlas.rs` where sea level is known — not as a silent `0.0` inside a generic container.
+
+**Regression test:** the confirmation test above; plus a monotonic-ramp field asserting no discontinuity between the interior and the boundary sample.
+
+## Bug 5: `add_residual` silently truncates on size mismatch
+
+**Severity:** Medium
+**File:** `terrain_generation/src/field2d.rs`, `add_residual`
+
+**Evidence:** after alignment, `out.samples.iter_mut().zip(aligned.samples.iter())` — `zip` stops at the shorter buffer. `resample_to_spacing` derives the output dimensions from *detail's* extent, not base's, so if the two fields don't cover identical extents (or origins differ — the alignment check compares origin but `resample_to_spacing` never re-origins), the residual is applied to only a leading region of the base field in row-major order — i.e., the bottom rows of the map get no local detail, with a hard seam line where it stops.
+
+**Repair:** after alignment, `assert_eq!((out.width, out.height), (aligned.width, aligned.height), "residual field extent mismatch")` — or better, resample onto base's exact grid (iterate base's samples, `detail.sample_bilinear(wx, wz)` per point), which removes the failure mode entirely and also handles origin mismatch.
+
+**Regression test:** base 5×5 at 4 m + detail 3×3 at 8 m → must either error or apply everywhere; assert the last row of `out` differs from `base`.
+
+## Bug 6: `SeamlessNoise::ridged` folds around the wrong center
+
+**Severity:** Low (cosmetic — texture generation only, used by `rock.rs:69`)
+**File:** uploaded `noise.rs` (texture crate), `ridged`
+
+**Evidence:**
+```rust
+let n = 1.0 - self.sample(u * freq, v * freq).abs() * 2.0;
+let n = n.clamp(0.0, 1.0);
+```
+`sample` returns values in **[0, 1]**, so `.abs()` is a no-op and this computes `1 − 2·sample`, clamped. Standard ridged noise folds around the midpoint: `1 − |2·sample − 1|`. As written, every point where `sample > 0.5` — roughly half the domain — clamps to exactly 0, and "ridges" appear only as isolated blobs around noise *minima* instead of connected creases. On the rock texture this reads as sparse pockmarks rather than ridged striations.
+
+**Repair:** `let n = 1.0 - (self.sample(u * freq, v * freq) * 2.0 - 1.0).abs();` (clamp becomes unnecessary). Then eyeball the rock texture — the visual character will change, so retune `ridged_*` params if `rock.rs` was tuned around the buggy output.
+
+**Regression test:** statistical — over a 256² sample grid, assert the fraction of exact zeros is < 5% (currently ~50%).
+
+## Suspected defect: `upsample_preserving_peaks` dilates peaks and terraces slopes
+
+**Severity:** Medium if used; currently **no callers in the upload** (dead code, or its caller is in a collided file)
+**File:** `terrain_generation/src/field2d.rs`
+
+**Evidence:** for every fine sample it takes the **max over a `(ratio+1)²` window of coarse samples** centered near the query. With regional 8 m → local 2 m (ratio 4), that's a 5×5 coarse window = a 40 m max-filter. Two consequences: every summit becomes a ~40 m flat-topped plateau (max is constant while the window contains the peak), and slopes turn into staircase terraces (the max changes only when the window shifts by a whole coarse cell). The fallback to `sample_bilinear` when no valid sample is found adds a discontinuous max→bilinear transition at field edges — compounded by Bug 4.
+
+**Diagnostic needed:** confirm whether anything calls this (it, `resample_to_spacing`, `add_residual`, and `residual_from_absolute` all have zero call sites in the upload — either they're dead or their caller collided). If it's live in atlas construction, this alone explains "terraced / flat-topped mountains."
+
+**Repair if live:** peak preservation should be *point-injective*, not a max-filter: bilinear-upsample, then add back `coarse_peak − bilinear_at_peak` only at each coarse sample's exact location with a narrow kernel — or simpler, skip peak preservation and let the local/voxel detail tiers restore relief. If dead: delete it.
+
+## Minor findings
+
+**M6 — `Field2D::index` doesn't check `x < width`** (`field2d.rs`). `get(x, z)` with `x >= width` wraps into the next row silently when the flat index stays in range — the classic transposition/smear enabler. One `debug_assert!(x < self.width && z < self.height)` in `index` catches an entire bug class for free.
+
+**M7 — `resample_to_spacing`'s comment claims "box downsample"** but the code is bilinear *point* sampling in both directions. Downsampling a high-frequency field this way aliases (Part 8: "downsampling method"). Fix the comment now; implement an actual box/average filter if any noisy field is ever downsampled.
+
+**M8 — `ellipsoid_sdf` is a normalized-space distance, not metric** (`density_ops.rs`). `len(p/r) − 1` returns dimensionless values whose gradient magnitude varies with axis radii — correct zero-set, distorted distances. Harmless for pure iso-extraction, but if it feeds smooth blends (`smooth_max` with a `k` in meters) or gradient normals, falloff widths will be anisotropic and squashed by up to `1/max(r)`. Cheap improvement: scale the result by `rx.min(ry).min(rz)` to approximate meters, and document the caveat.
+
+**M9 — `check_grid_size` computes `grid_dims` twice** (`resolution.rs`). Trivial; bind it once.
+
+## What's verified good
+
+`density_ops.rs` passes the Part 11 signed-density audit cleanly: **negative = solid** is documented and consistent, `union = min`, `subtract = max(solid, −cavity)`, `plane_density = y − height` — exactly the convention set the doc asks to verify, with sign tests present. `resolution.rs` is the strongest file so far: tier ordering, integer-ratio, and grid-size validation with typed errors and real tests — this is the validation discipline the `cell_size_m` gap (Bug 3) needs upstream. `SeamlessNoise`'s toroidal wrap and negative-coordinate handling are correct (`i32 & 255` wraps properly for negatives), and `sample_nearest` for categorical `u8` fields is the right interpolation choice per Part 8.

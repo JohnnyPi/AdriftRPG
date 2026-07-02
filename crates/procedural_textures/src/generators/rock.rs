@@ -1,3 +1,4 @@
+// crates/procedural_textures/src/generators/rock.rs
 use crate::error::TextureGenerationError;
 use crate::maps::{encode_height_u8, linear_to_srgb_u8, pack_ormh, GeneratedPbrMaps};
 use crate::noise::SeamlessNoise;

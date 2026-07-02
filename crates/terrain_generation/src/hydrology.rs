@@ -1,3 +1,4 @@
+// crates/terrain_generation/src/hydrology.rs
 //! Hydrology backend with river spline support.
 
 use crate::river::{generate_river_spline, RiverGenConfig};

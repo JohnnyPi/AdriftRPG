@@ -1,3 +1,4 @@
+// crates/game_bevy/src/data/plugin.rs
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 

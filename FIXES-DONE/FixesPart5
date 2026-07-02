@@ -1,0 +1,91 @@
+This is the file the whole review has been waiting for, and it deserves its own installment. The atlas macro files (`island_atlas.rs` etc.) move to the next one.
+
+# Installment 5: core density composition — `terrain_generation/src/recipe.rs`
+
+**File:** `recipe-terrain-generation.rs` (936 lines). First, the good news that unblocks earlier verdicts: `coord_offset` handling is *consistent* — `density_at` adds it, `topology.rs`'s validator adds it before surface queries, `with_atlas` converts river splines into recipe space, and the atlas path subtracts it back before sampling world-space atlas fields. All live worlds use `[128, 0, 128]` (y = 0), so the one vertical-mixing risk (atlas surface in world-y vs. recipe-y density) is dormant — but add `debug_assert_eq!(coord_offset[1], 0.0)` or handle it, because the code silently misplaces terrain vertically the day someone sets it. Determinism is clean here: all randomness flows from the seed, no HashMaps, `&self` throughout — safe for the async task pool.
+
+Now the problems, in severity order.
+
+## Bug 20: `coastal_inland_factor` is a diagonal linear ramp — the island's macro elevation is a tilted plane
+
+**Confidence / Severity:** Confirmed with live config values / **High (non-atlas path: landmass shape is structurally wrong)**
+**File:** `recipe.rs`, `coastal_inland_factor`
+
+**Evidence:**
+```rust
+let nx = (x + origin[0]) / scale[0];
+let nz = (z + origin[1]) / scale[1];
+let coast = 1.0 - (nx * 0.6 + (1.0 - nz) * 0.4).clamp(0.0, 1.0);
+```
+Three compounding defects. (1) `x + origin` — the same sign disease as Bug 12; the configured origin shifts the field the wrong way. (2) The function claims "0 at the shore, 1 inland" but computes a **planar gradient** `0.6 − 0.6nx + 0.4nz` — it has no relationship to the coastline at all. With the expanded profile (origin [128,128], scale [256,256], recipe space 0–256): coast runs from ~0.9 at the low-x/high-z corner down to 0.0 at the opposite corner, linearly. (3) Everything downstream trusts it: `broad = base_height + coast * height_range` makes the island's macro elevation a **tilted plane** (high corner ≈ +20 m, opposite corner at base), the ridged-noise term is scaled by it (ridges only in one corner), and `distance_to_water_m` — used for biome/coast classification — returns `(1−coast)·256`, i.e. fake distances from the same diagonal, not distance to water.
+
+**Why it causes the symptom:** this is the "incorrect landmass shape" category with an exact mechanism: instead of elevation rising away from the coast in all directions (a dome), the non-atlas island is a ramp clipped by the radial island mask — one shore is cliffs, the opposite shore is a long flat wedge, and the "coastal" classifier band runs diagonally across dry land.
+
+**Repair:** derive inland factor from the thing that actually defines the coast. When an `IslandMask` op exists (it does in every live profile), the shore is `dist = radius_m`:
+```rust
+pub fn coastal_inland_factor(recipe: &TerrainRecipe, x: f32, z: f32) -> f32 {
+    if let Some(f) = island_land_factor_from_recipe(recipe, x, z) {
+        // f: 0 at falloff edge → 1 at mask radius; push "fully inland" deeper than the shore
+        return smoothstep_into_interior(recipe, x, z); // e.g. clamp((radius - dist) / inland_band_m, 0, 1)
+    }
+    // fallback without a mask: radial in the CoastalSurface's own configured frame
+    let dx = (x - origin[0]) / (scale[0] * 0.5);
+    let dz = (z - origin[1]) / (scale[1] * 0.5);
+    (1.0 - (dx * dx + dz * dz).sqrt()).clamp(0.0, 1.0)
+}
+```
+(with an explicit `inland_band_m` — falloff_m is 24 m, too thin to drive elevation; expose a field or default to `radius_m * 0.5`). This also finally gives `origin`/`scale` a real job, resolving half of Bug 15. **Regression test:** for the expanded profile, `coastal_inland_factor` at four points equidistant from the mask edge (N/S/E/W) must be equal within ε; today they differ by up to 0.8.
+
+## Bug 21: `ocean_y.min(floor_y)` makes the configured `OceanFloor` op dead — flat seabed
+
+**Confidence / Severity:** Confirmed with live values / Medium-High
+**File:** `recipe.rs`, the `CoastalSurface` branch of `density_at_recipe_without_atlas` + `ocean_surface_y`
+
+**Evidence:** with sea level 2.0 and the expanded profile, `ocean_surface_y` = 2 − 18 + detail·[−8,+8] ∈ [−24, −8]; the island mask's `ocean_floor_y` = −28. `ocean_y = ocean_y.min(floor_y)` takes the *deeper*, i.e. **−28 always** — the entire `ocean_floor` op (base depth, variation, octaves) has zero effect, and the seabed is a dead-flat plane at −28. If the intent was "never deeper than the mask floor," the operator is `max`; if the mask floor is meant as the deep-basin level and `OceanFloor` as the shelf, they should compose (shelf near the island blending down to basin with coast distance), not `min`. Compounding: `ocean_surface_y` also ignores its `origin`/`scale` fields (`let _ = (origin, scale)` — Bug 15's third instance).
+
+**Runtime effect:** "terrain unexpectedly flat" underwater, no shallow shelf, and (with the falloff blend below) a uniform coastal wall. **Repair:** decide the semantics and encode them: `shelf = sea_level − base_depth + detail`, then blend shelf→`ocean_floor_y` by distance beyond the mask falloff. **Regression test:** variance of seabed height over a 100-point offshore grid must exceed a floor derived from `variation_m` (today it's exactly 0).
+
+**Related design note, same code block:** the land/ocean blend `land_surface·f + ocean_y·(1−f)` spans the 24 m falloff band from ~+8..22 m down to −28 m — a 30–50 m drop over 24 m horizontally. That's a cliff coast everywhere by construction; there is no beach band or shallow shelf in the non-atlas path, which your target slice explicitly requires. The shelf fix above is the entry point for that too.
+
+## Bug 22: `CoastalSurface` *assigns* density, erasing any ops authored before it
+
+**Confidence / Severity:** Confirmed by inspection / Medium (order-dependent silent data loss)
+**File:** `recipe.rs`, `density_at_recipe_without_atlas`
+
+**Evidence:** every other op composes (`solid_union`/`solid_subtract`/`+=`), but the `CoastalSurface` branch does `density = plane_density(y, surface_y)` — assignment. Any `Ellipsoid`, `Capsule`, `MountainPeak`, or `UnderwaterTrench` that appears *before* `coastal_surface` in the YAML op list is evaluated and then discarded. Today's YAMLs happen to put `coastal_surface` early (and `island_mask`/`ocean_floor` are order-independent lookups), so nothing visibly breaks — but the recipe model claims to be an ordered op list, and this makes it silently order-destructive. It's also inconsistent with `land_surface_height`, which takes the *first* `CoastalSurface` (`break`) while this loop lets the *last* one win if there are two.
+
+**Repair:** `density = solid_union(density, plane_density(y, surface_y))` (union with `f32::MAX` initial makes the first one an assignment anyway), and reject multiple `CoastalSurface` ops at validation so the first/last discrepancy can't matter. **Regression test:** recipe with an ellipsoid union *before* coastal_surface must still produce the ellipsoid bulge.
+
+## Bug 23: the atlas path silently drops op types and skips the foundation seal
+
+**Confidence / Severity:** Confirmed by inspection / Medium
+**File:** `recipe.rs`, `density_at_recipe_with_atlas`
+
+**Evidence:** the atlas branch handles `Ellipsoid`, `Capsule`, `NoisePerturb`, and `_ => {}` — `MountainPeak`, `UnderwaterTrench`, `CoastModifier`, `ValleyBasin` authored in a world that *also* has `island_generation` simply vanish (no warning, no validation error). And `apply_foundation_seal` is only called in the non-atlas branch — authored subtract caves in the atlas path can breach below the island with nothing guaranteeing bedrock under them (the exact failure `count_outdoor_void_columns` exists to detect — but that validator seals against `land_surface_height`, which the atlas path doesn't even use for its surface).
+
+**Repair:** at recipe compile time (game_bevy `compile_terrain_recipe`), reject or warn on op types the atlas path won't honor; and either apply the seal in the atlas branch against `sample_atlas_surface` or document/validate that atlas caves must come from `append_generated_island_caves` (whose placement is already suspect — Bug 19). **Test:** compile a world with `island_generation` + a `mountain_peak` op → expect a validation error, not silence.
+
+## Bug 24: `NoisePerturb` band gating creates a field discontinuity at the isosurface
+
+**Confidence / Severity:** Confirmed mechanism / Low-Medium (surface roughness/normal noise)
+**File:** `recipe.rs`, both branches
+
+**Evidence:** `if density > density_min && density < density_max { density += perturb }` — a hard on/off at the band edges. The default recipe uses band (0, 2): samples just *outside* the surface get perturbed, samples at/inside (≤ 0) don't. Surface-nets interpolates `t = da/(da−db)` across exactly that boundary — one endpoint perturbed, one not — biasing vertex positions and making gradient normals inconsistent right at the surface. Bonus unit problem via M8: near the big headland *ellipsoids* (radii 18–22 m), density is in normalized units, so the "2 m" band is a 2×radius ≈ 40 m world-space shell.
+
+**Repair:** fade instead of gate: `let band = smoothstep(density_min, density_min + w, density) * (1.0 - smoothstep(density_max - w, density_max, density)); density += perturb * band;` — and revisit the band once `ellipsoid_sdf` is metric (M8).
+
+## Minor findings
+
+**M16 — `with_atlas` hardcodes `bank_width_m: 3.5`** for atlas river distance queries, ignoring the river config's `bank_width_m`. Harmless today (the atlas path doesn't carve via this context) but it's the fourth dead-config instance; thread the real value through `IslandParams`.
+
+**M17 — `terrain_surface_height_at`/`surface_height_at` bisection assumes one crossing.** Starting at `sea_level − 10` inside a cave void makes `lo` non-solid and the bisection can converge on a cave ceiling. The step-scan `walkable_floor_*` functions are the robust ones; document the bisection variants as "open-terrain only" or seed `lo` from `walkable`-style scanning.
+
+**M18 — foundation seal doubles the per-sample cost.** `apply_foundation_seal` → `coastal_surface_height` → `land_surface_height` re-evaluates the *entire* coastal surface (warp + 3–4 fbm stacks + all modifiers) for every voxel sample, on top of the identical evaluation already done in the `CoastalSurface` branch — plus `island_land_factor_from_recipe` re-warps a third time. The trivially available fix: compute `land_surface_height` once per (x,z) in `density_at_recipe_without_atlas` and pass it into the seal. Likely the single largest generation-time win; I'll quantify in the streaming installment.
+
+**M19 — `underwater_floor_at` and friends scan at 0.5 m steps with `density_at` (sealed, full-cost) per step** — fine for tooling, but keep them out of per-frame systems; I'll check callers in installment 9.
+
+## What's verified good
+
+The op → field division of labor is right: `ValleyBasin`/`CoastModifier` are applied inside `land_surface_height` and explicitly skipped in the density loop — no double application. CSG composition uses the correct negative-solid operators via `apply_combine`, and `terrain_density_at`'s "skip union objects" flag is a clean way to separate natural terrain from authored pads for spawn/support queries. The `default_vertical_slice_recipe` faithfully mirrors the YAML profile (same values as `vertical_slice_terrain.yaml`), so the fallback path and config path agree. River splines are converted into recipe space exactly once, in one place. And `walkable_floor_with_clearance`'s scan-from-top-keep-lowest logic correctly finds cave floors, not just the outer surface.
+
+**One cross-reference now closable:** `land_surface_height` (installment 4) is *not* consulted by the atlas path at all — so for atlas worlds, the "shared surface" used by `topology.rs` sealing and spawn logic diverges from the real atlas surface. That strengthens Bug 23 and narrows Bug 13's repair: the single surface authority for atlas worlds must be `sample_atlas_surface`, and every 2D consumer (rivers, seal, spawn, props) should route through it.

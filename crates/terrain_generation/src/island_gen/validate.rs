@@ -1,12 +1,75 @@
+// crates/terrain_generation/src/island_gen/validate.rs
 //! Automated validation (VS3 §21).
 
 use crate::island_atlas::IslandAtlas;
 use crate::island_gen::params::IslandGenParams;
 
+const RIVER_DESCENT_TOLERANCE_M: f32 = 0.5;
+const RIVER_MOUTH_SEA_TOLERANCE_M: f32 = 0.5;
+const MIN_PLAYABLE_LAND_FRACTION: f32 = 0.0025;
+
 #[derive(Clone, Debug, Default)]
 pub struct ValidationReport {
     pub passed: bool,
     pub messages: Vec<String>,
+}
+
+fn min_land_area_m2(params: &IslandGenParams) -> f32 {
+    let radius = params.island.playable_diameter_m * 0.05;
+    (radius * radius * std::f32::consts::PI * MIN_PLAYABLE_LAND_FRACTION).max(64.0)
+}
+
+fn min_peak_elevation_m(params: &IslandGenParams) -> f32 {
+    params.island.sea_level_m + 0.5 * params.island.maximum_height_m
+}
+
+fn validate_river_graph(
+    atlas: &IslandAtlas,
+    params: &IslandGenParams,
+    messages: &mut Vec<String>,
+) -> bool {
+    let Some(river) = atlas.river_graph.as_ref() else {
+        messages.push("Primary river missing".into());
+        return false;
+    };
+
+    if river.points.len() < 2 {
+        messages.push("Primary river has fewer than two control points".into());
+        return false;
+    }
+
+    let mut ok = true;
+    for window in river.points.windows(2) {
+        let p0 = window[0].position_xz;
+        let p1 = window[1].position_xz;
+        let h0 = atlas.filled_elevation.sample_bilinear(p0[0], p0[1]);
+        let h1 = atlas.filled_elevation.sample_bilinear(p1[0], p1[1]);
+        if h1 > h0 + RIVER_DESCENT_TOLERANCE_M {
+            ok = false;
+            messages.push(format!(
+                "River segment ascends on filled surface: {h0:.1} m -> {h1:.1} m"
+            ));
+            break;
+        }
+    }
+
+    let mouth = river.points.last().expect("len >= 2");
+    let mouth_limit = params.island.sea_level_m + RIVER_MOUTH_SEA_TOLERANCE_M;
+    if mouth.bed_elevation > mouth_limit {
+        ok = false;
+        messages.push(format!(
+            "River mouth bed {:.1} m exceeds sea level + {RIVER_MOUTH_SEA_TOLERANCE_M} m ({mouth_limit:.1} m)",
+            mouth.bed_elevation
+        ));
+    }
+
+    if ok {
+        messages.push(format!(
+            "Primary river descends to mouth ({:.1} m): OK",
+            mouth.bed_elevation
+        ));
+    }
+    ok
 }
 
 pub fn validate_atlas(atlas: &IslandAtlas, params: &IslandGenParams) -> ValidationReport {
@@ -36,19 +99,20 @@ pub fn validate_atlas(atlas: &IslandAtlas, params: &IslandGenParams) -> Validati
         messages.push("Map edges underwater: OK".into());
     }
 
-    let min_land = 50u32;
-    if land_cells < min_land {
+    let spacing = atlas.island_mask.spacing;
+    let land_area_m2 = land_cells as f32 * spacing * spacing;
+    let min_land_area_m2 = min_land_area_m2(params);
+    if land_area_m2 < min_land_area_m2 {
         passed = false;
-        messages.push(format!("Insufficient land area: {land_cells} cells"));
+        messages.push(format!(
+            "Insufficient land area: {land_area_m2:.0} m² (minimum {min_land_area_m2:.0} m²)"
+        ));
     } else {
-        messages.push(format!("Land area: {land_cells} cells: OK"));
+        messages.push(format!("Land area: {land_area_m2:.0} m²: OK"));
     }
 
-    if atlas.river_graph.is_some() {
-        messages.push("Primary river traced: OK".into());
-    } else {
+    if !validate_river_graph(atlas, params, &mut messages) {
         passed = false;
-        messages.push("Primary river missing".into());
     }
 
     let mut max_h = f32::MIN;
@@ -61,12 +125,121 @@ pub fn validate_atlas(atlas: &IslandAtlas, params: &IslandGenParams) -> Validati
             }
         }
     }
-    if max_h < params.island.sea_level_m + 40.0 {
+    let min_peak = min_peak_elevation_m(params);
+    if max_h < min_peak {
         passed = false;
-        messages.push(format!("Peak too low: {max_h:.1} m"));
+        messages.push(format!(
+            "Peak too low: {max_h:.1} m (minimum {min_peak:.1} m from config)"
+        ));
     } else {
         messages.push(format!("Peak elevation {max_h:.1} m: OK"));
     }
 
+    let mut fill_violations = 0u32;
+    for z in 0..atlas.filled_elevation.height {
+        for x in 0..atlas.filled_elevation.width {
+            let raw = atlas.elevation_regional.get(x, z);
+            let filled = atlas.filled_elevation.get(x, z);
+            if filled + 0.001 < raw {
+                fill_violations += 1;
+            }
+        }
+    }
+    if fill_violations > 0 {
+        passed = false;
+        messages.push(format!(
+            "Filled elevation below raw surface in {fill_violations} cells (stale hydrology epoch)"
+        ));
+    } else {
+        messages.push("Fill invariant (filled ≥ regional): OK".into());
+    }
+
+    let mut soil_samples = Vec::new();
+    let mut flat_soil = 0.0f32;
+    let mut flat_count = 0u32;
+    let mut steep_soil = 0.0f32;
+    let mut steep_count = 0u32;
+    for z in 0..atlas.soil_depth.height {
+        for x in 0..atlas.soil_depth.width {
+            if atlas.island_mask.get(x, z) < 0.4 {
+                continue;
+            }
+            let soil = atlas.soil_depth.get(x, z);
+            soil_samples.push(soil);
+            let sl = atlas.slope.get(x, z);
+            if sl < 10.0 {
+                flat_soil += soil;
+                flat_count += 1;
+            } else if sl > 35.0 {
+                steep_soil += soil;
+                steep_count += 1;
+            }
+        }
+    }
+    let soil_variance = if soil_samples.is_empty() {
+        0.0
+    } else {
+        let mean = soil_samples.iter().sum::<f32>() / soil_samples.len() as f32;
+        soil_samples
+            .iter()
+            .map(|v| (v - mean).powi(2))
+            .sum::<f32>()
+            / soil_samples.len() as f32
+    };
+    if soil_variance < 1e-4 {
+        passed = false;
+        messages.push("soil_depth field has no variance (likely uncomputed)".into());
+    } else {
+        messages.push(format!("soil_depth variance {soil_variance:.4}: OK"));
+    }
+    if flat_count > 0 && steep_count > 0 {
+        let flat_mean = flat_soil / flat_count as f32;
+        let steep_mean = steep_soil / steep_count as f32;
+        if flat_mean <= steep_mean {
+            passed = false;
+            messages.push(format!(
+                "soil_depth flat mean {flat_mean:.2} should exceed steep mean {steep_mean:.2}"
+            ));
+        } else {
+            messages.push(format!(
+                "soil_depth flat {flat_mean:.2} vs steep {steep_mean:.2}: OK"
+            ));
+        }
+    }
+
     ValidationReport { passed, messages }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::island_gen::{build_island_atlas, IslandGenParams};
+
+    #[test]
+    fn peak_threshold_scales_with_maximum_height() {
+        let mut params = IslandGenParams::default();
+        params.island.maximum_height_m = 80.0;
+        params.island.sea_level_m = 0.0;
+        params.fit_to_ocean_extent();
+        let atlas = build_island_atlas(&params);
+        let report = validate_atlas(&atlas, &params);
+        assert!(
+            report.messages.iter().any(|m| m.contains("Peak elevation")),
+            "expected peak message, got {report:?}"
+        );
+    }
+
+    #[test]
+    fn land_area_uses_square_meters_not_raw_cells() {
+        let params = IslandGenParams::default();
+        let atlas = build_island_atlas(&params);
+        let report = validate_atlas(&atlas, &params);
+        assert!(
+            report
+                .messages
+                .iter()
+                .any(|m| m.contains("Land area:") && m.contains("m²")),
+            "land area should be reported in m²: {report:?}"
+        );
+    }
 }

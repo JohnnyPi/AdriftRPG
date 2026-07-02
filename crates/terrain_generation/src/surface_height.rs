@@ -1,3 +1,4 @@
+// crates/terrain_generation/src/surface_height.rs
 //! Shared land-surface height evaluation for coastal terrain and foundation sealing.
 
 use crate::field_stack::valley_field;
@@ -60,7 +61,12 @@ fn harbor_depression(
         return 0.0;
     }
     let angle = dz.atan2(dx);
-    let arc = (noise.sample(angle * arc_frequency, 0.0, dist * 0.05) - 0.3).max(0.0);
+    let arc = (noise.sample(
+        angle.cos() * arc_frequency,
+        angle.sin() * arc_frequency,
+        dist * 0.05,
+    ) - 0.3)
+        .max(0.0);
     let t = 1.0 - dist / radius_m;
     depth_m * t * t * arc
 }
@@ -73,17 +79,23 @@ pub fn sample_coastal_surface(
     noise: &ValueNoise,
 ) -> f32 {
     let (wx, wz) = warp_xz(noise, x, z, params.domain_warp);
+    let sx = params.scale[0].max(f32::EPSILON);
+    let sz = params.scale[1].max(f32::EPSILON);
+    let lx = (wx - params.origin[0]) / sx;
+    let lz = (wz - params.origin[1]) / sz;
     let coast = coastal_inland_factor(recipe, wx, wz);
     let broad = params.base_height + coast * params.height_range;
-    let ridge_bump = ((wx - params.ridge_origin[0]) / params.ridge_scale[0]).clamp(0.0, 1.0)
-        * ((wz + params.ridge_origin[1]) / params.ridge_scale[1]).clamp(0.0, 1.0)
+    let ridge_bump = ((wx - params.ridge_origin[0]) / params.ridge_scale[0].max(f32::EPSILON))
+        .clamp(0.0, 1.0)
+        * ((wz - params.ridge_origin[1]) / params.ridge_scale[1].max(f32::EPSILON))
+            .clamp(0.0, 1.0)
         * params.ridge_amplitude;
 
     let regional = if params.regional_amplitude > 0.0 && params.regional_frequency > 0.0 {
         (noise.fbm(
-            wx * params.regional_frequency,
+            lx * params.regional_frequency,
             0.0,
-            wz * params.regional_frequency,
+            lz * params.regional_frequency,
             4,
             2.0,
             0.5,
@@ -104,9 +116,9 @@ pub fn sample_coastal_surface(
         params.detail_amplitude
     };
     let local = (noise.fbm(
-        wx * local_freq,
+        lx * local_freq,
         0.0,
-        wz * local_freq,
+        lz * local_freq,
         params.detail_octaves,
         2.0,
         0.5,
@@ -115,9 +127,9 @@ pub fn sample_coastal_surface(
 
     let ridged = if params.ridged_amplitude > 0.0 {
         let r = noise.fbm(
-            wx * local_freq * 1.5,
+            lx * local_freq * 1.5,
             0.0,
-            wz * local_freq * 1.5,
+            lz * local_freq * 1.5,
             3,
             2.0,
             0.5,
@@ -155,7 +167,6 @@ pub fn land_surface_height(recipe: &TerrainRecipe, x: f32, z: f32) -> f32 {
             domain_warp,
         } = op
         {
-            let _ = (origin, scale);
             height = sample_coastal_surface(
                 recipe,
                 &CoastalSurfaceParams {
@@ -255,4 +266,85 @@ pub fn island_land_factor_warped(
         }
     }
     1.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::recipe::TerrainRecipe;
+
+    fn expanded_coastal_params() -> CoastalSurfaceParams {
+        CoastalSurfaceParams {
+            origin: [128.0, 128.0],
+            scale: [256.0, 256.0],
+            base_height: 6.0,
+            height_range: 16.0,
+            ridge_origin: [180.0, 196.0],
+            ridge_scale: [48.0, 56.0],
+            ridge_amplitude: 12.0,
+            detail_frequency: 0.025,
+            detail_amplitude: 2.5,
+            detail_octaves: 4,
+            regional_frequency: 0.006,
+            regional_amplitude: 5.0,
+            local_frequency: 0.035,
+            local_amplitude: 2.0,
+            ridged_amplitude: 2.5,
+            domain_warp: 0.008,
+        }
+    }
+
+    #[test]
+    fn ridge_bump_is_localized_in_z() {
+        let recipe = TerrainRecipe {
+            seed: 1,
+            sea_level: 2.0,
+            spawn_x: 0.0,
+            spawn_z: 0.0,
+            coord_offset: [0.0; 3],
+            ops: vec![],
+        };
+        let params = expanded_coastal_params();
+        let noise = ValueNoise::new(1);
+        let high_z = sample_coastal_surface(&recipe, &params, 220.0, 252.0, &noise);
+        let low_z = sample_coastal_surface(&recipe, &params, 220.0, 20.0, &noise);
+        assert!(
+            high_z > low_z + params.ridge_amplitude * 0.5,
+            "ridge bump should depend on z placement (high={high_z}, low={low_z})"
+        );
+    }
+
+    #[test]
+    fn harbor_depression_is_continuous_across_angle_wrap() {
+        let noise = ValueNoise::new(42);
+        let center = [68.0, 168.0];
+        let radius = 28.0;
+        let sample_radius = radius - 1.0;
+        let eps = 0.001;
+        let angle_pi = std::f32::consts::PI - eps;
+        let angle_neg_pi = -std::f32::consts::PI + eps;
+        let left = harbor_depression(
+            &noise,
+            center[0] + sample_radius * angle_pi.cos(),
+            center[1] + sample_radius * angle_pi.sin(),
+            center,
+            radius,
+            5.0,
+            2.5,
+        );
+        let right = harbor_depression(
+            &noise,
+            center[0] + sample_radius * angle_neg_pi.cos(),
+            center[1] + sample_radius * angle_neg_pi.sin(),
+            center,
+            radius,
+            5.0,
+            2.5,
+        );
+        assert!(
+            (left - right).abs() < 0.75,
+            "harbor depth should not jump at angle wrap (delta={})",
+            (left - right).abs()
+        );
+    }
 }

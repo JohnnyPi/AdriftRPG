@@ -1,5 +1,4 @@
-use std::ops::{Div, Rem};
-
+// crates/voxel_core/src/coords.rs
 use serde::{Deserialize, Serialize};
 
 /// Chunk position in chunk-space coordinates. May be negative.
@@ -13,6 +12,15 @@ pub struct ChunkCoord {
 impl ChunkCoord {
     pub const fn new(x: i32, y: i32, z: i32) -> Self {
         Self { x, y, z }
+    }
+
+    /// World-space origin of sample `(0, 0, 0)` for this chunk in meters.
+    pub const fn sample_origin(self) -> (i32, i32, i32) {
+        (
+            self.x * crate::CHUNK_CELLS as i32,
+            self.y * crate::CHUNK_CELLS as i32,
+            self.z * crate::CHUNK_CELLS as i32,
+        )
     }
 }
 
@@ -31,17 +39,17 @@ impl WorldCell {
 
     pub fn chunk_coord(&self) -> ChunkCoord {
         ChunkCoord::new(
-            floor_div(self.x, crate::CHUNK_CELLS as i32),
-            floor_div(self.y, crate::CHUNK_CELLS as i32),
-            floor_div(self.z, crate::CHUNK_CELLS as i32),
+            self.x.div_euclid(crate::CHUNK_CELLS as i32),
+            self.y.div_euclid(crate::CHUNK_CELLS as i32),
+            self.z.div_euclid(crate::CHUNK_CELLS as i32),
         )
     }
 
     pub fn local_cell(&self) -> LocalCell {
         LocalCell::new(
-            positive_mod(self.x, crate::CHUNK_CELLS as i32) as u8,
-            positive_mod(self.y, crate::CHUNK_CELLS as i32) as u8,
-            positive_mod(self.z, crate::CHUNK_CELLS as i32) as u8,
+            self.x.rem_euclid(crate::CHUNK_CELLS as i32) as u8,
+            self.y.rem_euclid(crate::CHUNK_CELLS as i32) as u8,
+            self.z.rem_euclid(crate::CHUNK_CELLS as i32) as u8,
         )
     }
 }
@@ -79,23 +87,27 @@ impl WorldSample {
         Self { x, y, z }
     }
 
+    /// Chunk that owns this sample for read/write routing.
+    ///
+    /// Boundary samples belong to the higher-indexed chunk: world-x = 16 maps to chunk `(1, 0, 0)`,
+    /// even though chunk `(0, 0, 0)` also stores a duplicate at local sample 16. Any code that
+    /// writes samples (edits) must fan out to every chunk sharing the corner — up to 8 at a corner.
     pub fn chunk_coord(&self) -> ChunkCoord {
         ChunkCoord::new(
-            floor_div(self.x, crate::CHUNK_SAMPLES as i32 - 1),
-            floor_div(self.y, crate::CHUNK_SAMPLES as i32 - 1),
-            floor_div(self.z, crate::CHUNK_SAMPLES as i32 - 1),
+            self.x.div_euclid(crate::CHUNK_CELLS as i32),
+            self.y.div_euclid(crate::CHUNK_CELLS as i32),
+            self.z.div_euclid(crate::CHUNK_CELLS as i32),
         )
     }
 
-    pub fn local_sample(&self, chunk: ChunkCoord) -> LocalSample {
-        let origin_x = chunk.x * crate::CHUNK_CELLS as i32;
-        let origin_y = chunk.y * crate::CHUNK_CELLS as i32;
-        let origin_z = chunk.z * crate::CHUNK_CELLS as i32;
-        LocalSample::new(
-            (self.x - origin_x) as u8,
-            (self.y - origin_y) as u8,
-            (self.z - origin_z) as u8,
-        )
+    pub fn local_sample(&self, chunk: ChunkCoord) -> Option<LocalSample> {
+        let (origin_x, origin_y, origin_z) = chunk.sample_origin();
+        let dx = self.x - origin_x;
+        let dy = self.y - origin_y;
+        let dz = self.z - origin_z;
+        let range = 0..=(crate::CHUNK_SAMPLES as i32 - 1);
+        (range.contains(&dx) && range.contains(&dy) && range.contains(&dz))
+            .then(|| LocalSample::new(dx as u8, dy as u8, dz as u8))
     }
 }
 
@@ -126,24 +138,6 @@ impl LocalSample {
     }
 }
 
-fn floor_div(value: i32, divisor: i32) -> i32 {
-    let quotient = value.div(divisor);
-    if value.rem(divisor) < 0 {
-        quotient - 1
-    } else {
-        quotient
-    }
-}
-
-fn positive_mod(value: i32, divisor: i32) -> i32 {
-    let remainder = value.rem(divisor);
-    if remainder < 0 {
-        remainder + divisor
-    } else {
-        remainder
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -163,7 +157,27 @@ mod tests {
         let sample = WorldSample::new(16, 0, 0);
         let chunk = sample.chunk_coord();
         assert_eq!(chunk, ChunkCoord::new(1, 0, 0));
-        let local = sample.local_sample(chunk);
+        let local = sample.local_sample(chunk).expect("in-chunk sample");
         assert_eq!(local, LocalSample::new(0, 0, 0));
+    }
+
+    #[test]
+    fn local_sample_rejects_out_of_chunk_coordinates() {
+        let sample = WorldSample::new(-1, 0, 0);
+        assert!(sample.local_sample(ChunkCoord::new(0, 0, 0)).is_none());
+
+        let boundary = WorldSample::new(16, 16, 16);
+        assert!(boundary.local_sample(ChunkCoord::new(0, 0, 0)).is_some());
+        assert_eq!(
+            boundary.local_sample(ChunkCoord::new(0, 0, 0)),
+            Some(LocalSample::new(16, 16, 16))
+        );
+    }
+
+    #[test]
+    fn sample_linear_index_layout() {
+        assert_eq!(LocalSample::new(0, 1, 0).linear_index(), 17);
+        assert_eq!(LocalSample::new(0, 0, 1).linear_index(), 17 * 17);
+        assert_eq!(LocalSample::new(1, 0, 0).linear_index(), 1);
     }
 }

@@ -1,3 +1,4 @@
+// crates/physics_bridge/src/body_spec.rs
 //! Project-owned physics body specifications.
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

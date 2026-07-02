@@ -1,3 +1,4 @@
+// crates/game_bevy/src/camera/components.rs
 use bevy::prelude::*;
 
 #[derive(Component, Debug)]

@@ -1,3 +1,4 @@
+// crates/game_bevy/src/debug_tools/mod.rs
 mod bindings;
 
 pub use bindings::DebugKeyBindings;

@@ -1,0 +1,88 @@
+# Final Installment: Synthesis — the Part 40 deliverables
+
+## 1. Executive diagnosis
+
+The engine's architecture is sound — the intended pipeline (typed YAML → validated config → 2D atlas fields → signed density → surface nets → triplanar materials → streamed chunks) exists, is largely implemented in the right order, and is unusually well-tested at the config layer. The terrain does not match the intended model because of roughly a dozen **structural defects concentrated at layer boundaries**, not because of parameter tuning. The dominant failures, in causal order:
+
+The base noise primitive is broken (**Bug 7**): `ValueNoise::hash` produces a constant-stride sawtooth along the y and z lattice axes, contaminating every terrain, climate, and detail field with periodic banding. The non-atlas macro shape is a **tilted plane, not an island profile** (Bug 20: `coastal_inland_factor` is a diagonal linear ramp with a sign error), with a dead-flat seabed (Bug 21) and a mislocated ridge (Bug 12). On atlas worlds, hydrology is inert — **flow accumulation never accumulates** (Bug 32: one `.rev()`), so rivers, erosion, wetness, and sediment are all vestigial, and what river exists is carved with an **inverted sign** in the density path, producing levees instead of channels (Bug 33, enshrined by its own test). The coast-distance field is water-side-only and horizon-limited (Bugs 25/26), so **no cliffs ever classify, beaches flood the interior**, and an underwater step-ring encircles the island. Meshing emits every chunk-boundary quad **twice** (Bug 8), putting a shimmering 16 m grid over everything and doubling boundary collider triangles. And the material vertex format interpolates ranked float layer indices (Bug 41), striping every material transition.
+
+None of these require re-architecture. Every one has a localized repair, most under 20 lines. The codebase's own diagnostics doc predicted the majority of them by category; what was missing was the synthetic-terrain test suite that would have caught them (uniform slope, bowl, plane-without-orientation-pass, two-chunk seam).
+
+## 2. Architecture map
+
+Delivered in installment 0 and refined throughout; the corrected flow is in §15 below. One structural change is recommended beyond bug fixes: collapse the **three parallel biome/material systems** to one (Bug 36 — System B, the soft-weight classifier, survives; System A becomes test-only; System C is deleted), and make `sample_atlas_surface` / `land_surface_height` the **single surface authority** per world type for rivers, sealing, spawn, and props (Bugs 13/23).
+
+## 3–4. Confirmed bugs and suspected defects — consolidated register
+
+Fifty-five numbered findings plus ~46 minor items were filed across installments 1–13; one (**Bug 3**) was withdrawn with correction in installment 13. Rather than restate them, here is the register keyed by repair stage — each entry carries its file, mechanism, patch, and regression test in its original installment:
+
+**Critical/High, confirmed:** 7 (noise hash), 32 (flow accumulation order), 8 (duplicate boundary quads), 20 (inland factor), 25/26 (coast distance), 33 (river carve sign), 41 (material vertex format), 47 (stuck chunk states), 29 (hydrology-before-erosion ordering), 13 (phantom river surface), 21 (dead ocean floor), 36 (triple material systems).
+**Medium, confirmed:** 4, 5, 9, 10, 11, 12, 15–19, 22, 23, 27, 28, 30, 31, 34, 35, 37–40, 42–46, 48–55.
+**Suspected, with diagnostics specified:** cave mouths may not breach the surface (installment 4 — march the mouth capsule for a sign change); F3's peak-dilating upsampler if ever wired (currently dead — delete); `game_data/validate.rs` referential-integrity coverage (probable, unverified — upload to close).
+
+## 5. Coordinate and unit report
+
+Verified consistent: Y-up everywhere; 16³ cells / 17³ samples with correct duplicated borders; negative-coordinate floor-division correct and tested; `coord_offset` applied symmetrically across density, sealing, edits, atlas, and rivers (with `[*, 0, *]` in all live worlds — add a guard for nonzero Y); chunk transforms translation-only, so world-space triplanar UVs are seam-free by construction; `cell_size_m = 1.0` enforced at validation. Remaining unit defects: `ellipsoid_sdf` returns normalized units while everything else is metric (M8 — feeds Bugs 16, 24, 52); slope is degrees everywhere and correctly converted at the two `tan()` sites; truncation-instead-of-floor exists at two sites (Bug 10 live, M29 dormant). The 0.5 m voxel roadmap target requires threading cell size through `voxel_core` before relaxing the validator.
+
+## 6–9. Domain reviews
+
+Delivered as installments: procedural algorithms (4–8), density/meshing (1–3, 5), materials/shader (9, 10 + addendum), streaming/performance (11). Performance headline for the repair plan: per chunk, the engine currently pays **two** `ChunkColumnCache` builds (up to ~58k density evaluations each in the worst path), a discarded per-sample material classification pass, a doubled coastal-surface evaluation inside the foundation seal (M18), O(spline) river distance per sample (M26), and two deep atlas clones (Bug 49). Fixing Bugs 36 + 49 + M18 + M28 — all mechanical — should cut chunk generation time by an order of magnitude before any algorithmic tuning.
+
+## 10. Ranked root causes, in repair order
+
+1. **Bug 7** — noise hash (do first: all retuning downstream depends on it; changes every seed's world).
+2. **Bug 4** (+M10) — field sampler edge behavior (atlas rim wall; feeds many consumers).
+3. **Bugs 8, 9, 10, 11** — mesher: boundary ownership, winding predicate, gradient truncation, blend determinism.
+4. **Bug 32**, then **34, 35**, then **29** — hydrology: accumulation order, ε-flood, D8 distance, then pass reordering (32 first; it currently masks 29).
+5. **Bugs 25/26** — one chamfer distance transform fixes both; unblocks cliffs, beaches, bathymetry.
+6. **Bugs 20, 12, 21, 27** — macro shape: inland factor, ridge sign, ocean-floor composition, warp centering.
+7. **Bug 33** + **Bug 13** — river carve sign; retarget/delete the phantom river generator.
+8. **Bug 41** (+44, 45, 42) — fixed-slot material weights, mip gradients, height blend, layer-order guard.
+9. **Bug 36** (+50, 30, 40, 39) — one material system; edit-paint overlay; real soil/geology/cave-exposure inputs.
+10. **Bugs 47, 48, 49, 17/55** — streaming stuck states, collider race, Arc the atlas, derive both hashes.
+11. **Dead-config family + validation backlog** (15, 18, 19, 22, 23, 28, 37, 38, 53, 54, M16, M24, M37) — sweep in one pass.
+
+## 11. Phased correction plan (mapped to the doc's Stages 0–9)
+
+**Stage 0 — reproducible failure.** Lock seed + world (`vs3_island`), fix Bug 2 (stable FNV/quantized `density_hash`) and Bug 43 (harness = runtime params) *first* so recorded hashes and diagnostics mean something; capture screenshots and `colorize_preview` exports for every mode; record per-chunk hashes.
+**Stage 1 — coordinates & density.** Bugs 4, 9, 10, 11, M8 (metric ellipsoid), Bug 24 fade, edit-base fix (51). Exit: plane/sphere tests pass with the orientation pass compiled out; two-chunk hash/seam tests green.
+**Stage 2 — minimal analytical terrain.** Plane, sphere, single island falloff, single cone through the full pipeline with Bug 8's ownership fix. Exit: no duplicate triangles, watertight seams, colliders match, normals within 1° of analytic.
+**Stage 3 — macro terrain.** Bugs 7 (retune amplitudes after), 20, 12, 21, 27, 25/26. Exit: radial transect shows dome-shaped island, shelf → drop-off bathymetry, no atlas-rim wall; four-compass-point inland-factor equality test green.
+**Stage 4 — regional detail.** Verify fbm/ridged/warp contributions independently post-Bug-7 (each op toggled, screenshot-diffed); Bug 38's climate scale retune.
+**Stage 5 — hydrology & erosion.** Bugs 32 → 34 → 35 → 29 (reorder + refill/reflow) → 33; retune `stream_threshold` and the erodibility constant (M24) now that discharge is real; Bug 31's epoch discipline (recompute wetness/sediment/fill post-erosion). Exit: the seven synthetic-terrain tests (uniform slope, bowl, peak, saddle, plateau, branching basin, island) all pass; river descends monotonically on the final surface and reaches the sea.
+**Stage 6 — volumetric.** Bug 16 (seal margin), Bug 19 (cave counts/depth), the mouth-breach diagnostic; `count_outdoor_void_columns` run as a gate.
+**Stage 7 — classification.** Bugs 30, 39, 40, 37, soft class-boundary blending in `island.rs`; delete System C.
+**Stage 8 — materials.** Bugs 41, 42, 44, 45, 36/50; M36 magenta fallback.
+**Stage 9 — streaming.** Bugs 47, 48, 49, 17, 55; M28/M18/M26 perf work; only now re-enable aggressive residency movement testing.
+
+## 12. Code patches
+
+Inline in each installment, at the point of diagnosis — the highest-confidence ones (Bugs 4, 7, 8, 9, 10, 32, 33, 34, 35, 41's format, 47) are copy-adaptable as written.
+
+## 13. Test plan
+
+The recurring lesson: every High bug had a cheap test that was never written, and two bugs (33, 34's cousin in `edit_boundary.rs`) had tests asserting the *wrong* behavior. The suite to add, all specified per-bug: **unit** — noise stride/serial-correlation bounds; sampler edge-clamp; winding with orientation pass disabled; D8 direction on an x-slope; accumulation on a uniform slope; ε-flood bowl drainage; carve-lowers-`surface_height_at`; blend tiebreak. **Integration** — two-chunk duplicate-triangle + watertight test; padded-sample/edit face agreement; paint-then-remesh dominant material. **Scenario** — the seven synthetic hydrology terrains; radial coast transect monotonicity; four-compass inland-factor symmetry; cave-mouth breach scan. **Determinism** — golden stable chunk hashes; 50× material-blend identity; harness-vs-runtime param equality. **Config liveness** — the pattern the dead-config family demands: for each YAML field, perturb it and assert *some* probe output changes; this single generic test would have caught Bugs 15, 18 (partially), 21, 28, M16, M37 mechanically. **Performance** — per-chunk `record_density_ms`/`record_mesh_ms` regression ceilings.
+
+## 14. Debug-tool plan
+
+Much exists: `colorize_preview` overlays, pipeline metrics, `validate_atlas`, `count_outdoor_void_columns`, `ValidationReport` plumbing. Additions: surface runtime overlays for the *broken* fields specifically (coast_distance signed, flow accumulation log-scale, soil_depth — the three fields whose deadness went unseen); make the runtime honor `validation_passed` (M22) with a HUD warning; a chunk-seam inspector (renders only boundary-owned quads, would have shown Bug 8 instantly); wire Bug 54's river-descent invariant into `validate_atlas`; keep `orient_triangles_toward_air` as a debug-only *assertion*; magenta fallback material (M36).
+
+## 15. Corrected target pipeline
+
+```text
+YAML → validate_definitions (extended backlog rules) → compiled registry (derived hash)
+  → IslandGenParams (single shared bridge; harness uses the same one)
+  → atlas: footprint(centered warp) → volcano+detail (fixed noise)
+      → signed chamfer coast distance → bathymetry (shelf→basin compose)
+      → fill(ε) → flow(distance-normalized, high-first) → stream-power erosion
+      → thermal erosion → REFILL → REFLOW → river mask+graph (final surface)
+      → upsample + local detail → carve channels → beach profiles
+      → recompute slope/wetness/sediment/soil (post-mutation epoch) → biome weights
+      → validate_atlas (params-derived thresholds, river-descent invariant) → GATE
+  → RecipeDensitySource (Arc<atlas>; single surface authority; += carve; sealed both paths)
+  → density job: padded samples + edits (density only)
+  → mesh job: surface nets (owned edges, correct winding, floor-gradient normals,
+      deterministic blends) + resolver (shared column cache, atlas-fed context,
+      edit-material overlay) → 8 fixed-slot weights
+  → upload (near-first) → triplanar shader (grad-sampled mips, height blend)
+  → collider from render mesh → residency (cancellation resets state)

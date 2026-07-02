@@ -1,3 +1,4 @@
+// crates/game_bevy/src/interaction/mod.rs
 use bevy::prelude::*;
 use tracing::info;
 

@@ -1,3 +1,4 @@
+// crates/game_bevy/src/ui/hud.rs
 use bevy::prelude::*;
 use physics_bridge::GroundedState;
 

@@ -1,3 +1,4 @@
+// crates/game_bevy/src/camera/mod.rs
 mod collision;
 mod components;
 mod debug;

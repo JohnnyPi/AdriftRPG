@@ -1,3 +1,4 @@
+// crates/game_data/src/validate.rs
 use shared::{DataError, DataResult, StableId};
 
 use crate::definitions::*;
@@ -49,12 +50,238 @@ pub fn validate_definitions(definitions: &[RawDefinition]) -> ValidationReport {
             RawDefinition::Water(def) => validate_water(def, &mut report),
             RawDefinition::World(def) => validate_world(def, &ids, &mut report),
             RawDefinition::IslandGeneration(def) => validate_island_generation(def, &mut report),
+            RawDefinition::TerrainGeneration(def) => validate_terrain_generation(def, &ids, &mut report),
+            RawDefinition::TerrainMaterials(def) => validate_terrain_materials(def, &mut report),
+            RawDefinition::SurfaceRules(def) => validate_surface_rules(def, &mut report),
+            RawDefinition::Cave(def) => validate_cave(def, &mut report),
             RawDefinition::App(def) => validate_references(def, &ids, &mut report),
             _ => {}
         }
     }
 
+    validate_cross_definition_links(definitions, &mut report);
     report
+}
+
+/// Cross-check surface rules reference valid palette materials.
+fn validate_cross_definition_links(definitions: &[RawDefinition], report: &mut ValidationReport) {
+    let palettes: std::collections::BTreeMap<StableId, std::collections::BTreeSet<StableId>> =
+        definitions
+            .iter()
+            .filter_map(|def| match def {
+                RawDefinition::TerrainMaterials(materials) => {
+                    let keys = materials
+                        .materials
+                        .iter()
+                        .map(|entry| entry.resolved_key())
+                        .collect();
+                    Some((materials.header.id.clone(), keys))
+                }
+                _ => None,
+            })
+            .collect();
+
+    for definition in definitions {
+        let RawDefinition::SurfaceRules(rules) = definition else {
+            continue;
+        };
+        let context = format!("surface `{}`", rules.header.id);
+        for gate in &rules.gates {
+            for entry in &gate.blend {
+                // validated when world links palette; keys checked below if palette known
+                let _ = &entry.material;
+            }
+            if let Some(ref classifier_id) = gate.classifier {
+                if !rules
+                    .classifiers
+                    .iter()
+                    .any(|c| c.id == *classifier_id)
+                {
+                    report.push(DataError::InvalidValue {
+                        context: context.clone(),
+                        message: format!(
+                            "gate `{}` references unknown classifier `{classifier_id}`",
+                            gate.id
+                        ),
+                    });
+                }
+            }
+        }
+        for classifier in &rules.classifiers {
+            for entry in &classifier.blend {
+                let _ = &entry.material;
+            }
+            for mix in &classifier.weighted_mix {
+                if !rules
+                    .classifiers
+                    .iter()
+                    .any(|c| c.id == mix.classifier)
+                {
+                    report.push(DataError::InvalidValue {
+                        context: context.clone(),
+                        message: format!(
+                            "classifier `{}` references unknown classifier `{}`",
+                            classifier.id, mix.classifier
+                        ),
+                    });
+                }
+            }
+        }
+        // If a palette with matching suffix exists, validate material keys.
+        let palette_suffix = rules
+            .header
+            .id
+            .as_str()
+            .strip_prefix("surface.")
+            .unwrap_or(rules.header.id.as_str());
+        let palette_id = StableId::new(&format!("materials.{palette_suffix}"));
+        if let Some(keys) = palettes.get(&palette_id) {
+            for gate in &rules.gates {
+                for entry in &gate.blend {
+                    if !keys.contains(&entry.material) {
+                        report.push(DataError::InvalidValue {
+                            context: context.clone(),
+                            message: format!(
+                                "gate `{}` references unknown material `{}`",
+                                gate.id, entry.material
+                            ),
+                        });
+                    }
+                }
+            }
+            for classifier in &rules.classifiers {
+                for entry in &classifier.blend {
+                    if !keys.contains(&entry.material) {
+                        report.push(DataError::InvalidValue {
+                            context: context.clone(),
+                            message: format!(
+                                "classifier `{}` references unknown material `{}`",
+                                classifier.id, entry.material
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    for definition in definitions {
+        let RawDefinition::TerrainMaterials(materials) = definition else {
+            continue;
+        };
+        let context = format!("materials `{}`", materials.header.id);
+        let keys: std::collections::BTreeSet<_> = materials
+            .materials
+            .iter()
+            .map(|entry| entry.resolved_key())
+            .collect();
+        if keys.is_empty() {
+            report.push(DataError::InvalidValue {
+                context: context.clone(),
+                message: "materials must declare at least one entry".to_string(),
+            });
+        }
+        if keys.len() != materials.materials.len() {
+            report.push(DataError::InvalidValue {
+                context: context.clone(),
+                message: "duplicate material keys in palette".to_string(),
+            });
+        }
+        let layer_order = if materials.layers.is_empty() {
+            let mut ordered: Vec<_> = materials.materials.iter().collect();
+            ordered.sort_by_key(|m| m.resolved_legacy_id());
+            ordered
+                .into_iter()
+                .map(|m| m.resolved_key())
+                .collect::<Vec<_>>()
+        } else {
+            materials.layers.clone()
+        };
+        if layer_order.is_empty() {
+            report.push(DataError::InvalidValue {
+                context: context.clone(),
+                message: "layers must be non-empty".to_string(),
+            });
+        }
+        if layer_order.len() > 256 {
+            report.push(DataError::InvalidValue {
+                context: context.clone(),
+                message: "layer count must be <= 256".to_string(),
+            });
+        }
+        let mut seen_layers = std::collections::BTreeSet::new();
+        for key in &layer_order {
+            if !keys.contains(key) {
+                report.push(DataError::InvalidValue {
+                    context: context.clone(),
+                    message: format!("layer references unknown material key `{key}`"),
+                });
+            }
+            if !seen_layers.insert(key.clone()) {
+                report.push(DataError::InvalidValue {
+                    context: context.clone(),
+                    message: format!("duplicate layer key `{key}`"),
+                });
+            }
+        }
+    }
+}
+
+fn default_surface_for_materials(materials: &StableId) -> StableId {
+    let suffix = materials
+        .as_str()
+        .strip_prefix("materials.")
+        .unwrap_or(materials.as_str());
+    StableId::new(&format!("surface.{suffix}"))
+}
+
+fn validate_terrain_materials(materials: &TerrainMaterialsDefinition, report: &mut ValidationReport) {
+    let context = format!("materials `{}`", materials.header.id);
+    let material_keys: std::collections::BTreeSet<StableId> = materials
+        .materials
+        .iter()
+        .map(|entry| entry.resolved_key())
+        .collect();
+
+    if materials.header.schema_version >= 2 && materials.layers.is_empty() {
+        report.push(DataError::InvalidValue {
+            context: context.clone(),
+            message: "schema_version 2 requires non-empty `layers` texture-array order".to_string(),
+        });
+    }
+
+    if !materials.layers.is_empty() {
+        if materials.layers.len() > 256 {
+            report.push(DataError::InvalidValue {
+                context: context.clone(),
+                message: "layers must contain at most 256 entries".to_string(),
+            });
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for key in &materials.layers {
+            if !material_keys.contains(key) {
+                report.push(DataError::InvalidValue {
+                    context: context.clone(),
+                    message: format!("layers references unknown material key `{key}`"),
+                });
+            }
+            if !seen.insert(key.clone()) {
+                report.push(DataError::InvalidValue {
+                    context: context.clone(),
+                    message: format!("duplicate layer key `{key}`"),
+                });
+            }
+        }
+    }
+}
+
+fn validate_surface_rules(rules: &SurfaceRulesDefinition, report: &mut ValidationReport) {
+    if rules.gates.is_empty() && rules.classifiers.is_empty() {
+        report.push(DataError::InvalidValue {
+            context: format!("surface `{}`", rules.header.id),
+            message: "surface rules must declare gates or classifiers".to_string(),
+        });
+    }
 }
 
 fn collect_ids(definitions: &[RawDefinition]) -> Vec<StableId> {
@@ -94,6 +321,14 @@ fn validate_world(world: &WorldDefinition, ids: &[StableId], report: &mut Valida
         }
     }
 
+    if world.chunks.cells != [16, 16, 16] {
+        report.push(DataError::InvalidValue {
+            context: format!("world `{}`", world.header.id),
+            message: "chunks.cells must be [16, 16, 16] until alternate chunk sizes are supported"
+                .to_string(),
+        });
+    }
+
     for (index, extent) in world.chunks.world_extent.iter().enumerate() {
         if *extent == 0 {
             report.push(DataError::InvalidValue {
@@ -112,6 +347,12 @@ fn validate_world(world: &WorldDefinition, ids: &[StableId], report: &mut Valida
     ] {
         require_reference(reference, "world definition", ids, report);
     }
+
+    let surface_id = world
+        .surface
+        .clone()
+        .unwrap_or_else(|| default_surface_for_materials(&world.materials));
+    require_reference(&surface_id, "world surface rules", ids, report);
 
     if let Some(ref resolution) = world.resolution {
         validate_generation_resolution(
@@ -220,11 +461,18 @@ fn validate_water(water: &WaterDefinition, report: &mut ValidationReport) {
 }
 
 fn validate_island_generation(island: &IslandGenerationDefinition, report: &mut ValidationReport) {
+    let context = format!("island generation `{}`", island.header.id);
+    if island.caves.chamber_count_min > island.caves.chamber_count_max {
+        report.push(DataError::InvalidValue {
+            context: context.clone(),
+            message: "caves.chamber_count_min must be <= caves.chamber_count_max".to_string(),
+        });
+    }
     if let Some(ref resolution) = island.resolution {
         validate_generation_resolution(
             resolution,
             288.0,
-            &format!("island generation `{}`", island.header.id),
+            &context,
             report,
         );
     }
@@ -359,5 +607,78 @@ fn require_reference(
             reference: reference.clone(),
             context: context.to_string(),
         });
+    }
+}
+
+fn validate_combine(value: &str, context: &str, report: &mut ValidationReport) {
+    match value.to_ascii_lowercase().as_str() {
+        "union" | "subtract" => {}
+        other => report.push(DataError::InvalidValue {
+            context: context.to_string(),
+            message: format!(
+                "combine must be 'union' or 'subtract', got '{other}'"
+            ),
+        }),
+    }
+}
+
+fn validate_coast_modifier_kind(kind: &str, context: &str, report: &mut ValidationReport) {
+    match kind.to_ascii_lowercase().as_str() {
+        "cove" | "harbor" => {}
+        "cliff_shelf" | "cliff" => report.push(DataError::InvalidValue {
+            context: context.to_string(),
+            message: "coast modifier kind 'cliff_shelf' is not implemented".to_string(),
+        }),
+        other => report.push(DataError::InvalidValue {
+            context: context.to_string(),
+            message: format!(
+                "unknown coast modifier kind '{other}' (expected cove or harbor)"
+            ),
+        }),
+    }
+}
+
+fn validate_terrain_operation(op: &TerrainOperationDefinition, context: &str, report: &mut ValidationReport) {
+    match op {
+        TerrainOperationDefinition::CoastModifier { kind, .. } => {
+            validate_coast_modifier_kind(kind, context, report);
+        }
+        TerrainOperationDefinition::Ellipsoid { combine, .. }
+        | TerrainOperationDefinition::Capsule { combine, .. } => {
+            validate_combine(combine, context, report);
+        }
+        _ => {}
+    }
+}
+
+fn validate_terrain_generation(
+    terrain: &TerrainGenerationDefinition,
+    ids: &[StableId],
+    report: &mut ValidationReport,
+) {
+    let context = format!("terrain `{}`", terrain.header.id);
+    let coastal_count = terrain
+        .operations
+        .iter()
+        .filter(|op| matches!(op, TerrainOperationDefinition::CoastalSurface { .. }))
+        .count();
+    if coastal_count > 1 {
+        report.push(DataError::InvalidValue {
+            context: context.clone(),
+            message: "terrain may declare at most one coastal_surface operation".to_string(),
+        });
+    }
+    for op in &terrain.operations {
+        validate_terrain_operation(op, &context, report);
+    }
+    for include in &terrain.includes {
+        require_reference(include, &context, ids, report);
+    }
+}
+
+fn validate_cave(cave: &CaveDefinition, report: &mut ValidationReport) {
+    let context = format!("cave `{}`", cave.header.id);
+    for op in &cave.operations {
+        validate_terrain_operation(op, &context, report);
     }
 }

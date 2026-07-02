@@ -1,3 +1,4 @@
+// crates/game_bevy/src/environment/sky.rs
 //! Atmospheric sky rendering (VS2 §13 Stages 2–3).
 
 use bevy::prelude::*;

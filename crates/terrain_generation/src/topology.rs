@@ -1,7 +1,8 @@
+// crates/terrain_generation/src/topology.rs
 //! Topological validation helpers for signed-density terrain.
 
-use crate::recipe::{RecipeDensitySource, RecipeOp, TerrainRecipe};
-use crate::{capsule_sdf, ellipsoid_sdf, plane_density, solid_union, CombineOp, ValueNoise};
+use crate::recipe::{CombineOp, RecipeDensitySource, RecipeOp, TerrainRecipe};
+use crate::{capsule_sdf, ellipsoid_sdf, plane_density, solid_union, ValueNoise};
 
 /// Meters of solid guaranteed below the coastal surface outside intentional cavities.
 pub const FOUNDATION_DEPTH_M: f32 = 14.0;
@@ -52,8 +53,27 @@ pub fn outside_declared_cavities(recipe: &TerrainRecipe, x: f32, y: f32, z: f32)
     cavity_sdf_at(recipe, x, y, z) > -CAVITY_EXTERIOR_MARGIN
 }
 
-/// Apply bedrock seal so outdoor columns cannot breach below the coastal surface foundation.
+/// Apply bedrock seal so outdoor columns cannot breach below the surface foundation.
 pub fn apply_foundation_seal(recipe: &TerrainRecipe, x: f32, y: f32, z: f32, density: f32) -> f32 {
+    apply_foundation_seal_at(
+        recipe,
+        x,
+        y,
+        z,
+        density,
+        coastal_surface_height(recipe, x, z),
+    )
+}
+
+/// Seal against an explicit surface height (atlas or recipe coastal surface).
+pub fn apply_foundation_seal_at(
+    recipe: &TerrainRecipe,
+    x: f32,
+    y: f32,
+    z: f32,
+    density: f32,
+    surface_y: f32,
+) -> f32 {
     if !outside_declared_cavities(recipe, x, y, z) {
         return density;
     }
@@ -62,8 +82,7 @@ pub fn apply_foundation_seal(recipe: &TerrainRecipe, x: f32, y: f32, z: f32, den
             return density;
         }
     }
-    let surface = coastal_surface_height(recipe, x, z);
-    let foundation = plane_density(y, surface - FOUNDATION_DEPTH_M);
+    let foundation = plane_density(y, surface_y - FOUNDATION_DEPTH_M);
     solid_union(density, foundation)
 }
 
@@ -115,4 +134,42 @@ pub fn count_outdoor_void_columns(
         x += step;
     }
     violations
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ellipsoid_cavity_margin_is_metric() {
+        let recipe = TerrainRecipe {
+            seed: 1,
+            sea_level: 2.0,
+            spawn_x: 0.0,
+            spawn_z: 0.0,
+            coord_offset: [0.0; 3],
+            ops: vec![RecipeOp::Ellipsoid {
+                center: [64.0, 10.0, 64.0],
+                radii: [20.0, 20.0, 20.0],
+                peak_noise: None,
+                combine: CombineOp::Subtract,
+            }],
+        };
+        let cy = 10.0;
+        let ry = 20.0;
+        let half_meter_inside = cavity_sdf_at(&recipe, 64.0, cy + ry - 0.5, 64.0);
+        let just_outside_wall = cavity_sdf_at(&recipe, 64.0, cy + ry + 0.2, 64.0);
+        assert!(
+            half_meter_inside < -CAVITY_EXTERIOR_MARGIN,
+            "0.5 m inside wall should be exempt from sealing (sdf={half_meter_inside})"
+        );
+        assert!(
+            just_outside_wall > -CAVITY_EXTERIOR_MARGIN,
+            "just outside wall should be eligible for sealing (sdf={just_outside_wall})"
+        );
+        assert!(
+            half_meter_inside > -0.6 && half_meter_inside < -0.4,
+            "metric SDF should read ~-0.5 m inside the wall (sdf={half_meter_inside})"
+        );
+    }
 }

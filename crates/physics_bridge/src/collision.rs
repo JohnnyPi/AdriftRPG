@@ -1,3 +1,4 @@
+// crates/physics_bridge/src/collision.rs
 use avian3d::prelude::*;
 use bevy::prelude::*;
 

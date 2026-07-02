@@ -1,15 +1,23 @@
-use crate::material_id::TerrainMaterialId;
+// crates/terrain_surface/src/blend.rs
+use crate::chunk_palette::ChunkSlotRemapper;
+use crate::material_id::MaterialKey;
+use crate::registry::MaterialLayerRegistry;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct SurfaceMaterialBlend {
-    pub materials: [TerrainMaterialId; 4],
+    pub materials: [MaterialKey; 4],
     pub weights: [f32; 4],
 }
 
 impl SurfaceMaterialBlend {
-    pub fn single(material: TerrainMaterialId) -> Self {
+    pub fn single(material: MaterialKey) -> Self {
         Self {
-            materials: [material; 4],
+            materials: [
+                material.clone(),
+                material.clone(),
+                material.clone(),
+                material,
+            ],
             weights: [1.0, 0.0, 0.0, 0.0],
         }
     }
@@ -31,22 +39,38 @@ impl SurfaceMaterialBlend {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct TerrainMaterialVertex {
-    pub indices: [u32; 4],
+pub struct MaterialVertex {
+    pub local_indices: [u8; 4],
     pub weights: [f32; 4],
 }
 
 pub fn resolve_blend(
     blend: SurfaceMaterialBlend,
-    layers: &crate::registry::MaterialLayerRegistry,
-) -> TerrainMaterialVertex {
-    TerrainMaterialVertex {
-        indices: blend.materials.map(|id| layers.layer(id)),
-        weights: blend.weights,
+    layers: &MaterialLayerRegistry,
+) -> ([u32; 4], [f32; 4]) {
+    let mut indices = [0u32; 4];
+    for (out, material) in indices.iter_mut().zip(blend.materials.iter()) {
+        *out = layers.layer_or_fallback(material);
+    }
+    (indices, blend.weights)
+}
+
+pub fn remap_blend_to_local_slots(
+    global_indices: [u32; 4],
+    weights: [f32; 4],
+    remapper: &mut ChunkSlotRemapper,
+) -> MaterialVertex {
+    let mut local_indices = [0u8; 4];
+    for (local, &global) in local_indices.iter_mut().zip(global_indices.iter()) {
+        *local = remapper.allocate_global(global);
+    }
+    MaterialVertex {
+        local_indices,
+        weights,
     }
 }
 
-pub fn validate_blend(blend: SurfaceMaterialBlend) {
+pub fn validate_blend(blend: &SurfaceMaterialBlend) {
     assert!(
         blend.weights.iter().all(|value| value.is_finite() && *value >= 0.0),
         "invalid blend weights"
@@ -60,5 +84,49 @@ pub trait SurfaceClassifier: Send + Sync {
 }
 
 pub trait SurfaceMeshResolver: Send + Sync {
-    fn vertex_blend(&self, position: [f32; 3], normal: [f32; 3]) -> ([u16; 4], [f32; 4]);
+    fn vertex_blend(&self, position: [f32; 3], normal: [f32; 3]) -> MaterialVertex;
+    fn chunk_palette(&self) -> crate::chunk_palette::ChunkSlotPalette;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::registry::MaterialLayerRegistry;
+
+    #[test]
+    fn local_slot_remap_is_stable_within_chunk() {
+        let registry = MaterialLayerRegistry::from_layer_order(&[
+            MaterialKey::new("grass"),
+            MaterialKey::new("sand"),
+            MaterialKey::new("rock"),
+        ]);
+        let mut remapper = ChunkSlotRemapper::new();
+        let (globals, weights) = resolve_blend(
+            SurfaceMaterialBlend {
+                materials: [
+                    MaterialKey::new("sand"),
+                    MaterialKey::new("grass"),
+                    MaterialKey::new("grass"),
+                    MaterialKey::new("grass"),
+                ],
+                weights: [0.6, 0.4, 0.0, 0.0],
+            },
+            &registry,
+        );
+        let v0 = remap_blend_to_local_slots(globals, weights, &mut remapper);
+        let v1 = remap_blend_to_local_slots(globals, weights, &mut remapper);
+        assert_eq!(v0.local_indices, v1.local_indices);
+        let palette = remapper.finish();
+        assert_eq!(palette.slot_count(), 2);
+    }
+
+    #[test]
+    fn ninth_material_merges_into_existing_slot() {
+        let mut remapper = ChunkSlotRemapper::new();
+        for global in 0..9 {
+            remapper.allocate_global(global);
+        }
+        let palette = remapper.finish();
+        assert_eq!(palette.slot_count(), 8);
+    }
 }

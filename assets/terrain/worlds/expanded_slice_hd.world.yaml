@@ -14,6 +14,7 @@ terrain: terrain.expanded_slice
 island_gen: island_gen.vs3_volcanic
 biomes: biomes.expanded_slice
 materials: materials.expanded_slice
+surface: surface.expanded_slice
 water: water.tropical_shallow
 lighting: lighting.late_morning
 sky: sky.expanded_showcase

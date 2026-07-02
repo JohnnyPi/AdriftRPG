@@ -1,3 +1,4 @@
+// crates/terrain_tools/src/bake_materials.rs
 use std::path::PathBuf;
 
 use clap::Parser;

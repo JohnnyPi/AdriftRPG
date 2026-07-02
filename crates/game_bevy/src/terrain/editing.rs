@@ -1,11 +1,14 @@
+// crates/game_bevy/src/terrain/editing.rs
 use avian3d::prelude::*;
 use bevy::prelude::*;
+use terrain_generation::DensitySource;
 use tracing::info;
 use voxel_core::{MaterialId, TerrainEditCommand};
 
 use crate::camera::{camera_view_direction, MainGameCamera, MmoCamera};
 use crate::debug_tools::DebugKeyBindings;
 use crate::environment::biomes::BiomeCatalog;
+use crate::environment::biomes::BiomeKind;
 use crate::environment::materials::material_for_world;
 use crate::player::Player;
 use crate::state::AppState;
@@ -48,7 +51,7 @@ fn handle_edit_keys(
         Some(TerrainEditCommand::PaintMaterial {
             center: [0.0; 3],
             radius_m: EDIT_SPHERE_RADIUS_M,
-            material: MaterialId(2),
+            material: MaterialId(biomes.material_id_for(BiomeKind::RockyUpland)),
         })
     } else {
         None
@@ -85,7 +88,7 @@ fn handle_edit_keys(
 
     let affected = edit_store.0.apply_command(
         &command,
-        |wx, wy, wz| source.density_at(wx as f32, wy as f32, wz as f32),
+        |wx, wy, wz| source.sample_density(wx as f32, wy as f32, wz as f32),
         |wx, wy, wz, density| {
             material_for_world(
                 &biomes,

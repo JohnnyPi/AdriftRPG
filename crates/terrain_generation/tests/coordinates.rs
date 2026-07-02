@@ -1,3 +1,4 @@
+// crates/terrain_generation/tests/coordinates.rs
 use terrain_generation::{default_vertical_slice_recipe, RecipeDensitySource};
 use voxel_core::{ChunkCoord, WorldCell};
 

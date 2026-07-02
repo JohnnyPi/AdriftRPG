@@ -1,3 +1,4 @@
+// crates/terrain_generation/src/lib.rs
 //! Deterministic terrain density generation. No Bevy dependency.
 
 mod chunk_gen;
@@ -16,16 +17,17 @@ pub mod topology;
 mod spawn;
 mod traversal_tests;
 pub mod water_body;
+mod world_setup;
 
 pub use chunk_gen::{
-    chunk_axis_range, generate_chunk, generate_padded_samples, iter_world_chunk_coords,
-    padded_index,
+    chunk_axis_range, fill_padded_samples, generate_chunk, generate_padded_samples,
+    iter_world_chunk_coords, padded_index,
 };
 pub use density_ops::{
     capsule_sdf, ellipsoid_sdf, plane_density, solid_subtract, solid_union, sphere_density,
 };
 pub use field2d::{add_residual, residual_from_absolute, Field2D, FieldTier};
-pub use field_stack::{build_coast_mask, stack_surface_height, FieldStackParams, TerrainMask};
+pub use field_stack::{build_coast_mask, ridge_field, valley_field, FieldStackParams};
 pub use hydrology::{HydrologyBackend, RiverHydrology, StubHydrology};
 pub use island_atlas::{BiomeWeights, IslandAtlas};
 pub use island_gen::{
@@ -55,6 +57,10 @@ pub use spawn::{
 pub use water_body::{
     RiverControlPoint, RiverSpline, WaterBody, WaterBodyId, WaterBodyKind, WaterBodyRegistry,
     WaterQuery, WaterSample, WaterSurfaceDefinition,
+};
+pub use world_setup::{
+    append_generated_island_caves, build_atlas_density_source, compile_terrain_recipe,
+    island_params_from_compiled,
 };
 
 pub trait DensitySource: Send + Sync {

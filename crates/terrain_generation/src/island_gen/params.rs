@@ -1,3 +1,4 @@
+// crates/terrain_generation/src/island_gen/params.rs
 //! Island generation parameters (runtime, independent of Bevy).
 
 use crate::resolution::GenerationResolution;
@@ -66,8 +67,12 @@ pub struct ErosionParams {
     pub m: f32,
     pub n: f32,
     pub maximum_step_m: f32,
+    pub stream_power_erodibility: f32,
     pub thermal_iterations: u32,
     pub thermal_transfer_rate: f32,
+    pub thermal_talus_deg: f32,
+    pub river_bank_width_m: f32,
+    pub river_carve_strength: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -196,8 +201,12 @@ impl Default for IslandGenParams {
                 m: 0.48,
                 n: 1.0,
                 maximum_step_m: 0.2,
+                stream_power_erodibility: 0.00002,
                 thermal_iterations: 12,
                 thermal_transfer_rate: 0.16,
+                thermal_talus_deg: 38.0,
+                river_bank_width_m: 3.5,
+                river_carve_strength: 1.2,
             },
             coast: CoastParams {
                 shelf_width_min_m: 60.0,

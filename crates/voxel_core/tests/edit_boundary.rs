@@ -1,3 +1,4 @@
+// crates/voxel_core/tests/edit_boundary.rs
 use voxel_core::{MaterialId, TerrainEditCommand, TerrainEditStore, CHUNK_CELLS};
 
 #[test]
@@ -14,8 +15,8 @@ fn cross_chunk_edit_produces_matching_face_density() {
         proc,
         mat,
     );
-    let left = store.sample_override(face_x, 8, 8);
-    let right = store.sample_override(face_x, 8, 8);
-    assert_eq!(left, right, "shared world sample must be single override");
-    assert!(left.unwrap().density > 0.0);
+    let sample = store
+        .sample_override(face_x, 8, 8)
+        .expect("shared world sample");
+    assert!(sample.density > 0.0, "subtract should push toward air");
 }

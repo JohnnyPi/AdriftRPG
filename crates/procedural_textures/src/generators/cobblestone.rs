@@ -1,3 +1,4 @@
+// crates/procedural_textures/src/generators/cobblestone.rs
 use crate::error::TextureGenerationError;
 use crate::generators::rock::{RockConfig, RockGenerator};
 use crate::maps::GeneratedPbrMaps;

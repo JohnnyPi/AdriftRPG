@@ -1,3 +1,4 @@
+// crates/game_bevy/src/environment/lighting_state.rs
 //! Unified environment lighting state (VS2 §12).
 
 use bevy::prelude::*;

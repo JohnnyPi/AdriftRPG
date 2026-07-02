@@ -1,4 +1,5 @@
-use voxel_core::{fill_chunk_from_density, ChunkCoord, MaterialId, TerrainChunk};
+// crates/terrain_generation/src/chunk_gen.rs
+use voxel_core::{fill_chunk_from_density, ChunkCoord, MaterialId, TerrainChunk, TerrainSample};
 
 use crate::DensitySource;
 
@@ -11,7 +12,20 @@ pub fn generate_padded_samples(
     source: &dyn DensitySource,
     coord: ChunkCoord,
     material: MaterialId,
-) -> Vec<voxel_core::TerrainSample> {
+) -> Vec<TerrainSample> {
+    fill_padded_samples(coord, |wx, wy, wz| {
+        (
+            source.sample_density(wx as f32, wy as f32, wz as f32),
+            material,
+        )
+    })
+}
+
+/// Shared padded-grid loop used by runtime meshing and procedural chunk generation.
+pub fn fill_padded_samples(
+    coord: ChunkCoord,
+    mut sample_at: impl FnMut(i32, i32, i32) -> (f32, MaterialId),
+) -> Vec<TerrainSample> {
     let cells = voxel_core::CHUNK_CELLS;
     let padded = cells + 3;
     let (ox, oy, oz) = TerrainChunk::new(coord).sample_origin();
@@ -22,10 +36,8 @@ pub fn generate_padded_samples(
                 let wx = ox + px;
                 let wy = oy + py;
                 let wz = oz + pz;
-                samples.push(voxel_core::TerrainSample {
-                    density: source.sample_density(wx as f32, wy as f32, wz as f32),
-                    material,
-                });
+                let (density, material) = sample_at(wx, wy, wz);
+                samples.push(TerrainSample { density, material });
             }
         }
     }

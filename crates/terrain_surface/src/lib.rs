@@ -1,19 +1,26 @@
+// crates/terrain_surface/src/lib.rs
 mod blend;
+mod chunk_palette;
 mod classifier;
 mod context;
 mod material_id;
 mod registry;
 
 pub use blend::{
-    resolve_blend, validate_blend, SurfaceClassifier, SurfaceMaterialBlend, SurfaceMeshResolver,
-    TerrainMaterialVertex,
+    remap_blend_to_local_slots, resolve_blend, validate_blend, MaterialVertex, SurfaceClassifier,
+    SurfaceMaterialBlend, SurfaceMeshResolver,
 };
-pub use classifier::IslandSurfaceClassifier;
+pub use chunk_palette::{ChunkSlotPalette, ChunkSlotRemapper, CHUNK_LOCAL_SLOT_COUNT, UNUSED_SLOT};
+pub use classifier::{
+    IslandSurfaceClassifier, RuleSurfaceClassifier, SurfaceBlendEntry, SurfaceClassifierPreset,
+    SurfaceConditions, SurfaceGate, SurfaceGateWeights, SurfaceRamp, SurfaceRuleSet,
+    SurfaceWeightedMix,
+};
 pub use context::{
     compute_soft_biome_weights, saturate, smoothstep, slope_degrees, BiomeId, EnvironmentSample,
     GeologyId, SoftBiomeWeights, SurfaceContext,
 };
-pub use material_id::{TerrainMaterialId, CORE_TERRAIN_MATERIALS, INITIAL_ISLAND_LAYERS};
+pub use material_id::MaterialKey;
 pub use registry::MaterialLayerRegistry;
 
 #[cfg(test)]

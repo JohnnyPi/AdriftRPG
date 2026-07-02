@@ -1,3 +1,4 @@
+// crates/terrain_generation/src/island_gen/mod.rs
 //! Island atlas builder — VS3 phases A–G orchestration.
 
 mod bathymetry;
@@ -8,6 +9,7 @@ mod erosion;
 mod footprint;
 mod hydrology;
 mod params;
+mod soil_field;
 mod validate;
 mod volcano;
 
@@ -25,6 +27,7 @@ use footprint::build_island_mask;
 use hydrology::{
     compute_flow, extract_river_mask, priority_flood, trace_primary_river,
 };
+use soil_field::compute_soil_depth;
 use volcano::{local_detail_at, regional_detail_at, volcanic_height};
 
 pub fn build_island_atlas(params: &IslandGenParams) -> IslandAtlas {
@@ -51,7 +54,13 @@ pub fn build_island_atlas(params: &IslandGenParams) -> IslandAtlas {
     });
 
     elevation_regional.for_each_world(|wx, wz, h| {
-        let mask = build_island_mask(params, wx, wz);
+        let gx = ((wx - origin[0]) / regional_spacing).round() as u32;
+        let gz = ((wz - origin[1]) / regional_spacing).round() as u32;
+        let mask = if gx < island_mask.width && gz < island_mask.height {
+            island_mask.get(gx, gz)
+        } else {
+            0.0
+        };
         *h = volcanic_height(params, wx, wz, mask) + regional_detail_at(params, wx, wz) * mask;
     });
 
@@ -62,11 +71,24 @@ pub fn build_island_atlas(params: &IslandGenParams) -> IslandAtlas {
         *h = bathymetry_height(params, wx, wz, cd);
     });
 
-    let filled = priority_flood(&elevation_regional);
-    let (flow_direction, flow_accumulation) =
-        compute_flow(&filled, &island_mask, params);
-    let river_mask = extract_river_mask(&flow_accumulation, &island_mask, params);
+    // Pre-erosion flow drives stream-power carving only.
+    let filled_pre_erosion = priority_flood(&elevation_regional);
+    let (_flow_direction_pre, flow_accumulation_pre) =
+        compute_flow(&filled_pre_erosion, &island_mask, params);
+    let slope_pre_erosion = compute_slope(&elevation_regional);
+    apply_stream_power_erosion(
+        &mut elevation_regional,
+        &flow_accumulation_pre,
+        &slope_pre_erosion,
+        &island_mask,
+        params,
+    );
+    apply_thermal_erosion(&mut elevation_regional, &island_mask, params);
 
+    // Hydrology extraction runs on the post-erosion surface.
+    let filled = priority_flood(&elevation_regional);
+    let (flow_direction, flow_accumulation) = compute_flow(&filled, &island_mask, params);
+    let river_mask = extract_river_mask(&flow_accumulation, &island_mask, params);
     let river_graph = trace_primary_river(
         &filled,
         &flow_accumulation,
@@ -76,28 +98,16 @@ pub fn build_island_atlas(params: &IslandGenParams) -> IslandAtlas {
         params.island.sea_level_m,
     );
 
-    let _slope_regional = compute_slope(&elevation_regional);
-    apply_stream_power_erosion(
-        &mut elevation_regional,
-        &flow_accumulation,
-        &_slope_regional,
-        &island_mask,
-        params,
-    );
-    apply_thermal_erosion(&mut elevation_regional, &island_mask, params);
-
     let regional_width = elevation_regional.width;
     let regional_height = elevation_regional.height;
     let mut sediment = Field2D::<f32>::from_extent(extent, origin, regional_spacing);
-    sediment.for_each_world(|wx, wz, s| {
-        let gx = ((wx - origin[0]) / regional_spacing).round() as u32;
-        let gz = ((wz - origin[1]) / regional_spacing).round() as u32;
-        if gx < regional_width && gz < regional_height {
-            *s = flow_accumulation.get(gx, gz) * 0.001;
+    for z in 0..regional_height {
+        for x in 0..regional_width {
+            sediment.set(x, z, flow_accumulation.get(x, z) * 0.001);
         }
-    });
+    }
 
-    // --- Local tier: upsample regional, add detail, rivers, beaches, biomes ---
+    // Bilinear upsample softens regional peak curvature; local_detail_at restores micro-relief.
     let mut elevation_local_abs = elevation_regional.resample_to_spacing(local_spacing);
     elevation_local_abs.for_each_world(|wx, wz, h| {
         let mask = island_mask.sample_bilinear(wx, wz);
@@ -130,7 +140,13 @@ pub fn build_island_atlas(params: &IslandGenParams) -> IslandAtlas {
     slope = compute_slope(&elevation_local_abs);
 
     let wetness = flow_accumulation.resample_to_spacing(local_spacing);
-    let soil_depth = Field2D::<f32>::from_extent(extent, origin, local_spacing);
+    let soil_depth = compute_soil_depth(
+        &elevation_local_abs,
+        &slope,
+        &sediment_local,
+        &island_mask_local,
+        params,
+    );
     let biome_weights = compute_biome_weights(
         &elevation_local_abs,
         &slope,
@@ -473,7 +489,7 @@ mod tests {
             coord_offset: [128.0, 0.0, 128.0],
             ops: Vec::new(),
         };
-        let source = RecipeDensitySource::new(recipe).with_atlas(atlas);
+        let source = RecipeDensitySource::new(recipe).with_atlas(atlas, 3.5);
         let (sx, sy, sz, report) = source.resolve_player_spawn(2.0, 48.0);
         assert!(report.passed, "spawn should resolve: {:?}", report.messages);
         let authored_x = -58.0;
@@ -514,7 +530,7 @@ mod tests {
             coord_offset: [128.0, 0.0, 128.0],
             ops: Vec::new(),
         };
-        let source = RecipeDensitySource::new(recipe).with_atlas(atlas.clone());
+        let source = RecipeDensitySource::new(recipe).with_atlas(atlas.clone(), 3.5);
         let center_wx = atlas.origin[0]
             + (atlas.width() / 2) as f32 * atlas.elevation_local.spacing;
         let center_wz = atlas.origin[1]
@@ -532,6 +548,119 @@ mod tests {
         assert!(
             (spawn_atlas - spawn_runtime).abs() < 1.0,
             "spawn runtime={spawn_runtime} atlas={spawn_atlas}"
+        );
+    }
+
+    #[test]
+    fn river_descends_post_erosion_filled_surface() {
+        let atlas = build_island_atlas(&IslandGenParams::default());
+        let river = atlas
+            .river_graph
+            .as_ref()
+            .expect("default island should trace a primary river");
+        for window in river.points.windows(2) {
+            let p0 = window[0].position_xz;
+            let p1 = window[1].position_xz;
+            let h0 = atlas.filled_elevation.sample_bilinear(p0[0], p0[1]);
+            let h1 = atlas.filled_elevation.sample_bilinear(p1[0], p1[1]);
+            assert!(
+                h1 <= h0 + 0.5,
+                "river segment should descend on post-erosion filled surface: {h0:.2} -> {h1:.2}"
+            );
+        }
+    }
+
+    #[test]
+    fn soil_depth_field_is_populated() {
+        let atlas = build_island_atlas(&IslandGenParams::default());
+        let mut flat_sum = 0.0f32;
+        let mut flat_n = 0u32;
+        let mut steep_sum = 0.0f32;
+        let mut steep_n = 0u32;
+        let mut variance_acc = 0.0f32;
+        let mut samples = Vec::new();
+        for z in 0..atlas.soil_depth.height {
+            for x in 0..atlas.soil_depth.width {
+                if atlas.island_mask.get(x, z) < 0.4 {
+                    continue;
+                }
+                let soil = atlas.soil_depth.get(x, z);
+                samples.push(soil);
+                let sl = atlas.slope.get(x, z);
+                if sl < 10.0 {
+                    flat_sum += soil;
+                    flat_n += 1;
+                } else if sl > 35.0 {
+                    steep_sum += soil;
+                    steep_n += 1;
+                }
+            }
+        }
+        let mean = samples.iter().sum::<f32>() / samples.len().max(1) as f32;
+        for s in &samples {
+            variance_acc += (s - mean).powi(2);
+        }
+        let variance = variance_acc / samples.len().max(1) as f32;
+        assert!(variance > 1e-4, "soil_depth should vary (variance={variance})");
+        assert!(flat_n > 0 && steep_n > 0, "need both flat and steep land cells");
+        assert!(
+            flat_sum / flat_n as f32 > steep_sum / steep_n as f32,
+            "flats should retain more soil than steep slopes"
+        );
+    }
+
+    /// Diagnostic: `surface_height_at` land/sea switch should not cliff at the coastline.
+    #[test]
+    fn surface_height_coast_seam_is_continuous() {
+        let params = IslandGenParams::default();
+        let atlas = build_island_atlas(&params);
+        let cx = params.center[0];
+        let cz = params.center[1];
+        let step = atlas.spacing_m() * 0.25;
+        let mut max_step_near_coast = 0.0f32;
+        for quadrant in 0..4 {
+            let dir = quadrant as f32 * std::f32::consts::FRAC_PI_2;
+            let (dx, dz) = (dir.cos(), dir.sin());
+            for i in 2..400 {
+                let r = i as f32 * step;
+                let wx = cx + dx * r;
+                let wz = cz + dz * r;
+                let mask = atlas.island_mask.sample_bilinear(wx, wz);
+                if !(0.15..=0.85).contains(&mask) {
+                    continue;
+                }
+                let h_prev = atlas.surface_height_at(wx - dx * step, wz - dz * step);
+                let h = atlas.surface_height_at(wx, wz);
+                let h_next = atlas.surface_height_at(wx + dx * step, wz + dz * step);
+                max_step_near_coast = max_step_near_coast
+                    .max((h - h_prev).abs())
+                    .max((h_next - h).abs());
+            }
+        }
+        assert!(
+            max_step_near_coast < atlas.spacing_m() * 3.0,
+            "coast seam discontinuity {max_step_near_coast:.2} m (threshold {:.2} m)",
+            atlas.spacing_m() * 3.0
+        );
+    }
+
+    /// Diagnostic: beyond-atlas samples clamp to edge cells, not y = 0 shallow seabed.
+    #[test]
+    fn surface_height_atlas_rim_does_not_snap_to_zero() {
+        let atlas = build_island_atlas(&IslandGenParams::default());
+        let spacing = atlas.spacing_m();
+        let max_x = atlas.origin[0] + (atlas.width() - 1) as f32 * spacing;
+        let cz = atlas.origin[1] + (atlas.height() / 2) as f32 * spacing;
+        let h_inner = atlas.surface_height_at(max_x - spacing * 2.0, cz);
+        let h_edge = atlas.surface_height_at(max_x, cz);
+        let h_beyond = atlas.surface_height_at(max_x + spacing * 4.0, cz);
+        assert!(
+            (h_beyond - h_edge).abs() < 0.5,
+            "beyond-atlas should clamp to edge value, not jump: edge={h_edge} beyond={h_beyond}"
+        );
+        assert!(
+            h_beyond > atlas.sea_level_m - 35.0,
+            "rim should not snap to false shallow seabed (y={h_beyond}, inner={h_inner})"
         );
     }
 }

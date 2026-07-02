@@ -1,3 +1,4 @@
+// crates/game_bevy/src/environment/config_init.rs
 //! Bootstrap atmosphere, fog, and sky from compiled YAML (VS2 §18).
 
 use bevy::prelude::*;

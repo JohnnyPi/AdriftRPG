@@ -1,3 +1,4 @@
+// crates/procedural_textures/src/generators/sand.rs
 use crate::error::TextureGenerationError;
 use crate::generators::rock::build_maps_from_height;
 use crate::maps::{GeneratedPbrMaps, linear_to_srgb_u8};

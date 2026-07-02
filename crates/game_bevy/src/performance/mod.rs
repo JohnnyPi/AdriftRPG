@@ -1,3 +1,4 @@
+// crates/game_bevy/src/performance/mod.rs
 //! Release-build FPS validation (VS1 §30, VS2 performance acceptance).
 
 use std::collections::VecDeque;

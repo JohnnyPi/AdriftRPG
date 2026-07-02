@@ -1,3 +1,4 @@
+// crates/physics_bridge/src/character.rs
 use avian3d::math::AdjustPrecision;
 use avian3d::prelude::*;
 use bevy::prelude::*;

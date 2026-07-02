@@ -1,0 +1,74 @@
+`validate_atlas` consumers and residency confirmed — I have the full streaming picture. This installment resolves Bug 36 and M22, confirms Bug 17's severity, and finds the biggest streaming defect of the review.
+
+# Installment 11: streaming, concurrency, job lifecycle
+
+**Files:** `game_bevy/terrain/pipeline.rs` (824), `…/residency.rs` (201), `…/metrics.rs` (48), plus `preview.rs` cross-checks. (The uploaded `collision.rs` turned out to be the camera crate's — terrain colliders live in `pipeline.rs` itself.)
+
+## Bug 47: chunks whose jobs are cancelled get stuck in transient states forever — permanent holes in the world
+
+**Confidence / Severity:** Confirmed / **High (the doc's "missing terrain / generation deadlock" category)**
+**File:** `pipeline.rs`, `manage_chunk_residency` + the state machine
+
+**Evidence:** when the interest center moves, `manage_chunk_residency` cancels in-flight work by dropping it:
+```rust
+pipeline.pending_density.retain(|job| within_density_radius(...));
+pipeline.pending_mesh.retain(|job| within_density_radius(...));
+pipeline.upload_queue.retain(|item| within_render_radius(...));
+```
+Dropping a `Task` cancels it — but the corresponding `ChunkRecord.state` is left at `GeneratingDensity`, `Meshing`, or `AwaitingUpload`. `dispatch_density_jobs` only ever selects chunks in `Unrequested`, and nothing else ever resets these states (only despawn-with-entity and full revision resets do). So any chunk that leaves the radius mid-pipeline and later re-enters is **permanently ungenerable**: a hole in the terrain (and its collider) that survives until F8. Walk away from a generating frontier and walk back — the classic repro. Note the asymmetry that makes it likely in practice: uploads are retained by the *render* radius while meshing uses the *density* radius, so chunks meshed in the annulus between the two radii get their upload dropped every time the player retreats.
+
+**Repair:** treat cancellation as a state transition, not just a queue purge:
+```rust
+let cancelled: Vec<ChunkCoord> = pipeline.pending_density.iter()
+    .filter(|j| !within_density_radius(center, j.coord, &world_tweaks))
+    .map(|j| j.coord).collect();
+// (same for pending_mesh, upload_queue)
+pipeline.pending_density.retain(...);
+for coord in cancelled {
+    if let Some(c) = pipeline.chunks.iter_mut().find(|c| c.coord == coord) {
+        if c.entity.is_none() { c.state = ChunkState::Unrequested; }
+    }
+}
+```
+**Regression test:** simulate interest center at A → dispatch → move center far → run residency → move back to A → run dispatch; assert the chunk re-enters `GeneratingDensity` (today it's stuck).
+
+## Bug 36 resolved: both material systems run per chunk — and System A's output is thrown away
+
+**Confidence / Severity:** Confirmed / High (as waste), Medium (as behavior)
+**File:** `pipeline.rs`, `generate_padded_samples_with_biomes` + `poll_density_jobs`
+
+**Evidence:** the density job computes System A for **every padded sample** — 6,859 calls to `material_for_world_with_cache`, backed by a `ChunkColumnCache` build — and stores `MaterialId` per sample. Then `poll_density_jobs` spawns the mesh job with `surface_resolver: Some(&resolver)`, constructing a **second** `ChunkColumnCache` (M28's ~58k-density-eval build, again) for System B's per-vertex classification. And in `surface_nets.rs`, when a resolver is present, `cell_material_blend` — the *only* consumer of the per-sample material IDs — is never called. So the runtime path pays for: two column caches per chunk, plus a full per-sample classification pass whose output is discarded (the sample materials survive only into `density_hash` and tests).
+
+**Repair:** in the runtime path, drop the per-sample material classification entirely (density job computes density + edit overlays only) and pass the *density job's* column cache into the resolver instead of rebuilding it — `ChunkSurfaceResolver::new` already takes the same `(origin, padded_side)`. Combined with M28's analytic-surface fix, this removes the two largest per-chunk costs in one refactor. Keep System A alive only behind the `surface_resolver: None` test path until deleted per Bug 36's original repair. **Test:** per-chunk generation-time metric (already recorded — `record_density_ms`/`record_mesh_ms`) asserted to drop; plus the existing `spawn_area_chunk_meshes_with_vertices` keeps the fallback path honest.
+
+## Bug 48: pending colliders can be inserted on despawned entities
+
+**Confidence / Severity:** Confirmed hazard / Medium
+**File:** `pipeline.rs`, `manage_chunk_residency` vs `attach_pending_colliders`
+
+**Evidence:** residency despawns out-of-radius chunk entities but does **not** purge `collider_queue` entries referencing them (only `invalidate_chunks` and `reset_for_revision` do). The systems are chained, so residency's despawn commands apply before `attach_pending_colliders` runs — which then calls `commands.entity(pending.entity).insert(...)` on a dead entity: a B0003 panic/error-log depending on Bevy version, and either way a lost collider bookkeeping entry. Triggerable by moving fast enough that a chunk leaves the render radius between mesh upload and collider attachment (the collider budget — `collider_builds_per_frame` — makes that window real). **Repair:** in the residency despawn loop, collect despawned entities and `collider_queue.retain(|p| !despawned.contains(&p.entity))`, mirroring what `invalidate_chunks` already does correctly.
+
+## Bug 49: the entire `IslandAtlas` is deep-cloned twice per chunk
+
+**Confidence / Severity:** Confirmed / Medium (throughput)
+**File:** `pipeline.rs` (`source.clone()` in `dispatch_density_jobs` and again in `poll_density_jobs`), rooted in `RecipeDensitySource: Clone`
+
+**Evidence:** `RecipeDensitySource` owns `Option<IslandAtlas>` by value; the atlas holds ~17 `Field2D` buffers (at 4 m local spacing over a 256 m extent, roughly 300–500 KB). Every density job clones the source, and every mesh job clones it *again* into the `ChunkSurfaceResolver` — hundreds of KB of memcpy per chunk, twice, for data that is strictly immutable after `build_island_atlas`. **Repair:** `atlas: Option<Arc<IslandAtlas>>` (and arguably `Arc<TerrainRecipe>`); clones become refcount bumps. Purely mechanical — nothing mutates the atlas post-build.
+
+## Resolutions of carried items
+
+**M22 resolved — atlas validation never gates anything at runtime.** `validation_passed`/`validation_messages` flow only to the setup-screen preview (`preview.rs:136`). The runtime paths (`init_terrain_world`, `regen_terrain_with_seed`) build the atlas and generate regardless — a failing atlas produces a world silently. Cheap fix: `warn!` (or refuse F8 + HUD message) when `source.atlas().map_or(false, |a| !a.validation_passed)`.
+
+**Bug 17 confirmed — no second staleness trigger.** `sync_terrain_on_recipe_change` compares only `terrain_recipe_hash`, which omits island-gen prefs, river config (beyond bank width), and field-stack params. Regeneration itself is manual (F8) and rebuilds from prefs correctly — so the failure mode is precisely: edit island-generation or river settings → **no "recipe changed; press F8" notice appears** → the user reasonably believes the world reflects their config. Fix stands as scoped in installment 4 (hash the full input set).
+
+## Minor findings
+
+**M40 — upload order is roughly farthest-first.** Dispatch is nearest-first, so completions arrive roughly nearest-first; `upload_queue` is popped from the back (LIFO), so apart from the spawn-chunk special case (which is handled correctly — the `sort_by_key(== spawn_chunk)` + `pop()` trick works), the newest ≈ farthest chunks upload before near ones. Sort the queue by Chebyshev distance descending before popping.
+
+**M41 — `Vec<ChunkRecord>` linear `find` per completion/dispatch** — fine at ~1–4k chunks; swap for a `HashMap<ChunkCoord, usize>` index only if extents grow.
+
+**M42 — `expect("performance") / expect("world")`** in per-frame systems: the M13 family again, now in hot systems where a registry hiccup means a frame-loop panic.
+
+## What's verified good
+
+The concurrency architecture is fundamentally sound and hits most of the doc's Part 20 checklist: **revision guards at every hand-off** (density completion, mesh completion, and upload all compare `chunk.revision` and drop stale results — the stale-cache race the doc warns about is handled), a **consistent edit snapshot per job** (`edit_store.clone()` captured at dispatch, so a mid-generation edit can't tear a chunk), single-writer pipeline state through chained systems (no locks, no shared mutation from tasks), per-frame budgets for mesh uploads and collider builds, physics-radius gating on collider attachment, spawn-chunk prioritization in both dispatch and upload, `ChunkState::Failed` with logged errors instead of silent drops, empty meshes short-circuited without entity spawn, and live queue/timing metrics feeding the HUD. Colliders are built from the *exact* render mesh (same positions × cell_size, same indices), so collision-matches-visuals holds by construction — modulo Bug 8's duplicated boundary triangles, which this faithfully copies into the trimesh. And the two pipeline tests are good ones — the microdetail-consistency test in particular is exactly the "trace values through the pipeline" style the diagnostics doc prescribes. Fix Bug 47 and the stuck-state class, and this layer is in good shape.

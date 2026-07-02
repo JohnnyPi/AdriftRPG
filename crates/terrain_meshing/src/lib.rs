@@ -1,10 +1,11 @@
+// crates/terrain_meshing/src/lib.rs
 //! Surface Nets and alternative terrain meshers. No Bevy dependency.
 
 mod dual_contouring;
 mod surface_nets;
 
 use voxel_core::TerrainSample;
-use terrain_surface::SurfaceMeshResolver;
+use terrain_surface::{ChunkSlotPalette, MaterialVertex, SurfaceMeshResolver};
 
 pub use dual_contouring::DualContouringMesher;
 pub use surface_nets::SurfaceNetsMesher;
@@ -14,12 +15,12 @@ pub struct TerrainMeshData {
     pub positions: Vec<[f32; 3]>,
     pub normals: Vec<[f32; 3]>,
     pub indices: Vec<u32>,
-    /// Dominant material per vertex (legacy / debug).
+    /// Dominant local slot per vertex (legacy / debug).
     pub materials: Vec<u16>,
-    /// Up to four blended material IDs per vertex.
-    pub material_ids: Vec<[u16; 4]>,
-    /// Normalized blend weights matching `material_ids`.
-    pub material_weights: Vec<[f32; 4]>,
+    /// Indexed 4-way blend per vertex (local slot indices + weights).
+    pub material_vertices: Vec<MaterialVertex>,
+    /// Chunk-local slot → global texture-array layer mapping.
+    pub chunk_palette: ChunkSlotPalette,
 }
 
 #[derive(Clone)]

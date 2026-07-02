@@ -1,3 +1,4 @@
+// crates/game_bevy/src/ui/setup_options.rs
 //! Full-screen setup / options with overhead map preview.
 
 use bevy::prelude::*;

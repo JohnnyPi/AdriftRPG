@@ -1,3 +1,4 @@
+// crates/game_bevy/src/physics/mod.rs
 use bevy::prelude::*;
 use physics_bridge::{
     CharacterController, CharacterControllerBundle, CharacterControllerPlugin,

@@ -1,3 +1,4 @@
+// crates/game_bevy/src/environment/audio.rs
 //! Environmental audio hook stubs (VS2 §17).
 
 use bevy::prelude::*;

@@ -1,3 +1,4 @@
+// crates/game_bevy/src/camera/environment.rs
 //! Camera environment states (VS2 §11).
 
 use bevy::prelude::*;

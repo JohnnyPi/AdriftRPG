@@ -1,5 +1,6 @@
+// crates/procedural_textures/src/arrays.rs
 use crate::error::TextureGenerationError;
-use crate::material_recipe::TerrainMaterialRecipe;
+use crate::material_recipe::{order_recipes_for_palette, TerrainMaterialRecipe};
 use crate::maps::GeneratedPbrMaps;
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -13,6 +14,30 @@ pub struct CpuTextureArrays {
 }
 
 pub fn build_cpu_arrays(
+    recipes: &[TerrainMaterialRecipe],
+) -> Result<CpuTextureArrays, TextureGenerationError> {
+    build_cpu_arrays_from_ordered(recipes)
+}
+
+/// Build texture arrays in palette layer order.
+pub fn build_cpu_arrays_for_palette(
+    layer_order: &[impl AsRef<str>],
+    recipes: &[TerrainMaterialRecipe],
+) -> Result<CpuTextureArrays, TextureGenerationError> {
+    let ordered = order_recipes_for_palette(layer_order, recipes)?;
+    build_cpu_arrays_from_ordered(&ordered)
+}
+
+/// Build texture arrays in canonical legacy core-layer order regardless of YAML file order.
+pub fn build_cpu_arrays_in_core_order(
+    recipes: &[TerrainMaterialRecipe],
+) -> Result<CpuTextureArrays, TextureGenerationError> {
+    use crate::material_recipe::order_recipes_for_core_layers;
+    let ordered = order_recipes_for_core_layers(recipes)?;
+    build_cpu_arrays_from_ordered(&ordered)
+}
+
+fn build_cpu_arrays_from_ordered(
     recipes: &[TerrainMaterialRecipe],
 ) -> Result<CpuTextureArrays, TextureGenerationError> {
     let first = recipes.first().ok_or_else(|| {

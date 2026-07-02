@@ -1,17 +1,13 @@
-use terrain_generation::{RecipeDensitySource, ValueNoise};
+// crates/game_bevy/src/environment/biome_context.rs
+use terrain_generation::{cavity_sdf_at, RecipeDensitySource, ValueNoise, CAVITY_EXTERIOR_MARGIN};
 
 /// Slope above which exposed rock replaces the biome default surface material.
 pub const ROCK_SLOPE_DEG: f32 = 35.0;
 
-const MOISTURE_SCALE: f32 = 0.001;
-const CONTINENTAL_SCALE: f32 = 0.0004;
-const TRANSITION_NOISE_SCALE: f32 = 0.0015;
 const ELEVATION_COOLING: f32 = 0.02;
 const BASE_TEMPERATURE: f32 = 0.65;
-const CAVE_DEPTH_THRESHOLD: f32 = 2.0;
 const SHALLOW_WATER_MARGIN: f32 = 1.5;
 const COAST_HUMIDITY_SCALE: f32 = 60.0;
-const RAIN_SHADOW_RIDGE: [f32; 2] = [180.0, 196.0];
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BiomeSampleContext {
@@ -22,13 +18,13 @@ pub struct BiomeSampleContext {
     pub distance_to_water: f32,
     pub distance_to_river: f32,
     pub cave_depth: f32,
+    pub cave_exposure: f32,
     pub moisture: f32,
     pub effective_moisture: f32,
     pub transition_noise: f32,
     pub temperature: f32,
     pub continentalness: f32,
     pub coast_humidity: f32,
-    pub rain_shadow: f32,
     sea_level_m: f32,
 }
 
@@ -44,10 +40,10 @@ pub struct ColumnClimate {
     pub temperature: f32,
     pub continentalness: f32,
     pub coast_humidity: f32,
-    pub rain_shadow: f32,
 }
 
 /// Per-chunk XZ cache so voxel material assignment does not call `surface_height_at` per voxel.
+#[derive(Clone)]
 pub struct ChunkColumnCache {
     origin_x: i32,
     origin_z: i32,
@@ -107,7 +103,7 @@ impl ChunkColumnCache {
 
     pub fn context_at(&self, source: &RecipeDensitySource, wx: i32, y: f32, wz: i32) -> BiomeSampleContext {
         let column = self.column(wx, wz);
-        context_from_column(source, &column, y)
+        context_from_column(source, &column, wx as f32, y, wz as f32)
     }
 }
 
@@ -128,7 +124,7 @@ impl BiomeSampleContext {
             distance_to_water,
             distance_to_river,
         );
-        context_from_column(source, &column, y)
+        context_from_column(source, &column, x, y, z)
     }
 
     pub fn is_underwater(&self) -> bool {
@@ -136,7 +132,7 @@ impl BiomeSampleContext {
     }
 
     pub fn is_cave(&self) -> bool {
-        self.cave_depth >= CAVE_DEPTH_THRESHOLD
+        self.cave_exposure > 0.55
     }
 
     #[cfg(test)]
@@ -153,16 +149,26 @@ impl BiomeSampleContext {
             distance_to_water,
             distance_to_river: f32::MAX,
             cave_depth: 0.0,
+            cave_exposure: 0.0,
             moisture: 0.5,
             effective_moisture: 0.5,
             transition_noise: 0.5,
             temperature: 0.5,
             continentalness: 0.5,
             coast_humidity: 0.1,
-            rain_shadow: 0.0,
             sea_level_m: 2.0,
         }
     }
+}
+
+fn climate_noise_scales(source: &RecipeDensitySource) -> (f32, f32, f32) {
+    let feature_wavelength = source.climate_extent_m() / 3.0;
+    let moisture_scale = 1.0 / feature_wavelength.max(32.0);
+    (
+        moisture_scale,
+        moisture_scale * 0.4,
+        moisture_scale * 1.5,
+    )
 }
 
 fn sample_climate(
@@ -177,35 +183,41 @@ fn sample_climate(
 ) -> ColumnClimate {
     let recipe_x = x + source.recipe().coord_offset[0];
     let recipe_z = z + source.recipe().coord_offset[2];
-    let moisture = noise.fbm(
-        recipe_x * MOISTURE_SCALE,
+    let (moisture_scale, continental_scale, transition_scale) = climate_noise_scales(source);
+    let mut moisture = noise.fbm(
+        recipe_x * moisture_scale,
         0.0,
-        recipe_z * MOISTURE_SCALE,
+        recipe_z * moisture_scale,
         3,
         2.0,
         0.5,
     );
     let continentalness = noise.fbm(
-        recipe_x * CONTINENTAL_SCALE,
+        recipe_x * continental_scale,
         0.0,
-        recipe_z * CONTINENTAL_SCALE,
+        recipe_z * continental_scale,
         2,
         2.0,
         0.5,
     );
     let transition_noise = noise.sample(
-        recipe_x * TRANSITION_NOISE_SCALE,
+        recipe_x * transition_scale,
         0.0,
-        recipe_z * TRANSITION_NOISE_SCALE,
+        recipe_z * transition_scale,
     );
     let coast_humidity = (-distance_to_water / COAST_HUMIDITY_SCALE).exp() * 0.22;
-    let rain_shadow = rain_shadow_at(recipe_x, recipe_z);
+
+    if let Some(atlas) = source.atlas() {
+        let wetness = (atlas.sample_wetness(x, z) / 600.0).clamp(0.0, 1.0);
+        moisture = (moisture * 0.45 + wetness * 0.55).clamp(0.0, 1.0);
+    }
+
     let effective_moisture =
-        (moisture + coast_humidity - rain_shadow + continentalness * 0.08).clamp(0.0, 1.0);
+        (moisture + coast_humidity + continentalness * 0.08).clamp(0.0, 1.0);
     let elevation = surface_y - source.recipe().sea_level;
-    let temperature = (BASE_TEMPERATURE - elevation * ELEVATION_COOLING + transition_noise * 0.08
-        - rain_shadow * 0.15)
+    let temperature = (BASE_TEMPERATURE - elevation * ELEVATION_COOLING + transition_noise * 0.08)
         .clamp(0.0, 1.0);
+    let _ = (slope_degrees, distance_to_river);
 
     ColumnClimate {
         surface_y,
@@ -218,24 +230,28 @@ fn sample_climate(
         temperature,
         continentalness,
         coast_humidity,
-        rain_shadow,
     }
 }
 
-fn rain_shadow_at(x: f32, z: f32) -> f32 {
-    let dx = RAIN_SHADOW_RIDGE[0] - x;
-    let dz = RAIN_SHADOW_RIDGE[1] - z;
-    if dx <= 0.0 || dz <= 0.0 {
-        return 0.0;
-    }
-    let dist = (dx * dx + dz * dz).sqrt();
-    (1.0 - (dist / 80.0).min(1.0)) * 0.28
-}
-
-fn context_from_column(source: &RecipeDensitySource, column: &ColumnClimate, y: f32) -> BiomeSampleContext {
+fn context_from_column(
+    source: &RecipeDensitySource,
+    column: &ColumnClimate,
+    wx: f32,
+    y: f32,
+    wz: f32,
+) -> BiomeSampleContext {
     let sea_level = source.recipe().sea_level;
     let elevation = column.surface_y - sea_level;
     let cave_depth = (column.surface_y - y).max(0.0);
+    let recipe = source.recipe();
+    let cavity = cavity_sdf_at(
+        recipe,
+        wx + recipe.coord_offset[0],
+        y + recipe.coord_offset[1],
+        wz + recipe.coord_offset[2],
+    );
+    let declared_cave = smoothstep(0.0, CAVITY_EXTERIOR_MARGIN, -cavity);
+    let cave_exposure = declared_cave;
 
     BiomeSampleContext {
         world_y: y,
@@ -244,13 +260,83 @@ fn context_from_column(source: &RecipeDensitySource, column: &ColumnClimate, y: 
         distance_to_water: column.distance_to_water,
         distance_to_river: column.distance_to_river,
         cave_depth,
+        cave_exposure,
         moisture: column.moisture,
         effective_moisture: column.effective_moisture,
         transition_noise: column.transition_noise,
         temperature: column.temperature,
         continentalness: column.continentalness,
         coast_humidity: column.coast_humidity,
-        rain_shadow: column.rain_shadow,
         sea_level_m: sea_level,
+    }
+}
+
+fn smoothstep(start: f32, end: f32, value: f32) -> f32 {
+    if (end - start).abs() < f32::EPSILON {
+        return if value >= end { 1.0 } else { 0.0 };
+    }
+    let t = ((value - start) / (end - start)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use terrain_generation::{
+        build_island_atlas, default_vertical_slice_recipe, IslandGenParams, RecipeDensitySource,
+    };
+
+    #[test]
+    fn vs3_moisture_has_no_expanded_ridge_shadow_blob() {
+        let source = RecipeDensitySource::new(default_vertical_slice_recipe(48_129, 2.0))
+            .with_atlas(build_island_atlas(&IslandGenParams::default()), 3.5);
+        let noise = ValueNoise::new(source.recipe().seed);
+        let center = sample_climate(&source, &noise, 180.0, 196.0, 12.0, 5.0, 40.0, 80.0);
+        let mut neighbors = Vec::new();
+        for (dx, dz) in [(-24.0, 0.0), (24.0, 0.0), (0.0, -24.0), (0.0, 24.0)] {
+            neighbors.push(sample_climate(
+                &source,
+                &noise,
+                180.0 + dx,
+                196.0 + dz,
+                12.0,
+                5.0,
+                40.0,
+                80.0,
+            ));
+        }
+        let neighbor_mean = neighbors.iter().map(|c| c.effective_moisture).sum::<f32>()
+            / neighbors.len() as f32;
+        assert!(
+            center.effective_moisture + 0.12 >= neighbor_mean,
+            "expanded ridge coords should not be a moisture sink (center={}, mean={neighbor_mean})",
+            center.effective_moisture
+        );
+    }
+
+    #[test]
+    fn effective_moisture_spans_island_land() {
+        let source = RecipeDensitySource::new(default_vertical_slice_recipe(48_129, 2.0))
+            .with_atlas(build_island_atlas(&IslandGenParams::default()), 3.5);
+        let atlas = source.atlas().expect("atlas");
+        let spacing = atlas.spacing_m();
+        let mut min_m = f32::MAX;
+        let mut max_m = f32::MIN;
+        for z in (0..atlas.height()).step_by(2) {
+            for x in (0..atlas.width()).step_by(2) {
+                let wx = atlas.origin[0] + x as f32 * spacing;
+                let wz = atlas.origin[1] + z as f32 * spacing;
+                if atlas.island_mask.sample_bilinear(wx, wz) < 0.4 {
+                    continue;
+                }
+                let ctx = BiomeSampleContext::sample(&source, wx, 10.0, wz);
+                min_m = min_m.min(ctx.effective_moisture);
+                max_m = max_m.max(ctx.effective_moisture);
+            }
+        }
+        assert!(
+            max_m - min_m >= 0.35,
+            "land moisture range too narrow: min={min_m} max={max_m}"
+        );
     }
 }

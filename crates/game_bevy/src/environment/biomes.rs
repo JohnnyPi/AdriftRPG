@@ -1,3 +1,4 @@
+// crates/game_bevy/src/environment/biomes.rs
 use bevy::prelude::*;
 use game_data::{BiomeRuleDefinition, ConfigRegistry};
 use shared::StableId;

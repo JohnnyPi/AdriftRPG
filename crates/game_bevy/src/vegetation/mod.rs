@@ -1,3 +1,4 @@
+// crates/game_bevy/src/vegetation/mod.rs
 use bevy::prelude::*;
 use terrain_generation::RecipeDensitySource;
 

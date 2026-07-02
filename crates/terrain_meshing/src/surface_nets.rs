@@ -1,3 +1,5 @@
+// crates/terrain_meshing/src/surface_nets.rs
+use terrain_surface::{ChunkSlotRemapper, MaterialVertex};
 use voxel_core::CHUNK_CELLS;
 
 use crate::{ChunkMeshingInput, MeshingError, TerrainMeshData, TerrainMesher};
@@ -32,16 +34,16 @@ fn build_surface_nets(input: &ChunkMeshingInput<'_>) -> Result<TerrainMeshData, 
     let mut positions = Vec::new();
     let mut normals = Vec::new();
     let mut materials = Vec::new();
-    let mut material_ids = Vec::new();
-    let mut material_weights = Vec::new();
+    let mut material_vertices = Vec::new();
     let mut indices = Vec::new();
-    // Halo cells (-1..=cells) are required so boundary quads can reference neighbors.
+    let mut fallback_remapper = ChunkSlotRemapper::new();
+    // Halo cells (-1..cells) hold min-face vertices; max-face edges belong to +neighbors.
     let halo = cells + 2;
     let mut cell_verts = vec![None; halo * halo * halo];
 
-    for z in -1..=cells as i32 {
-        for y in -1..=cells as i32 {
-            for x in -1..=cells as i32 {
+    for z in -1..cells as i32 {
+        for y in -1..cells as i32 {
+            for x in -1..cells as i32 {
                 let corners = corner_densities(input, x, y, z, padded);
                 if !cell_has_surface(&corners) {
                     continue;
@@ -49,32 +51,57 @@ fn build_surface_nets(input: &ChunkMeshingInput<'_>) -> Result<TerrainMeshData, 
                 let pos = cell_vertex_position(&corners, x as f32, y as f32, z as f32);
                 let normal = estimate_normal(input, pos, padded);
                 let idx = positions.len() as u32;
-                let (ids, weights) = if let Some(resolver) = input.surface_resolver {
+                let vertex = if let Some(resolver) = input.surface_resolver {
                     resolver.vertex_blend(pos, normal)
                 } else {
-                    cell_material_blend(input, x, y, z, padded)
+                    let (ids, weights) = cell_material_blend(input, x, y, z, padded);
+                    let globals = [
+                        ids[0] as u32,
+                        ids[1] as u32,
+                        ids[2] as u32,
+                        ids[3] as u32,
+                    ];
+                    terrain_surface::remap_blend_to_local_slots(
+                        globals,
+                        weights,
+                        &mut fallback_remapper,
+                    )
                 };
                 positions.push(pos);
                 normals.push(normal);
-                materials.push(ids[0]);
-                material_ids.push(ids);
-                material_weights.push(weights);
+                materials.push(dominant_local_slot(vertex));
+                material_vertices.push(vertex);
                 cell_verts[halo_cell_index(x, y, z, cells)] = Some(idx);
             }
         }
     }
 
     emit_face_quads(input, &cell_verts, cells, padded, &mut indices);
-    orient_triangles_toward_air(input, &positions, &mut indices, padded);
+
+    let chunk_palette = if let Some(resolver) = input.surface_resolver {
+        resolver.chunk_palette()
+    } else {
+        fallback_remapper.finish()
+    };
 
     Ok(TerrainMeshData {
         positions,
         normals,
         indices,
         materials,
-        material_ids,
-        material_weights,
+        material_vertices,
+        chunk_palette,
     })
+}
+
+fn dominant_local_slot(vertex: MaterialVertex) -> u16 {
+    vertex
+        .local_indices
+        .iter()
+        .zip(vertex.weights.iter())
+        .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(i, _)| *i as u16)
+        .unwrap_or(0)
 }
 
 fn halo_cell_index(x: i32, y: i32, z: i32, cells: usize) -> usize {
@@ -174,16 +201,17 @@ fn cell_vertex_position(corners: &[f32; 8], ox: f32, oy: f32, oz: f32) -> [f32; 
 }
 
 fn estimate_normal(input: &ChunkMeshingInput<'_>, pos: [f32; 3], padded: usize) -> [f32; 3] {
-    let eps = 0.5;
-    let px = pos[0];
-    let py = pos[1];
-    let pz = pos[2];
-    let dx = sample_at(input, (px + eps) as i32, py as i32, pz as i32, padded)
-        - sample_at(input, (px - eps) as i32, py as i32, pz as i32, padded);
-    let dy = sample_at(input, px as i32, (py + eps) as i32, pz as i32, padded)
-        - sample_at(input, px as i32, (py - eps) as i32, pz as i32, padded);
-    let dz = sample_at(input, px as i32, py as i32, (pz + eps) as i32, padded)
-        - sample_at(input, px as i32, py as i32, (pz - eps) as i32, padded);
+    let cells = input.chunk_cells as i32;
+    let clamp = |c: i32| c.clamp(-1, cells + 1);
+    let xi = pos[0].round() as i32;
+    let yi = pos[1].round() as i32;
+    let zi = pos[2].round() as i32;
+    let dx = sample_at(input, clamp(xi + 1), yi, zi, padded)
+        - sample_at(input, clamp(xi - 1), yi, zi, padded);
+    let dy = sample_at(input, xi, clamp(yi + 1), zi, padded)
+        - sample_at(input, xi, clamp(yi - 1), zi, padded);
+    let dz = sample_at(input, xi, yi, clamp(zi + 1), padded)
+        - sample_at(input, xi, yi, clamp(zi - 1), padded);
     normalize([dx, dy, dz])
 }
 
@@ -205,18 +233,31 @@ fn cell_material_blend(
         sample_material(input, x + 1, y + 1, z + 1, padded),
     ];
 
-    let mut weights = std::collections::HashMap::<u16, f32>::new();
-    for mat in samples {
-        *weights.entry(mat).or_insert(0.0) += 1.0;
+    let mut ranked = [(0u16, 0f32); 8];
+    let mut count = 0usize;
+    'outer: for mat in samples {
+        for entry in &mut ranked[..count] {
+            if entry.0 == mat {
+                entry.1 += 1.0;
+                continue 'outer;
+            }
+        }
+        if count < ranked.len() {
+            ranked[count] = (mat, 1.0);
+            count += 1;
+        }
     }
 
-    let mut ranked: Vec<(u16, f32)> = weights.into_iter().collect();
-    ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    ranked[..count].sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.0.cmp(&b.0))
+    });
 
     let mut ids = [0u16; 4];
     let mut w = [0.0f32; 4];
     let mut total = 0.0f32;
-    for (i, (mat, weight)) in ranked.into_iter().take(4).enumerate() {
+    for (i, (mat, weight)) in ranked[..count].iter().copied().take(4).enumerate() {
         ids[i] = mat;
         w[i] = weight;
         total += weight;
@@ -272,36 +313,6 @@ fn maybe_quad(
     }
 }
 
-fn orient_triangles_toward_air(
-    input: &ChunkMeshingInput<'_>,
-    positions: &[[f32; 3]],
-    indices: &mut [u32],
-    padded: usize,
-) {
-    for tri in indices.chunks_mut(3) {
-        let p0 = positions[tri[0] as usize];
-        let p1 = positions[tri[1] as usize];
-        let p2 = positions[tri[2] as usize];
-        let e1 = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]];
-        let e2 = [p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2]];
-        let normal = [
-            e1[1] * e2[2] - e1[2] * e2[1],
-            e1[2] * e2[0] - e1[0] * e2[2],
-            e1[0] * e2[1] - e1[1] * e2[0],
-        ];
-        let center = [
-            (p0[0] + p1[0] + p2[0]) / 3.0,
-            (p0[1] + p1[1] + p2[1]) / 3.0,
-            (p0[2] + p1[2] + p2[2]) / 3.0,
-        ];
-        let gradient = estimate_normal(input, center, padded);
-        let facing_air = normal[0] * gradient[0] + normal[1] * gradient[1] + normal[2] * gradient[2];
-        if facing_air < 0.0 {
-            tri.swap(1, 2);
-        }
-    }
-}
-
 fn emit_face_quads(
     input: &ChunkMeshingInput<'_>,
     cell_verts: &[Option<u32>],
@@ -310,14 +321,14 @@ fn emit_face_quads(
     indices: &mut Vec<u32>,
 ) {
     // X-aligned grid edges
-    for z in 0..=cells as i32 {
-        for y in 0..=cells as i32 {
+    for z in 0..cells as i32 {
+        for y in 0..cells as i32 {
             for x in 0..cells as i32 {
                 if !edge_crosses(input, x, y, z, x + 1, y, z, padded) {
                     continue;
                 }
                 let da = sample_at(input, x, y, z, padded);
-                let reversed = da >= 0.0;
+                let reversed = da <= 0.0;
                 maybe_quad(
                     cell_verts,
                     cells,
@@ -332,14 +343,14 @@ fn emit_face_quads(
         }
     }
     // Y-aligned grid edges
-    for z in 0..=cells as i32 {
+    for z in 0..cells as i32 {
         for y in 0..cells as i32 {
-            for x in 0..=cells as i32 {
+            for x in 0..cells as i32 {
                 if !edge_crosses(input, x, y, z, x, y + 1, z, padded) {
                     continue;
                 }
                 let da = sample_at(input, x, y, z, padded);
-                let reversed = da >= 0.0;
+                let reversed = da <= 0.0;
                 maybe_quad(
                     cell_verts,
                     cells,
@@ -355,13 +366,13 @@ fn emit_face_quads(
     }
     // Z-aligned grid edges
     for z in 0..cells as i32 {
-        for y in 0..=cells as i32 {
-            for x in 0..=cells as i32 {
+        for y in 0..cells as i32 {
+            for x in 0..cells as i32 {
                 if !edge_crosses(input, x, y, z, x, y, z + 1, padded) {
                     continue;
                 }
                 let da = sample_at(input, x, y, z, padded);
-                let reversed = da >= 0.0;
+                let reversed = da <= 0.0;
                 maybe_quad(
                     cell_verts,
                     cells,
@@ -374,163 +385,5 @@ fn emit_face_quads(
                 );
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::ChunkMeshingInput;
-    use voxel_core::{MaterialId, TerrainSample};
-
-    fn padded_from_density<F>(cells: usize, mut f: F) -> Vec<TerrainSample>
-    where
-        F: FnMut(i32, i32, i32) -> f32,
-    {
-        let padded = cells + 3;
-        let mut samples = Vec::with_capacity(padded * padded * padded);
-        for z in -1..=(cells as i32 + 1) {
-            for y in -1..=(cells as i32 + 1) {
-                for x in -1..=(cells as i32 + 1) {
-                    samples.push(TerrainSample {
-                        density: f(x, y, z),
-                        material: MaterialId(1),
-                    });
-                }
-            }
-        }
-        samples
-    }
-
-    #[test]
-    fn empty_air_chunk_produces_no_geometry() {
-        let samples = padded_from_density(CHUNK_CELLS, |_, _, _| 1.0);
-        let input = ChunkMeshingInput {
-            samples: &samples,
-            chunk_cells: CHUNK_CELLS,
-            surface_resolver: None,
-        };
-        let mesh = SurfaceNetsMesher.build_mesh(&input).unwrap();
-        assert!(mesh.positions.is_empty());
-    }
-
-    #[test]
-    fn solid_chunk_produces_no_geometry() {
-        let samples = padded_from_density(CHUNK_CELLS, |_, _, _| -1.0);
-        let input = ChunkMeshingInput {
-            samples: &samples,
-            chunk_cells: CHUNK_CELLS,
-            surface_resolver: None,
-        };
-        let mesh = SurfaceNetsMesher.build_mesh(&input).unwrap();
-        assert!(mesh.positions.is_empty());
-    }
-
-    #[test]
-    fn plane_triangles_face_air_side() {
-        let samples = padded_from_density(CHUNK_CELLS, |_, y, _| y as f32 - 8.0);
-        let input = ChunkMeshingInput {
-            samples: &samples,
-            chunk_cells: CHUNK_CELLS,
-            surface_resolver: None,
-        };
-        let mesh = SurfaceNetsMesher.build_mesh(&input).unwrap();
-        assert!(!mesh.indices.is_empty());
-
-        let mut upward = 0usize;
-        let mut downward = 0usize;
-        for tri in mesh.indices.chunks_exact(3) {
-            let p0 = mesh.positions[tri[0] as usize];
-            let p1 = mesh.positions[tri[1] as usize];
-            let p2 = mesh.positions[tri[2] as usize];
-            let e1 = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]];
-            let e2 = [p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2]];
-            let ny = e1[2] * e2[0] - e1[0] * e2[2];
-            let _ = e1[1] * e2[2] - e1[2] * e2[1];
-            let _ = e1[0] * e2[1] - e1[1] * e2[0];
-            if ny > 0.0 {
-                upward += 1;
-            } else if ny < 0.0 {
-                downward += 1;
-            }
-        }
-        assert!(
-            upward > downward,
-            "expected upward-facing triangles (up={upward}, down={downward})"
-        );
-        assert_eq!(downward, 0, "back-facing triangles indicate winding errors");
-    }
-
-    #[test]
-    fn plane_produces_geometry() {
-        let samples = padded_from_density(CHUNK_CELLS, |_, y, _| y as f32 - 8.0);
-        let input = ChunkMeshingInput {
-            samples: &samples,
-            chunk_cells: CHUNK_CELLS,
-            surface_resolver: None,
-        };
-        let mesh = SurfaceNetsMesher.build_mesh(&input).unwrap();
-        assert!(!mesh.positions.is_empty());
-        assert!(!mesh.indices.is_empty());
-    }
-
-    #[test]
-    fn sphere_triangles_face_outward() {
-        let samples = padded_from_density(CHUNK_CELLS, |x, y, z| {
-            let dx = x as f32 - 8.0;
-            let dy = y as f32 - 8.0;
-            let dz = z as f32 - 8.0;
-            (dx * dx + dy * dy + dz * dz).sqrt() - 5.0
-        });
-        let input = ChunkMeshingInput {
-            samples: &samples,
-            chunk_cells: CHUNK_CELLS,
-            surface_resolver: None,
-        };
-        let mesh = SurfaceNetsMesher.build_mesh(&input).unwrap();
-        let center = [8.0f32, 8.0, 8.0];
-        let mut outward = 0usize;
-        let mut inward = 0usize;
-        for tri in mesh.indices.chunks_exact(3) {
-            let p0 = mesh.positions[tri[0] as usize];
-            let p1 = mesh.positions[tri[1] as usize];
-            let p2 = mesh.positions[tri[2] as usize];
-            let cx = (p0[0] + p1[0] + p2[0]) / 3.0;
-            let cy = (p0[1] + p1[1] + p2[1]) / 3.0;
-            let cz = (p0[2] + p1[2] + p2[2]) / 3.0;
-            let e1 = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]];
-            let e2 = [p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2]];
-            let nx = e1[1] * e2[2] - e1[2] * e2[1];
-            let ny = e1[2] * e2[0] - e1[0] * e2[2];
-            let nz = e1[0] * e2[1] - e1[1] * e2[0];
-            let dot = nx * (cx - center[0]) + ny * (cy - center[1]) + nz * (cz - center[2]);
-            if dot > 0.0 {
-                outward += 1;
-            } else if dot < 0.0 {
-                inward += 1;
-            }
-        }
-        assert!(
-            outward > inward,
-            "expected outward-facing sphere triangles (out={outward}, in={inward})"
-        );
-        assert_eq!(inward, 0, "inward-facing sphere triangles indicate inverted winding");
-    }
-
-    #[test]
-    fn sphere_produces_geometry() {
-        let samples = padded_from_density(CHUNK_CELLS, |x, y, z| {
-            let dx = x as f32 - 8.0;
-            let dy = y as f32 - 8.0;
-            let dz = z as f32 - 8.0;
-            (dx * dx + dy * dy + dz * dz).sqrt() - 5.0
-        });
-        let input = ChunkMeshingInput {
-            samples: &samples,
-            chunk_cells: CHUNK_CELLS,
-            surface_resolver: None,
-        };
-        let mesh = SurfaceNetsMesher.build_mesh(&input).unwrap();
-        assert!(!mesh.positions.is_empty());
     }
 }

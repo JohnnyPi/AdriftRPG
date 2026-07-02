@@ -1,0 +1,73 @@
+# Installment 8: hydrology, erosion, carving, rivers (Parts 9–10 internals)
+
+**Files:** `terrain_generation/src/island_gen/hydrology.rs` (341), `…/erosion.rs` (72), `…/carving.rs` (41), `terrain_generation/src/river.rs` (363), `…/water_body.rs` (296)
+
+This installment contains two of the worst bugs in the codebase — one kills flow accumulation entirely, the other inverts river carving in the density field, and its unit test asserts the inverted behavior.
+
+## Bug 32: flow accumulation iterates lowest-first — accumulation never accumulates
+
+**Confidence / Severity:** Confirmed / **Critical for hydrology**
+**File:** `hydrology.rs`, `compute_flow`
+
+**Evidence:**
+```rust
+cells.sort_by(|a, b| b.0.partial_cmp(&a.0)...);   // descending elevation
+...
+for (_, x, z) in cells.iter().rev() {             // .rev() → ASCENDING
+    ...
+    accumulation.set(nx, nz, downstream + acc);
+```
+Accumulation must be pushed **highest-first**: a cell forwards its total only after every upstream contributor has deposited into it. Iterating ascending means every cell forwards *before* its upstream neighbors are processed — so each cell only ever passes on its own `rainfall_base`. By induction, `accumulation(cell) = rain × (1 + direct upstream neighbors)` — bounded by ~9×rain regardless of catchment size, instead of growing with drainage area.
+
+**Runtime effect — this single line disables most of the hydrology system:** `extract_river_mask`'s thresholds (`stream_threshold`, `permanent_river_threshold`, sized for catchment-scale sums) are unreachable → **river_mask is empty**. `apply_stream_power_erosion`'s `discharge^m` term is near-constant-tiny → **stream-power erosion is effectively inert** (so Bug 29's ordering problem is currently masked by erosion doing almost nothing). `wetness` is uniform → wetland biome weights meaningless. `sediment = accumulation × 0.001 ≈ 0` → the sediment gates in `classify_coast` degenerate. And `trace_primary_river`'s source score `acc + elev·2` is dominated by elevation → the "primary river" springs from the volcano's summit rim.
+
+**Repair:** delete `.rev()` (iterate the descending sort directly). **Regression test:** uniform-slope field, N rows draining downhill — accumulation at the bottom row must equal `rows × rainfall_base` (today: ~2×rainfall). This is the doc's synthetic-terrain test #1, and it would have caught this immediately.
+
+**Note on repair sequencing:** fixing this un-masks Bug 29 (stream-power will suddenly *do* something, against stale flow) and will require retuning `stream_threshold`/erosion constants. Fix 32, then reorder per Bug 29, then tune.
+
+## Bug 33: river carving in the density path has the sign inverted — rivers are levees
+
+**Confidence / Severity:** Confirmed (and enshrined by a test) / **High**
+**Files:** `recipe.rs` (`density -= carve`), test `river_carve_lowers_density_near_channel` in `river.rs`
+
+**Evidence:** under negative-solid, `density = y − surface`; carving a channel means *lowering* the surface, i.e. `density += carve`. The non-atlas path does `density -= carve` — which lowers density, equivalent to **raising** the surface by the carve amount. The river renders as a raised earthen welt up to `depth + bank` high (~2 m), snaking across the terrain where a channel should be. The proof of intent is one file over: the atlas path (`carving.rs`) applies the *same* `river_carve_offset` to elevation as `*h -= offset` — correct. The two consumers of one helper disagree on sign; the elevation one is right.
+
+The kicker: the unit test asserts `carved_density < base_density` with the message "carve should reduce density at surface sample" — under this codebase's own convention, *reducing* density **adds material**. The test codifies the inversion, which is exactly why it never got caught (Part 11's "sign inversions" plus "missing validation" in one).
+
+**Repair:** `density += carve;` in `density_at_recipe_without_atlas`, and rewrite the test to assert the *geometric* truth: `carved.surface_height_at(x, z) < base.surface_height_at(x, z)` by approximately the expected carve depth. **Regression test:** exactly that surface-height assertion, at centerline and at bank distance.
+
+## Bug 34: priority-flood fills flats with no drainage gradient — rivers stop in filled lakes
+
+**Confidence / Severity:** Confirmed / Medium-High
+**File:** `hydrology.rs`, `priority_flood` + `compute_flow`
+
+**Evidence:** the flood fill itself is a correct Barnes-style implementation (mark-on-push, min-heap, raise-to-max — verified), but it fills depressions to **exactly** the spill elevation, producing perfectly flat regions. `compute_flow` then requires a *strictly positive* drop (`best_drop = 0.0; if drop > best_drop`) — every interior cell of a filled flat has no positive drop, gets `dir = 255`, and becomes a routing sink. Accumulation dead-ends there, and `trace_primary_river` breaks on `dir == 255` — the doc's "rivers stopping unexpectedly," caused by depression handling that fills but doesn't drain.
+
+**Repair:** epsilon-flood — when raising a cell, use `new_elev = elev.max(cell.elevation + EPS)` with `EPS ≈ 1e-4·spacing`, so every filled cell has a monotone path to its spill point (this is the standard Barnes ε variant; keep the *unfilled* elevation for rendering, ε only in `filled`). **Regression test:** the doc's bowl-depression synthetic — after fill+flow, assert every land cell has `dir != 255` and a trace from the bowl center reaches the coast.
+
+## Bug 35: D8 steepest descent doesn't divide by neighbor distance — diagonal-biased drainage
+
+**Confidence / Severity:** Confirmed / Medium
+**File:** `hydrology.rs`, `compute_flow`
+
+**Evidence:** `drop = elev − neighbor` compares raw drops; diagonal neighbors span √2·spacing, so on any slope not axis-aligned the diagonal wins even when the true gradient is cardinal. Concretely, on a purely x-aligned slope the +x cardinal and the two +x diagonals have *identical* raw drops, and `D8_OFFSETS` lists `(1,−1)` before `(1,0)` with a strict `>` comparison — so flow on an x-slope goes **diagonally**. The doc calls this check out verbatim ("Inspect whether slope calculations account for cell spacing").
+
+**Repair:** `let gradient = drop / if dx != 0 && dz != 0 { SQRT_2 } else { 1.0 };` and compare gradients. (Spacing itself cancels — only the √2 matters.) **Regression test:** x-aligned uniform slope → every cell's direction must be index 2 (`(1,0)`); today it's index 1.
+
+## Bug 13 closed: `river.rs`'s generator is confirmed as the phantom-surface path
+
+`trace_downhill`/`find_source`/`surface_at` all sample `stack_surface_height` — the hardcoded model from installment 4 — confirming the full chain. Two aggravations found here: `find_source` requires a point above `sea + 8` on the *phantom* surface inside the configured source region, so if the phantom model happens to be low there, `generate_river_spline` returns `None` and the demo river **silently doesn't exist**; and `trace_downhill` is a greedy lowest-*unvisited*-neighbor walk with no downhill requirement — it will happily climb (the tabu set prevents only revisits), relying on `repair_depressions` to patch the profile afterward. **Repair remains as scoped in installment 4:** retarget `surface_at` to the real authority (`land_surface_height` for recipe worlds), or better, delete this generator once the atlas `trace_primary_river` path (fixed per Bugs 32/34/35) covers the demo worlds too. The tests here (`river_reaches_sea_with_monotonic_water`, determinism, width growth) are genuinely good tests — keep them, pointed at the surviving generator.
+
+## Minor findings
+
+**M24 — magic constants in erosion:** erodibility `0.00002` and talus `38°` are hardcoded (ErosionParams has no fields for them — confirmed against `params.rs`), and `carving.rs` hardcodes `bank_width = 3.5` with `let _ = params;` while `RiverGenConfig.bank_width_m` exists (dead-config instance #7) plus a `× 1.2` carve fudge. Promote all four to `ErosionParams`/params; after Bug 32 the erodibility constant *will* need retuning anyway.
+
+**M25 — erosion never recomputes slope/flow between iterations.** With `maximum_step_m` bounding each pass it's stable, but multi-iteration stream-power against frozen inputs converges to "erode the same cells N times." Acceptable short-term; fold into Bug 29's reorder loop when you get there.
+
+**M26 — `river_channel_at` is O(spline points) per density sample.** Called per voxel sample in the carve path and per vertex in classification. With ~500-point splines × 6,859 samples per chunk this is material; a coarse XZ bucket grid over spline segments is a 20-line fix. (Adds to M18's per-sample cost ledger; quantified next installment.)
+
+**M27 — `trace_primary_river` width/depth heuristics (`acc.max(t·0.35)`) will need revisiting after Bug 32,** since `acc/source_acc` is currently ~1 everywhere near the source and the `t`-ramp dominates; with real accumulation, width should key off discharge as the doc prefers ("river width disconnected from discharge").
+
+## What's verified good
+
+`priority_flood`'s core algorithm is correct (heap ordering, mark-on-push, edge seeding — the classic pitfalls all avoided; it's only missing ε). Stream-power's slope handling does the degrees→radians→tan conversion *correctly* — the doc's talus-in-degrees trap is avoided in both erosion functions, and thermal erosion's `allowed = spacing · tan(talus)` is properly distance-scaled with Jacobi-style deferred application and conservative mass transfer. The island-mask gate on erosion protects the coastline per the doc's checklist. `river_carve_offset`/`river_channel_at`/`dist_point_segment_t` are geometrically sound (correct segment projection, lerped width/depth, smooth banks). `water_body.rs` is a clean deterministic data model (BTreeMap, no float keys). And hydrology *has tests* — they're just aimed at hand-built fields; the four regression tests above (uniform slope, bowl, x-slope direction, carve-lowers-surface) are the synthetic suite the doc prescribes and would have caught Bugs 32–35 on the day they were written.

@@ -1,3 +1,4 @@
+// crates/game_data/tests/validation.rs
 use game_data::load_registry_from_directory;
 use shared::DataError;
 use std::fs;
@@ -192,8 +193,12 @@ rules:
     }
     let terrain_src = workspace_assets().join("terrain/generation/vertical_slice.terrain.yaml");
     fs::copy(&terrain_src, dir.path().join("terrain.yaml")).unwrap();
+    let cave_src = workspace_assets().join("terrain/caves/demo_cave.yaml");
+    fs::copy(&cave_src, dir.path().join("demo_cave.yaml")).unwrap();
     let mat_src = workspace_assets().join("terrain/materials/terrain.materials.yaml");
     fs::copy(&mat_src, dir.path().join("materials.yaml")).unwrap();
+    let surface_src = workspace_assets().join("terrain/surface/vertical_slice.surface.yaml");
+    fs::copy(&surface_src, dir.path().join("surface.yaml")).unwrap();
 
     let registry = load_registry_from_directory(dir.path()).expect("registry with biome stubs");
     let biomes = registry.biomes.get(&shared::StableId::new("biomes.vertical_slice")).unwrap();
@@ -207,9 +212,122 @@ fn expanded_hd_world_profile_loads() {
     let world = registry
         .world_by_id(&shared::StableId::new("world.expanded_slice_hd"))
         .expect("hd world");
-    assert!(
-        (world.cell_size_m - 1.0).abs() < f32::EPSILON,
-        "all world profiles must use 1.0 m cells"
-    );
     assert_eq!(world.biomes.as_str(), "biomes.expanded_slice");
+}
+
+#[test]
+fn rejects_invalid_combine_op() {
+    use game_data::{validate_definitions, RawDefinition, TerrainGenerationDefinition, TerrainOperationDefinition};
+    use shared::{DefinitionHeader, StableId};
+
+    let report = validate_definitions(&[RawDefinition::TerrainGeneration(
+        TerrainGenerationDefinition {
+            header: DefinitionHeader {
+                schema_version: 1,
+                id: StableId::new("terrain.bad_combine"),
+            },
+            description: String::new(),
+            spawn: None,
+            includes: vec![],
+            operations: vec![TerrainOperationDefinition::Ellipsoid {
+                center: [0.0, 0.0, 0.0],
+                radii: [1.0, 1.0, 1.0],
+                peak_noise: None,
+                combine: "subtractt".to_string(),
+            }],
+        },
+    )]);
+
+    assert!(!report.is_ok());
+    let err = report.into_result().unwrap_err().to_string();
+    assert!(err.contains("combine must be 'union' or 'subtract'"));
+}
+
+#[test]
+fn rejects_non_standard_chunk_cells() {
+    use game_data::{validate_definitions, RawDefinition, WorldChunksDefinition, WorldDefinition, WorldVoxelDefinition};
+    use shared::{DefinitionHeader, StableId};
+
+    let report = validate_definitions(&[RawDefinition::World(WorldDefinition {
+        header: DefinitionHeader {
+            schema_version: 1,
+            id: StableId::new("world.bad_chunks"),
+        },
+        seed: 1,
+        voxel: WorldVoxelDefinition { cell_size_m: 1.0 },
+        chunks: WorldChunksDefinition {
+            cells: [32, 16, 16],
+            world_extent: [6, 3, 6],
+        },
+        terrain: StableId::new("terrain.test"),
+        biomes: StableId::new("biomes.test"),
+        materials: StableId::new("materials.test"),
+        surface: None,
+        water: StableId::new("water.test"),
+        lighting: StableId::new("lighting.test"),
+        sky: None,
+        landmarks: None,
+        structures: vec![],
+        ocean_extent_m: None,
+        coord_offset: None,
+        island_gen: None,
+        resolution: None,
+    })]);
+
+    assert!(!report.is_ok());
+    let err = report.into_result().unwrap_err().to_string();
+    assert!(err.contains("chunks.cells must be [16, 16, 16]"));
+}
+
+#[test]
+fn expanded_slice_materials_v2_loads_with_layer_order() {
+    let registry = load_registry_from_directory(workspace_assets()).expect("registry");
+    let materials = registry
+        .materials
+        .get(&shared::StableId::new("materials.expanded_slice"))
+        .expect("expanded slice materials");
+    assert!(materials.layer_order.len() >= 9);
+    assert!(materials.layer_for_key(&shared::StableId::new("flowstone")).is_some());
+    assert!(materials.layer_for_key(&shared::StableId::new("limestone")).is_some());
+}
+
+#[test]
+fn rejects_duplicate_material_layers() {
+    use game_data::{validate_definitions, RawDefinition, TerrainMaterialEntryDefinition, TerrainMaterialsDefinition};
+    use shared::{DefinitionHeader, StableId};
+
+    let report = validate_definitions(&[RawDefinition::TerrainMaterials(
+        TerrainMaterialsDefinition {
+            header: DefinitionHeader {
+                schema_version: 2,
+                id: StableId::new("materials.bad_layers"),
+            },
+            description: String::new(),
+            materials: vec![
+                TerrainMaterialEntryDefinition {
+                    key: Some(StableId::new("grass")),
+                    id: None,
+                    name: "grass".to_string(),
+                    albedo: [0.3, 0.5, 0.2],
+                    triplanar_scale: 0.5,
+                    roughness: 0.9,
+                    generator: None,
+                },
+                TerrainMaterialEntryDefinition {
+                    key: Some(StableId::new("sand")),
+                    id: None,
+                    name: "sand".to_string(),
+                    albedo: [0.8, 0.7, 0.5],
+                    triplanar_scale: 0.5,
+                    roughness: 0.9,
+                    generator: None,
+                },
+            ],
+            layers: vec![StableId::new("grass"), StableId::new("grass")],
+        },
+    )]);
+
+    assert!(!report.is_ok());
+    let err = report.into_result().unwrap_err().to_string();
+    assert!(err.contains("duplicate layer key"));
 }

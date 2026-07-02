@@ -1,3 +1,4 @@
+// crates/terrain_generation/src/field2d.rs
 //! Typed 2D scalar grids for island-scale fields.
 
 use crate::resolution::grid_dims;
@@ -50,6 +51,7 @@ impl<T: Copy + Default> Field2D<T> {
     }
 
     pub fn index(&self, x: u32, z: u32) -> usize {
+        debug_assert!(x < self.width && z < self.height);
         (z * self.width + x) as usize
     }
 
@@ -72,17 +74,36 @@ impl<T: Copy + Default> Field2D<T> {
 
 impl Field2D<f32> {
     pub fn sample_bilinear(&self, wx: f32, wz: f32) -> f32 {
+        if self.width == 0 || self.height == 0 {
+            return 0.0;
+        }
+        if self.width == 1 && self.height == 1 {
+            return self.get(0, 0);
+        }
+
         let (lx, lz) = self.world_to_grid(wx, wz);
-        if lx < 0.0 || lz < 0.0 {
-            return 0.0;
+        let max_x = (self.width - 1) as f32;
+        let max_z = (self.height - 1) as f32;
+        let lx = lx.clamp(0.0, max_x);
+        let lz = lz.clamp(0.0, max_z);
+
+        if self.width == 1 {
+            let z0 = (lz.floor() as u32).min(self.height - 2);
+            let fz = lz - z0 as f32;
+            let a = self.get(0, z0);
+            let b = self.get(0, z0 + 1);
+            return a + (b - a) * fz;
         }
-        let w = self.width as f32;
-        let h = self.height as f32;
-        if lx >= w - 1.0 || lz >= h - 1.0 {
-            return 0.0;
+        if self.height == 1 {
+            let x0 = (lx.floor() as u32).min(self.width - 2);
+            let fx = lx - x0 as f32;
+            let a = self.get(x0, 0);
+            let b = self.get(x0 + 1, 0);
+            return a + (b - a) * fx;
         }
-        let x0 = lx.floor() as u32;
-        let z0 = lz.floor() as u32;
+
+        let x0 = (lx.floor() as u32).min(self.width - 2);
+        let z0 = (lz.floor() as u32).min(self.height - 2);
         let fx = lx - x0 as f32;
         let fz = lz - z0 as f32;
         let i = |cx: u32, cz: u32| self.get(cx, cz);
@@ -107,49 +128,7 @@ impl Field2D<f32> {
         }
     }
 
-    /// Upsample preserving peak heights within each coarse cell (for elevation, not masks).
-    pub fn upsample_preserving_peaks(&self, target_spacing: f32) -> Self {
-        if (self.spacing - target_spacing).abs() < f32::EPSILON {
-            return self.clone();
-        }
-        let ratio = (self.spacing / target_spacing).round().max(1.0) as u32;
-        let extent_x = (self.width.saturating_sub(1)) as f32 * self.spacing;
-        let extent_z = (self.height.saturating_sub(1)) as f32 * self.spacing;
-        let width = (extent_x / target_spacing).floor() as u32 + 1;
-        let height = (extent_z / target_spacing).floor() as u32 + 1;
-        let mut out = Field2D::new(width, height, self.origin, target_spacing);
-        for z in 0..height {
-            for x in 0..width {
-                let wx = self.origin[0] + x as f32 * target_spacing;
-                let wz = self.origin[1] + z as f32 * target_spacing;
-                let (lx, lz) = self.world_to_grid(wx, wz);
-                let cx = lx.floor() as i32;
-                let cz = lz.floor() as i32;
-                let mut peak = f32::MIN;
-                for dz in 0..=ratio {
-                    for dx in 0..=ratio {
-                        let sx = cx + dx as i32 - (ratio as i32 / 2);
-                        let sz = cz + dz as i32 - (ratio as i32 / 2);
-                        if sx >= 0
-                            && sz >= 0
-                            && sx < self.width as i32
-                            && sz < self.height as i32
-                        {
-                            peak = peak.max(self.get(sx as u32, sz as u32));
-                        }
-                    }
-                }
-                if peak > f32::MIN / 2.0 {
-                    out.set(x, z, peak);
-                } else {
-                    out.set(x, z, self.sample_bilinear(wx, wz));
-                }
-            }
-        }
-        out
-    }
-
-    /// Resample to a new spacing aligned on the same origin (bilinear upsample / box downsample).
+    /// Resample to a new spacing aligned on the same origin (bilinear point sampling).
     pub fn resample_to_spacing(&self, target_spacing: f32) -> Self {
         if (self.spacing - target_spacing).abs() < f32::EPSILON {
             return self.clone();
@@ -170,20 +149,15 @@ impl Field2D<f32> {
     }
 }
 
-/// Upsample `detail` to `base` spacing and add in world space.
+/// Upsample `detail` onto `base`'s grid and add in world space.
 pub fn add_residual(base: &Field2D<f32>, detail: &Field2D<f32>) -> Field2D<f32> {
-    let aligned = if (base.spacing - detail.spacing).abs() < f32::EPSILON
-        && base.origin == detail.origin
-        && base.width == detail.width
-        && base.height == detail.height
-    {
-        detail.clone()
-    } else {
-        detail.resample_to_spacing(base.spacing)
-    };
     let mut out = base.clone();
-    for (a, b) in out.samples.iter_mut().zip(aligned.samples.iter()) {
-        *a += *b;
+    for z in 0..out.height {
+        for x in 0..out.width {
+            let wx = out.origin[0] + x as f32 * out.spacing;
+            let wz = out.origin[1] + z as f32 * out.spacing;
+            out.set(x, z, out.get(x, z) + detail.sample_bilinear(wx, wz));
+        }
     }
     out
 }
@@ -227,6 +201,44 @@ pub fn smooth_max(a: f32, b: f32, k: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sample_bilinear_clamps_at_boundary() {
+        let mut field = Field2D::new(4, 4, [0.0, 0.0], 8.0);
+        field.for_each_world(|_, _, v| *v = 5.0);
+        assert_eq!(field.sample_bilinear(24.0, 24.0), 5.0);
+        assert_eq!(field.sample_bilinear(30.0, 12.0), 5.0);
+        assert_eq!(field.sample_bilinear(-8.0, 12.0), 5.0);
+    }
+
+    #[test]
+    fn sample_bilinear_no_discontinuity_at_rim() {
+        let mut field = Field2D::new(4, 4, [0.0, 0.0], 8.0);
+        for z in 0..field.height {
+            for x in 0..field.width {
+                field.set(x, z, x as f32 + z as f32);
+            }
+        }
+        let interior = field.sample_bilinear(16.0, 16.0);
+        let at_edge = field.sample_bilinear(24.0, 16.0);
+        let beyond = field.sample_bilinear(40.0, 16.0);
+        assert!(interior > 0.0, "interior must not snap to sentinel zero");
+        assert!((at_edge - beyond).abs() < f32::EPSILON);
+        assert!((at_edge - interior).abs() < 4.0);
+    }
+
+    #[test]
+    fn add_residual_applies_across_mismatched_extents() {
+        let mut base = Field2D::new(5, 5, [0.0, 0.0], 4.0);
+        base.for_each_world(|_, _, v| *v = 1.0);
+        let mut detail = Field2D::new(3, 3, [0.0, 0.0], 8.0);
+        detail.for_each_world(|_, _, v| *v = 2.0);
+        let out = add_residual(&base, &detail);
+        assert_eq!(out.width, base.width);
+        assert_eq!(out.height, base.height);
+        assert!((out.get(0, 0) - 3.0).abs() < f32::EPSILON);
+        assert!((out.get(4, 4) - 3.0).abs() < f32::EPSILON);
+    }
 
     #[test]
     fn resample_to_same_spacing_is_identity() {

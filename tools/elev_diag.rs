@@ -30,7 +30,7 @@ fn main() {
         coord_offset: [128.0, 0.0, 128.0],
         ops: vec![],
     };
-    let source = RecipeDensitySource::new(recipe).with_atlas(atlas);
+    let source = RecipeDensitySource::new(recipe).with_atlas(atlas, 3.5);
     let peak = source.terrain_surface_height_at(0.0, 0.0);
     let spawn_h = source.terrain_surface_height_at(-58.0, 32.0);
     println!("land_cells={land_cells} max_comp={max_comp:.2} max_reg={max_reg:.2} min_comp={min_comp:.2}");

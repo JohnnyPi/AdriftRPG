@@ -1,3 +1,4 @@
+// crates/game_bevy/src/player/mod.rs
 mod movement;
 mod motor;
 mod spawn;

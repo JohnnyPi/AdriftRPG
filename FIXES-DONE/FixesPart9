@@ -1,0 +1,56 @@
+# Installment 9: biome and material context chain
+
+**Files:** `island_gen/biome_field.rs` (60), `game_bevy/environment/surface.rs` (155), `…/biome_context.rs` (256), `…/materials.rs` (129), `terrain_surface/blend.rs` (64), `…/context.rs` (186), plus targeted reads of `biomes.rs` (491 — classification core; catalog/YAML rules get covered with the config installment).
+
+## Bug 36: three parallel biome/material systems — one of them is dead on arrival
+
+**Confidence / Severity:** Confirmed (dead output); live-path split pending pipeline read / **High as architecture, Medium as behavior**
+**Files:** `biome_field.rs`, `materials.rs`, `surface.rs`/`island.rs`
+
+**Evidence:** the codebase contains three classification stacks. **System A** (per voxel sample): `material_for_world_with_cache` → `classify_biome_with_context` → single `MaterialId` per density sample, blended later by the mesher's `cell_material_blend`. **System B** (per mesh vertex): `ChunkSurfaceResolver::vertex_blend` → `compute_soft_biome_weights` → `IslandSurfaceClassifier` → 4-way blend. **System C** (atlas): `compute_biome_weights` writes `atlas.biome_weights` with its *own* biome taxonomy (rainforest/grassland/volcanic/beach/wetland) — and a grep across the workspace finds **zero consumers** (the only other reference constructs an empty field in `preview.rs`). An entire atlas pass, with its own suitability model, is computed and thrown away, while System B derives biomes from a *different* climate model that ignores the atlas entirely.
+
+**Why it matters:** this is Part 1's "duplicated responsibilities" in its most expensive form — three taxonomies (`BiomeWeights`, `SoftBiomeWeights`, `BiomeKind` YAML rules) that can't agree because nothing connects them; every biome tuning change must be made twice to have any effect and a third time to keep the dead field honest. `pipeline.rs` imports both A and B, so which runs per chunk is decided there — I'll confirm in the streaming installment, but the repair shape is already clear: **pick B as the authority** (it's the only one producing the 4-way blends the mesh format wants), feed it atlas fields where they exist (wetness, coast distance, soil once Bug 30 lands), and either delete `compute_biome_weights` or make B consume it — not both.
+
+## Bug 37: the expanded profile's ridge is hardcoded into the climate model for every world
+
+**Confidence / Severity:** Confirmed / Medium
+**File:** `biome_context.rs` — `const RAIN_SHADOW_RIDGE: [f32; 2] = [180.0, 196.0];`
+
+**Evidence:** `rain_shadow_at` carves a moisture depression (−0.28) and temperature drop within 80 m of recipe-space point (180, 196), gated to the quadrant `x < 180 && z < 196`. Those are `expanded_slice_terrain.yaml`'s ridge coordinates, baked into a shared constant — the third member of the phantom-model family (with `field_stack.rs`'s ridge/valley and `RiverGenConfig`'s defaults). Every *other* world — vertical slice, vs3 island — gets an inexplicable dry quadrant-blob at those coordinates. And even for the expanded world, a radial spot gated to one quadrant isn't a rain shadow (which is directional: dry *leeward* of the ridge along a wind vector). **Repair:** derive from data — ridge position from the recipe's `CoastalSurface.ridge_origin` (once Bug 12 makes that meaningful) plus a `prevailing_wind_deg` param; or delete the term until climate is a real pass. **Test:** vs3 world — moisture field must have no local minimum at (180, 196).
+
+## Bug 38: climate noise wavelengths are continental; the island is 256 m wide
+
+**Confidence / Severity:** Confirmed / Medium (doc: "incorrect parameter scale")
+**File:** `biome_context.rs` — `MOISTURE_SCALE: 0.001`, `CONTINENTAL_SCALE: 0.0004`
+
+**Evidence:** at scale 0.001, the base moisture octave has a **1,000 m lattice**; three octaves reach 250 m at the finest — so a 256 m island spans a fraction of one noise cell to one cell. Moisture and continentalness are effectively smooth constants-with-gradient across the whole map; the forest/grassland/scrub splits in `compute_soft_biome_weights` (moisture bands 0.12–0.95) then depend almost entirely on where that one near-constant value happens to land for the seed, and biome variety collapses to elevation/slope bands. Worse, what little variation exists at these frequencies rides directly on `ValueNoise`'s broken lattice (Bug 7), so it's the sawtooth. **Repair:** parameterize by island size — wavelength ≈ playable_diameter/3 (scale ≈ 0.01 for 256 m) so moisture actually partitions the island; retune band thresholds after. **Test:** histogram of `effective_moisture` over the land area must span at least, say, 0.4 of the unit range (today it's a narrow spike).
+
+## Bug 39: `cave_depth = surface − y` classifies overhang undersides as caves
+
+**Confidence / Severity:** Confirmed mechanism / Medium
+**Files:** `biome_context.rs` (`context_from_column`), `surface.rs` (`cave_exposure`)
+
+**Evidence:** cave-ness is inferred as depth below the *column's top surface* — any vertex more than ~4.4 m under the heightfield top (`cave_depth/8 > 0.55`) triggers `classify_cave`. But overhang undersides, cliff undercuts, and arch interiors are *outdoor* surfaces below the column top: they'll render flowstone/cave-moss palettes in daylight (the doc's "cave-interior classification" audit point, inverted). It also inherits `terrain_surface_height_at`'s bisection fragility (M17): where the bisection lands on a cave ceiling, `cave_depth` for genuinely-outdoor terrain below becomes garbage. **Repair:** the codebase already owns the right primitive — `topology.rs::cavity_sdf_at` knows the *declared* cavities. `cave_exposure = smoothstep(0, margin, -cavity_sdf_at(...))` (post-Bug-16 metric units) is exact for authored/generated caves; keep the depth proxy only as a fallback for future non-declared voids. **Test:** a vertex on the underside of the vertical-slice overhang ellipsoid (outside all subtract cavities) must classify as cliff/land, not cave.
+
+## Bug 40: soil and geology inputs to the classifier are placeholders end-to-end
+
+**Confidence / Severity:** Confirmed / Medium (completes Bug 30's picture)
+**File:** `surface.rs`, `build_context`
+
+**Evidence:** `soil_depth_m = (1.5 − (elev − sea)·0.02).clamp(0.2, 2.0)` — a pure elevation ramp, ignoring both the atlas `soil_depth` field (all zeros, Bug 30) and slope/sediment; and `geology: GeologyId::Basalt` is hardcoded, so `classify_cave`'s limestone branch is unreachable and geology never varies. So the refinement of Bug 30 is: the atlas field is dead *and* its consumer substituted a formula rather than wiring it — fix both together (compute real soil in the atlas per Bug 30's repair, read it here through the atlas when present, keep the formula only as the non-atlas fallback with a slope term added).
+
+## Minor findings
+
+**M28 — the column cache costs more than the terrain itself (non-atlas path).** `ChunkColumnCache::build` runs 19² = 361 columns × [`terrain_surface_height_at` = 32-step bisection of full sealed density] + `terrain_slope_at`, which without an atlas performs **four more** 32-step bisections per column — up to ~58,000 full density evaluations per chunk, versus 6,859 actual voxel samples (each already doubled by M18's foundation-seal re-evaluation). This is almost certainly the dominant chunk-generation cost. Repair: get surface height analytically (`land_surface_height` once per column for recipe worlds, `sample_atlas_surface` — one call — for atlas worlds), reserving bisection for columns where union ops actually exist.
+
+**M29 — `materials.rs` truncates coordinates:** `let wx = x as i32;` — the same negative-truncation trap as Bug 10. It currently receives integer sample coords so it's dormant; make it `x.floor() as i32` with a `debug_assert!(x.fract() == 0.0)` so it can't silently rot.
+
+**M30 — hardcoded material-id couplings:** `MaterialId(2)` for slope rock bypasses the catalog, and `material_id_to_biome_kind`'s 1–6 table couples to YAML ordering. One reordering of `terrain_materials.yaml` silently reshuffles rock/beach/cave. Route both through `BiomeCatalog`.
+
+**M31 — marine biomes are collapsed:** `ShallowWater | DeepWater | OffshoreShelf → BiomeId::Beach` in `surface.rs`. Placeholder, but your target vertical slice explicitly requires one marine biome — flag it on the roadmap rather than discovering it at the end.
+
+**M32 — fallback biome ladder ordering** (`biomes.rs::classify_biome_from_context`): elevation rungs are checked before moisture, so in the no-YAML-rule fallback, forests can only exist in the 3–10 m elevation band — anything higher is RockyUpland/Alpine regardless of moisture. Fine if YAML rules always cover; worth a comment or reorder.
+
+## What's verified good
+
+`ChunkColumnCache`'s indexing is exactly right for the mesher's halo: columns cover `origin − 1 .. origin + 17` matching the padded sample range, with clamped lookups — and per-column caching is the correct architecture (the cost problem is *what* it computes, not the cache). `compute_soft_biome_weights` is the best classifier code in the repo: banded `range_weight`s with fade margins, world-space deterministic transition noise (satisfying Part 17's "biome transition noise is world-space and deterministic" check verbatim), normalized output — Systems A and C should die so this can be the one truth. `blend.rs` is small and correct (`normalize` guards zero-sum, `validate_blend` exists and is used in tests). `biome_kind_from_soft` breaks ties by fixed array order, not HashMap — the determinism lesson Bug 11 needs, already applied here. And both `materials.rs` and the classifier layer have real unit tests.

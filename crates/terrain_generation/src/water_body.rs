@@ -1,3 +1,4 @@
+// crates/terrain_generation/src/water_body.rs
 //! Water body model and queries (VS2 §7).
 
 use std::collections::BTreeMap;

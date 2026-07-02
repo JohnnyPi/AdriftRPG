@@ -1,3 +1,4 @@
+// crates/terrain_meshing/tests/integration.rs
 use terrain_generation::{
     default_vertical_slice_recipe, generate_padded_samples, iter_world_chunk_coords,
     RecipeDensitySource,
@@ -43,7 +44,7 @@ fn cave_region_produces_hollow_mesh() {
         })
         .expect("mesh");
     assert!(!mesh.positions.is_empty(), "cave chunk should have surface geometry");
-    assert_eq!(mesh.material_ids.len(), mesh.positions.len());
+    assert_eq!(mesh.material_vertices.len(), mesh.positions.len());
 }
 
 #[test]

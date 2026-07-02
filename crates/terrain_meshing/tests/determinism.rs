@@ -1,13 +1,13 @@
+// crates/terrain_meshing/tests/determinism.rs
 use terrain_generation::{default_vertical_slice_recipe, generate_padded_samples, RecipeDensitySource};
 use terrain_meshing::{ChunkMeshingInput, SurfaceNetsMesher, TerrainMesher};
-use voxel_core::{ChunkCoord, MaterialId, CHUNK_CELLS};
+use voxel_core::{fnv1a_update, quantize_density_mm, ChunkCoord, MaterialId, FNV_OFFSET, CHUNK_CELLS};
 
 fn test_density_source(seed: u64) -> RecipeDensitySource {
     RecipeDensitySource::new(default_vertical_slice_recipe(seed, 2.0))
 }
 
 fn mesh_topology_hash(source: &RecipeDensitySource, coord: ChunkCoord) -> u64 {
-    use std::hash::{Hash, Hasher};
     let samples = generate_padded_samples(source, coord, MaterialId(0));
     let mesh = SurfaceNetsMesher
         .build_mesh(&ChunkMeshingInput {
@@ -16,14 +16,14 @@ fn mesh_topology_hash(source: &RecipeDensitySource, coord: ChunkCoord) -> u64 {
             surface_resolver: None,
         })
         .expect("mesh");
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    for p in &mesh.positions {
-        ((p[0] * 1000.0).round() as i32).hash(&mut hasher);
-        ((p[1] * 1000.0).round() as i32).hash(&mut hasher);
-        ((p[2] * 1000.0).round() as i32).hash(&mut hasher);
+    let mut hash = FNV_OFFSET;
+    for position in &mesh.positions {
+        for axis in position {
+            hash = fnv1a_update(hash, quantize_density_mm(*axis).to_le_bytes());
+        }
     }
-    mesh.indices.len().hash(&mut hasher);
-    hasher.finish()
+    hash = fnv1a_update(hash, (mesh.indices.len() as u32).to_le_bytes());
+    hash
 }
 
 #[test]

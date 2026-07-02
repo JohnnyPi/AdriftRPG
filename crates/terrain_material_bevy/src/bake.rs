@@ -1,14 +1,16 @@
+// crates/terrain_material_bevy/src/bake.rs
 use std::path::PathBuf;
 
 use bevy::prelude::*;
 use procedural_textures::{
-    ProceduralMaterialsDocument, TerrainMaterialRecipe, arrays_fingerprint, build_cpu_arrays,
+    ProceduralMaterialsDocument, TerrainMaterialRecipe, arrays_fingerprint,
     default_island_recipes, document_fingerprint,
 };
 
 use crate::arrays::{TerrainArrayHandles, upload_texture_arrays};
 use crate::material::{
-    TerrainLayerScales, TerrainMaterialSettings, TerrainPbrMaterial, layer_scales_from_recipes,
+    TerrainLayerScales, TerrainMaterialSettings, TerrainPbrMaterial, default_chunk_slots,
+    layer_scales_from_recipes,
 };
 
 const CACHE_DIR: &str = "target/terrain_material_cache";
@@ -42,7 +44,7 @@ pub fn load_recipes_from_yaml(path: &PathBuf) -> Option<Vec<TerrainMaterialRecip
     let text = std::fs::read_to_string(path).ok()?;
     let text = procedural_textures::strip_utf8_bom(&text);
     let doc: ProceduralMaterialsDocument = serde_yaml::from_str(text).ok()?;
-    Some(doc.materials)
+    procedural_textures::order_recipes_for_core_layers(&doc.materials).ok()
 }
 
 pub fn recipes_for_world(yaml_path: Option<&PathBuf>) -> Vec<TerrainMaterialRecipe> {
@@ -85,7 +87,23 @@ pub fn write_cache(fingerprint: [u8; 32], arrays: &procedural_textures::CpuTextu
 }
 
 pub fn bake_cpu_arrays(recipes: &[TerrainMaterialRecipe]) -> procedural_textures::CpuTextureArrays {
-    build_cpu_arrays(recipes).expect("bake cpu arrays")
+    procedural_textures::build_cpu_arrays_in_core_order(recipes).expect("bake cpu arrays")
+}
+
+pub fn bake_cpu_arrays_for_palette(
+    layer_order: &[String],
+    recipes: &[TerrainMaterialRecipe],
+) -> procedural_textures::CpuTextureArrays {
+    procedural_textures::build_cpu_arrays_for_palette(layer_order, recipes)
+        .expect("bake cpu arrays for palette")
+}
+
+pub fn ordered_recipes_for_palette(
+    layer_order: &[String],
+    recipes: &[TerrainMaterialRecipe],
+) -> Vec<TerrainMaterialRecipe> {
+    procedural_textures::order_recipes_for_palette(layer_order, recipes)
+        .expect("order recipes for palette")
 }
 
 pub fn build_material_from_arrays(
@@ -113,12 +131,13 @@ pub fn build_material_from_arrays(
             triplanar_sharpness: 4.0,
             global_texture_scale: 1.0,
             normal_strength,
-            height_blend_strength: 0.0,
+            height_blend_strength: 2.0,
             layer_count: arrays.layers,
             debug_mode: 0,
             _padding: Vec2::ZERO,
         },
         layer_scales,
+        chunk_slots: default_chunk_slots(),
     })
 }
 

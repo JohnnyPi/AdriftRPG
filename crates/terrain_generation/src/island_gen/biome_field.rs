@@ -1,3 +1,4 @@
+// crates/terrain_generation/src/island_gen/biome_field.rs
 //! Biome suitability weights (VS3 §15).
 
 use crate::field2d::{smoothstep, Field2D};

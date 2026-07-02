@@ -13,5 +13,6 @@ chunks:
 terrain: terrain.vertical_slice
 biomes: biomes.vertical_slice
 materials: materials.vertical_slice
+surface: surface.vertical_slice
 water: water.tropical_shallow
 lighting: lighting.late_morning

@@ -1,3 +1,4 @@
+// crates/procedural_textures/src/maps.rs
 #[derive(Clone, Debug)]
 pub struct GeneratedPbrMaps {
     pub width: u32,

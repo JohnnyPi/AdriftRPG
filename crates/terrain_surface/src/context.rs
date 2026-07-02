@@ -1,3 +1,4 @@
+// crates/terrain_surface/src/context.rs
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BiomeId {
     Grassland,

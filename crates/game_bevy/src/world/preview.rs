@@ -1,6 +1,5 @@
+// crates/game_bevy/src/world/preview.rs
 //! Overhead map preview for the setup screen.
-
-use std::hash::{Hash, Hasher};
 
 use bevy::prelude::*;
 use game_data::ConfigRegistry;
@@ -8,6 +7,7 @@ use terrain_generation::{
     build_island_atlas, colorize_runtime_preview, land_surface_height, GenerationResolution,
     IslandAtlas, PREVIEW_PIXEL_SPACING_M,
 };
+use voxel_core::{fnv1a_update, quantize_density_mm, FNV_OFFSET};
 
 use crate::data::UserSetupPrefs;
 use crate::terrain::{build_density_source_from_prefs, compile_terrain_recipe, island_params_from_compiled};
@@ -32,15 +32,15 @@ pub struct MapPreviewState {
 }
 
 pub fn hash_prefs(prefs: &UserSetupPrefs) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    prefs.world_id.hash(&mut hasher);
-    prefs.seed.hash(&mut hasher);
-    prefs.preview_color_mode.hash(&mut hasher);
-    for (k, v) in &prefs.island_overrides {
-        k.hash(&mut hasher);
-        v.to_bits().hash(&mut hasher);
+    let mut hash = FNV_OFFSET;
+    hash = fnv1a_update(hash, prefs.world_id.as_str().as_bytes());
+    hash = fnv1a_update(hash, prefs.seed.to_le_bytes());
+    hash = fnv1a_update(hash, prefs.preview_color_mode.as_bytes());
+    for (key, value) in &prefs.island_overrides {
+        hash = fnv1a_update(hash, key.as_bytes());
+        hash = fnv1a_update(hash, quantize_density_mm(*value).to_le_bytes());
     }
-    hasher.finish()
+    hash
 }
 
 pub fn build_preview_atlas(registry: &ConfigRegistry, prefs: &UserSetupPrefs) -> IslandAtlas {

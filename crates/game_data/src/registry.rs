@@ -1,12 +1,14 @@
+// crates/game_data/src/registry.rs
 use std::collections::BTreeMap;
 
+use serde::Serialize;
 use shared::{DataError, DataResult, StableId};
 
 use crate::compile::{
     CompiledApp, CompiledAtmosphere, CompiledBiomes, CompiledCamera, CompiledCave, CompiledDebug,
     CompiledFog, CompiledHydrology, CompiledIslandGeneration, CompiledLandmarks, CompiledLighting,
     CompiledOptions, CompiledPerformance, CompiledPhysics, CompiledPlayer, CompiledRiver,
-    CompiledRoutes, CompiledSetupSchema, CompiledSky, CompiledStructure, CompiledTerrain, CompiledTerrainMaterials, CompiledVegetation,
+    CompiledRoutes, CompiledSetupSchema, CompiledSky, CompiledStructure, CompiledTerrain, CompiledTerrainMaterials, CompiledSurfaceRules, CompiledVegetation,
     CompiledWater, CompiledWaterBodyMaterial, CompiledWorld,
 };
 use crate::definitions::RawDefinition;
@@ -14,7 +16,7 @@ use crate::hash::registry_hash;
 use crate::load::LoadedFile;
 use crate::validate::validate_definitions;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ConfigRegistry {
     pub app: CompiledApp,
     pub performance: BTreeMap<StableId, CompiledPerformance>,
@@ -27,6 +29,7 @@ pub struct ConfigRegistry {
     pub caves: BTreeMap<StableId, CompiledCave>,
     pub biomes: BTreeMap<StableId, CompiledBiomes>,
     pub materials: BTreeMap<StableId, CompiledTerrainMaterials>,
+    pub surface_rules: BTreeMap<StableId, CompiledSurfaceRules>,
     pub vegetation: BTreeMap<StableId, CompiledVegetation>,
     pub debug: BTreeMap<StableId, CompiledDebug>,
     pub options: BTreeMap<StableId, CompiledOptions>,
@@ -42,6 +45,7 @@ pub struct ConfigRegistry {
     pub structures: BTreeMap<StableId, CompiledStructure>,
     pub island_gen: BTreeMap<StableId, CompiledIslandGeneration>,
     pub setup_schemas: BTreeMap<StableId, CompiledSetupSchema>,
+    #[serde(skip)]
     pub hash: String,
 }
 
@@ -60,6 +64,7 @@ impl ConfigRegistry {
         let mut caves = BTreeMap::new();
         let mut biomes = BTreeMap::new();
         let mut materials = BTreeMap::new();
+        let mut surface_rules = BTreeMap::new();
         let mut vegetation = BTreeMap::new();
         let mut debug = BTreeMap::new();
         let mut options = BTreeMap::new();
@@ -108,6 +113,9 @@ impl ConfigRegistry {
                 }
                 RawDefinition::TerrainMaterials(def) => {
                     materials.insert(def.header.id.clone(), def.into());
+                }
+                RawDefinition::SurfaceRules(def) => {
+                    surface_rules.insert(def.header.id.clone(), def.into());
                 }
                 RawDefinition::Vegetation(def) => {
                     vegetation.insert(def.header.id.clone(), def.into());
@@ -179,6 +187,7 @@ impl ConfigRegistry {
             caves,
             biomes,
             materials,
+            surface_rules,
             vegetation,
             debug,
             options,
@@ -376,68 +385,6 @@ impl ConfigRegistry {
             context: "active water".to_string(),
         })
     }
-
-    pub(crate) fn canonical_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        append_stable_id(&mut bytes, &self.app.id);
-        append_stable_id(&mut bytes, &self.app.world);
-        append_stable_id(&mut bytes, &self.app.player);
-        append_stable_id(&mut bytes, &self.app.camera);
-        append_stable_id(&mut bytes, &self.app.performance);
-
-        for (id, world) in &self.worlds {
-            append_stable_id(&mut bytes, id);
-            bytes.extend(world.seed.to_le_bytes());
-            bytes.extend(world.cell_size_m.to_le_bytes());
-            for value in world.chunk_cells {
-                bytes.extend(value.to_le_bytes());
-            }
-            for value in world.world_extent_chunks {
-                bytes.extend(value.to_le_bytes());
-            }
-            append_stable_id(&mut bytes, &world.terrain);
-            append_stable_id(&mut bytes, &world.biomes);
-            append_stable_id(&mut bytes, &world.materials);
-            append_stable_id(&mut bytes, &world.water);
-            append_stable_id(&mut bytes, &world.lighting);
-        }
-
-        for (id, player) in &self.player {
-            append_stable_id(&mut bytes, id);
-            bytes.extend(player.walk_speed_mps.to_le_bytes());
-            bytes.extend(player.run_speed_mps.to_le_bytes());
-            bytes.extend(player.gravity_mps2.to_le_bytes());
-        }
-
-        for (id, camera) in &self.camera {
-            append_stable_id(&mut bytes, id);
-            bytes.extend(camera.distance_default_m.to_le_bytes());
-            bytes.extend(camera.distance_minimum_m.to_le_bytes());
-            bytes.extend(camera.distance_maximum_m.to_le_bytes());
-        }
-
-        for (id, lighting) in &self.lighting {
-            append_stable_id(&mut bytes, id);
-            bytes.push(lighting.fog_enabled as u8);
-            bytes.extend(lighting.fog_start_m.to_le_bytes());
-            bytes.extend(lighting.fog_end_m.to_le_bytes());
-        }
-
-        for (id, water) in &self.water {
-            append_stable_id(&mut bytes, id);
-            bytes.extend(water.sea_level_m.to_le_bytes());
-            bytes.extend(water.transparency.to_le_bytes());
-        }
-
-        for (id, performance) in &self.performance {
-            append_stable_id(&mut bytes, id);
-            bytes.extend(performance.target_fps.to_le_bytes());
-            bytes.extend(performance.target_resolution[0].to_le_bytes());
-            bytes.extend(performance.target_resolution[1].to_le_bytes());
-        }
-
-        bytes
-    }
 }
 
 fn resolve_app_references(
@@ -472,12 +419,6 @@ fn resolve_app_references(
         });
     }
     Ok(())
-}
-
-fn append_stable_id(bytes: &mut Vec<u8>, id: &StableId) {
-    let value = id.as_str();
-    bytes.extend((value.len() as u32).to_le_bytes());
-    bytes.extend(value.as_bytes());
 }
 
 #[cfg(test)]

@@ -1,3 +1,4 @@
+// crates/game_bevy/src/environment/materials.rs
 use bevy::prelude::*;
 use terrain_generation::RecipeDensitySource;
 use voxel_core::MaterialId;
@@ -53,8 +54,12 @@ pub fn material_for_world_with_cache(
     z: f32,
     density: f32,
 ) -> MaterialId {
-    let wx = x as i32;
-    let wz = z as i32;
+    let wx = x.floor() as i32;
+    let wz = z.floor() as i32;
+    debug_assert!(
+        (x - wx as f32).abs() < f32::EPSILON && (z - wz as f32).abs() < f32::EPSILON,
+        "material sampling expects integer world XZ"
+    );
 
     let (surface_y, ctx) = if let Some(cache) = cache {
         let column = cache.column(wx, wz);
@@ -81,6 +86,18 @@ pub fn material_for_world_with_cache(
 
     let biome = classify_biome_with_context(catalog, source, &ctx, sample_density);
     surface_material_for(catalog, biome, &ctx)
+}
+
+pub fn terrain_material_key_from_paint_material(material: MaterialId) -> terrain_surface::MaterialKey {
+    match material_id_to_biome_kind(material.0) {
+        BiomeKind::Beach => terrain_surface::MaterialKey::new("sand"),
+        BiomeKind::RockyUpland | BiomeKind::Alpine => terrain_surface::MaterialKey::new("rock"),
+        BiomeKind::Forest => terrain_surface::MaterialKey::new("forest_floor"),
+        BiomeKind::Wetland | BiomeKind::Riverbank => terrain_surface::MaterialKey::new("wet_rock"),
+        BiomeKind::Cave => terrain_surface::MaterialKey::new("cave_stone"),
+        BiomeKind::Scrub | BiomeKind::CoastalScrub => terrain_surface::MaterialKey::new("scrub"),
+        _ => terrain_surface::MaterialKey::new("grass"),
+    }
 }
 
 fn material_id_to_biome_kind(material_id: u16) -> BiomeKind {

@@ -1,3 +1,4 @@
+// crates/game_bevy/src/player/movement.rs
 use bevy::prelude::*;
 
 /// VS2 §9 character motor — fixed-step systems are registered by [`crate::physics::GamePhysicsPlugin`].

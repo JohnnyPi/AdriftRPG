@@ -1,3 +1,4 @@
+// crates/terrain_generation/src/island_gen/hydrology.rs
 //! Priority-flood, D8 flow, accumulation (VS3 §5).
 
 use std::collections::BinaryHeap;
@@ -16,6 +17,8 @@ const D8_OFFSETS: [(i32, i32); 8] = [
     (-1, 0),
     (-1, -1),
 ];
+
+const FLOOD_EPSILON_FACTOR: f32 = 1e-4;
 
 #[derive(Clone, Copy, PartialEq)]
 struct FloodCell {
@@ -71,6 +74,8 @@ pub fn priority_flood(elevation: &Field2D<f32>) -> Field2D<f32> {
         }
     }
 
+    let eps = elevation.spacing * FLOOD_EPSILON_FACTOR;
+
     while let Some(cell) = heap.pop() {
         for (dx, dz) in D8_OFFSETS {
             let nx = cell.x as i32 + dx;
@@ -85,7 +90,7 @@ pub fn priority_flood(elevation: &Field2D<f32>) -> Field2D<f32> {
             }
             visited[ni] = true;
             let elev = elevation.get(nx, nz);
-            let new_elev = elev.max(cell.elevation);
+            let new_elev = elev.max(cell.elevation + eps);
             filled.set(nx, nz, new_elev);
             heap.push(FloodCell {
                 elevation: new_elev,
@@ -121,7 +126,7 @@ pub fn compute_flow(
 
     for (elev, x, z) in &cells {
         let mut best_dir = 255u8;
-        let mut best_drop = 0.0f32;
+        let mut best_gradient = 0.0f32;
         for (dir, (dx, dz)) in D8_OFFSETS.iter().enumerate() {
             let nx = *x as i32 + dx;
             let nz = *z as i32 + dz;
@@ -130,15 +135,24 @@ pub fn compute_flow(
             }
             let neighbor = filled.get(nx as u32, nz as u32);
             let drop = *elev - neighbor;
-            if drop > best_drop {
-                best_drop = drop;
+            if drop <= 0.0 {
+                continue;
+            }
+            let gradient = drop
+                / if *dx != 0 && *dz != 0 {
+                    std::f32::consts::SQRT_2
+                } else {
+                    1.0
+                };
+            if gradient > best_gradient {
+                best_gradient = gradient;
                 best_dir = dir as u8;
             }
         }
         direction.set(*x, *z, best_dir);
     }
 
-    for (_, x, z) in cells.iter().rev() {
+    for (_, x, z) in &cells {
         let dir = direction.get(*x, *z);
         if dir == 255 {
             continue;
@@ -295,6 +309,124 @@ pub fn trace_primary_river(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flow_accumulation_collects_full_catchment_on_uniform_slope() {
+        let rows = 12u32;
+        let cols = 3u32;
+        let spacing = 4.0;
+        let mut elevation = Field2D::<f32>::new(cols, rows, [0.0, 0.0], spacing);
+        let mut mask = Field2D::<f32>::new(cols, rows, [0.0, 0.0], spacing);
+        for z in 0..rows {
+            for x in 0..cols {
+                elevation.set(x, z, (rows - z) as f32 * 10.0);
+                mask.set(x, z, 1.0);
+            }
+        }
+        let filled = priority_flood(&elevation);
+        let mut params = IslandGenParams::default();
+        params.hydrology.rainfall_base = 1.0;
+        let (_, accumulation) = compute_flow(&filled, &mask, &params);
+        let rain = params.hydrology.rainfall_base;
+        for x in 0..cols {
+            let bottom = accumulation.get(x, rows - 1);
+            assert!(
+                (bottom - rows as f32 * rain).abs() < 0.01,
+                "column {x} bottom accumulation {bottom} expected {}",
+                rows as f32 * rain
+            );
+        }
+    }
+
+    #[test]
+    fn d8_prefers_cardinal_on_x_aligned_slope() {
+        let size = 7u32;
+        let mut elevation = Field2D::<f32>::new(size, size, [0.0, 0.0], 4.0);
+        let mut mask = Field2D::<f32>::new(size, size, [0.0, 0.0], 4.0);
+        for z in 0..size {
+            for x in 0..size {
+                elevation.set(x, z, 100.0 - x as f32 * 8.0);
+                mask.set(x, z, 1.0);
+            }
+        }
+        let filled = priority_flood(&elevation);
+        let params = IslandGenParams::default();
+        let (direction, _) = compute_flow(&filled, &mask, &params);
+        for z in 1..size - 1 {
+            for x in 1..size - 2 {
+                assert_eq!(
+                    direction.get(x, z),
+                    2,
+                    "x-aligned slope at ({x},{z}) should drain east (index 2)"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn epsilon_flood_drains_bowl_depression_to_coast() {
+        let size = 15u32;
+        let spacing = 4.0;
+        let mut elevation = Field2D::<f32>::new(size, size, [0.0, 0.0], spacing);
+        let mut mask = Field2D::<f32>::new(size, size, [0.0, 0.0], spacing);
+        let cx = size as f32 * 0.5 - 0.5;
+        let cz = cx;
+        let rim = 40.0f32;
+        let bowl_depth = 12.0f32;
+        for z in 0..size {
+            for x in 0..size {
+                let dx = x as f32 - cx;
+                let dz = z as f32 - cz;
+                let r = (dx * dx + dz * dz).sqrt() / cx;
+                let elev = if r >= 0.95 {
+                    rim - 2.0
+                } else {
+                    rim - bowl_depth * (1.0 - (r / 0.95).powi(2))
+                };
+                elevation.set(x, z, elev);
+                mask.set(x, z, if r < 0.98 { 1.0 } else { 0.0 });
+            }
+        }
+        let filled = priority_flood(&elevation);
+        let params = IslandGenParams::default();
+        let (direction, _) = compute_flow(&filled, &mask, &params);
+
+        for z in 1..size - 1 {
+            for x in 1..size - 1 {
+                if mask.get(x, z) < 0.5 {
+                    continue;
+                }
+                assert_ne!(
+                    direction.get(x, z),
+                    255,
+                    "land cell ({x},{z}) should drain after epsilon flood"
+                );
+            }
+        }
+
+        let start_x = cx.round() as u32;
+        let start_z = cz.round() as u32;
+        let mut x = start_x;
+        let mut z = start_z;
+        let mut steps = 0u32;
+        while steps < size * 2 {
+            if mask.get(x, z) < 0.2 {
+                break;
+            }
+            let dir = direction.get(x, z);
+            if dir == 255 {
+                panic!("bowl center stalled at ({x},{z})");
+            }
+            let (dx, dz) = D8_OFFSETS[dir as usize];
+            x = (x as i32 + dx) as u32;
+            z = (z as i32 + dz) as u32;
+            steps += 1;
+        }
+        assert!(
+            mask.get(x, z) < 0.2 || x == 0 || z == 0 || x == size - 1 || z == size - 1,
+            "trace from bowl center should reach coast or rim"
+        );
+    }
 
     #[test]
     fn traced_river_follows_flow_direction_field() {

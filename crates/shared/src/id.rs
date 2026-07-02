@@ -1,3 +1,4 @@
+// crates/shared/src/id.rs
 use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
