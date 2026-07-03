@@ -8,6 +8,4 @@ pub use hot_reload::VisualConfigHotReloadPlugin;
 pub use plugin::{
     assets_root, debounce_duration, is_yaml_path, ConfigRegistryResource, DataAssetPlugin,
 };
-pub use user_prefs::{
-    load_user_prefs, save_user_prefs, sync_world_tweaks_from_prefs, UserSetupPrefs,
-};
+pub use user_prefs::{load_user_prefs, save_user_prefs, UserSetupPrefs};

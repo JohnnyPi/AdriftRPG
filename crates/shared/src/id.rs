@@ -3,7 +3,7 @@ use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-/// Stable dotted identifier such as `player.default` or `world.vertical_slice`.
+/// Stable dotted identifier such as `player.default` or `world.island_testbed`.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct StableId(String);
 

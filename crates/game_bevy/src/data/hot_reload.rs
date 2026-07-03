@@ -2,6 +2,7 @@
 use bevy::prelude::*;
 
 use crate::data::ConfigRegistryResource;
+use crate::data::UserSetupPrefs;
 use crate::environment::biomes::BiomeCatalog;
 use crate::state::AppState;
 use crate::water::WaterMaterial;
@@ -98,6 +99,7 @@ fn reload_procedural_terrain_material(
 
 fn reload_water_material(
     registry: Res<ConfigRegistryResource>,
+    prefs: Res<UserSetupPrefs>,
     mut last_hash: Local<Option<String>>,
     mut water_query: Query<(&mut Transform, &mut MeshMaterial3d<WaterMaterial>)>,
     mut materials: ResMut<Assets<WaterMaterial>>,
@@ -107,7 +109,7 @@ fn reload_water_material(
         return;
     }
     *last_hash = Some(hash);
-    let Ok(world) = registry.0.active_world() else {
+    let Ok(world) = crate::world::effective_world_from_prefs(&registry.0, &prefs) else {
         return;
     };
     let Some(water_def) = registry.0.water.get(&world.water) else {

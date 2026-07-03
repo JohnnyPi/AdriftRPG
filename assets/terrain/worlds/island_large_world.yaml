@@ -1,0 +1,41 @@
+﻿schema_version: 1
+id: world.island_large
+
+seed: 48129
+
+voxel:
+  cell_size_m: 1.0
+
+chunks:
+  cells: [16, 16, 16]
+  # Centered: X/Z span [-1344, +1344), Y spans [-384, +384).
+  # Sized for a 2200 m island (support radius ~1313 m) with a 360 m peak
+  # (+15 m noise, +2 m ceiling margin). See docs/terrain_yaml_authoring.md.
+  # WARNING: this enumerates 168 x 48 x 168 = ~1.35 M chunk records.
+  # TerrainPipelineState.chunks is a flat Vec scanned linearly every frame
+  # (manage_chunk_residency / dispatch_density_jobs); expect frame-time cost
+  # until that becomes a keyed/lazy structure. Surfacing that bottleneck is
+  # part of this world's purpose.
+  world_extent: [168, 48, 168]
+
+# Atlas world: terrain shape comes from island_gen; the terrain def carries
+# only the spawn point. Do not point this at an op-based terrain def.
+terrain: terrain.island_large
+island_gen: island_gen.island_large
+biomes: biomes.expanded_slice
+materials: materials.expanded_slice
+surface: surface.expanded_slice
+water: water.tropical_shallow
+lighting: lighting.late_morning
+sky: sky.expanded_showcase
+
+ocean_extent_m: 2688.0
+coord_offset: [1344.0, 0.0, 1344.0]
+
+resolution:
+  # regional_m 16 keeps the regional grid at 2688/16 = 168 cells/axis and the
+  # local grid at 2688/4 = 672 (MAX_GRID_AXIS is 4096). regional_m must stay
+  # within [8, 128]; local within [1, 8]; tiers must divide evenly.
+  regional_m: 16
+  local_m: 4
+  voxel_m: 1

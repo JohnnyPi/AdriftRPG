@@ -1,30 +1,80 @@
 // crates/game_bevy/src/terrain/recipe.rs
 use game_data::{
-    CompiledRiver, CompiledWorld, ConfigRegistry,
+    CompiledIslandGeneration, CompiledWater, CompiledWorld, ConfigRegistry,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use shared::StableId;
 use terrain_generation::{
-    RecipeDensitySource, RiverCarveContext, RiverGenConfig,
-    build_island_atlas, compile_terrain_recipe, generate_river_spline,
-    island_params_from_compiled,
+    RecipeDensitySource, build_island_atlas, compile_terrain_recipe,
+    island_params_from_compiled, validate_island_world_budget,
 };
 
 use crate::data::UserSetupPrefs;
+
+/// Fail fast, with the full message list, when an island/world configuration
+/// is contradictory (footprint exceeds chunk extents, relief exceeds the chunk
+/// ceiling, shelf below the chunk floor, sea-level disagreement, or a
+/// configuration `fit_to_ocean_extent` would have silently rescaled).
+///
+/// Panicking here is deliberate: generating terrain from a config the
+/// generator would have to clip or distort produces exactly the "big lumpy
+/// clipped cone" class of bug, and doing so silently costs far more debugging
+/// time than an immediate, explained failure at startup.
+fn validate_island_world_or_panic(
+    compiled: &CompiledIslandGeneration,
+    world: &CompiledWorld,
+    water_sea_level_m: f32,
+) {
+    let messages = validate_island_world_budget(compiled, world, water_sea_level_m);
+    if !messages.is_empty() {
+        panic!(
+            "island/world budget validation failed for '{}' (island_gen '{}'):\n  - {}\n\
+             Fix the YAML defs; see docs/terrain_yaml_authoring.md for the budget rules.",
+            world.id.as_str(),
+            compiled.id.as_str(),
+            messages.join("\n  - ")
+        );
+    }
+}
+
+/// Attach the island atlas for `compiled` to `source`, validating the
+/// island/world budget first. Bank blend width is fixed at 3.5 m (historically
+/// matched demo river bank width for atlas shoreline blending).
+fn with_validated_atlas(
+    source: RecipeDensitySource,
+    _registry: &ConfigRegistry,
+    world: &CompiledWorld,
+    water: &CompiledWater,
+    compiled: &CompiledIslandGeneration,
+    seed: u64,
+) -> RecipeDensitySource {
+    validate_island_world_or_panic(compiled, world, water.sea_level_m);
+    let params = island_params_from_compiled(compiled, world, seed, water.sea_level_m);
+    let atlas = build_island_atlas(&params);
+    source.with_atlas(atlas, 3.5)
+}
 
 pub fn build_density_source(
     registry: &ConfigRegistry,
     world_id: Option<&StableId>,
     seed_override: Option<u64>,
-    field_stack: terrain_generation::FieldStackParams,
+    _field_stack: terrain_generation::FieldStackParams,
 ) -> RecipeDensitySource {
     let world = registry.effective_world(world_id).expect("world");
     let water = registry.water.get(&world.water).expect("water");
     let recipe = compile_terrain_recipe(registry, world, water, seed_override);
     let mut source = RecipeDensitySource::new(recipe);
-    if let Some(ctx) = build_river_carve(registry, world, seed_override, field_stack) {
-        source = source.with_river_carve(ctx);
+    if let Some(base) = registry.island_generation_for_world(world) {
+        // Island worlds get their terrain from the atlas. Previously this
+        // function skipped the atlas entirely, so any caller reaching an
+        // island world through it received only the generated cave ops --
+        // caves carved out of nothing. The demo-river carve is intentionally
+        // not attached for island worlds: the demo river spline is generated
+        // against an op-based surface recipe, and island hydrology rivers come
+        // from the atlas passes instead.
+        let seed = seed_override.unwrap_or(world.seed);
+        source = with_validated_atlas(source, registry, world, water, base, seed);
     }
     source
 }
@@ -35,31 +85,24 @@ pub fn build_density_source_from_prefs(
     field_stack: terrain_generation::FieldStackParams,
 ) -> RecipeDensitySource {
     let world_id = prefs.world_stable_id();
-    let seed = Some(prefs.seed);
     let world = registry
-        .world_by_id(&world_id)
-        .or_else(|_| registry.active_world())
+        .effective_world(Some(&world_id))
         .expect("world");
-    let has_island_gen = registry.island_generation_for_world(world).is_some();
-    let mut source = if has_island_gen {
-        let water = registry.water.get(&world.water).expect("water");
-        let recipe = compile_terrain_recipe(registry, world, water, seed);
-        RecipeDensitySource::new(recipe)
-    } else {
-        build_density_source(registry, Some(&world_id), seed, field_stack)
-    };
-    if let Some(base) = registry.island_generation_for_world(world) {
-        let merged = prefs.apply_overrides(base);
-        let water = registry.water.get(&world.water).expect("water");
-        let params = island_params_from_compiled(&merged, world, prefs.seed, water.sea_level_m);
-        let atlas = build_island_atlas(&params);
-        let bank_width_m = registry
-            .demo_river()
-            .map(|river| river.bank_width_m)
-            .unwrap_or(3.5);
-        source = source.with_atlas(atlas, bank_width_m);
+    match registry.island_generation_for_world(world) {
+        Some(base) => {
+            let merged = prefs.apply_overrides(base);
+            let water = registry.water.get(&world.water).expect("water");
+            // KNOWN GAP: compile_terrain_recipe fetches the *base* island gen
+            // from the registry for generated cave ops, so prefs overrides to
+            // cave parameters affect the hash payload and the atlas but not
+            // the compiled cave geometry. Requires a
+            // compile_terrain_recipe_with_island variant in world_setup.rs.
+            let recipe = compile_terrain_recipe(registry, world, water, Some(prefs.seed));
+            let source = RecipeDensitySource::new(recipe);
+            with_validated_atlas(source, registry, world, water, &merged, prefs.seed)
+        }
+        None => build_density_source(registry, Some(&world_id), Some(prefs.seed), field_stack),
     }
-    source
 }
 
 pub fn terrain_recipe_hash(
@@ -89,7 +132,6 @@ struct TerrainRecipeHashPayload {
     prefs_preview_color_mode: Option<String>,
     prefs_island_overrides: Vec<(String, f32)>,
     field_stack: Option<terrain_generation::FieldStackParams>,
-    river: Option<game_data::CompiledRiver>,
 }
 
 fn terrain_recipe_hash_payload(
@@ -150,50 +192,7 @@ fn terrain_recipe_hash_payload(
         prefs_preview_color_mode,
         prefs_island_overrides,
         field_stack: field_stack.cloned(),
-        river: registry.demo_river().cloned(),
     }
-}
-
-pub fn river_gen_config(
-    river: &CompiledRiver,
-    seed: u64,
-    field_stack: terrain_generation::FieldStackParams,
-) -> RiverGenConfig {
-    RiverGenConfig {
-        source_center: river.source_region_center,
-        source_radius_m: river.source_region_radius_m,
-        grid_spacing_m: river.grid_spacing_m,
-        mouth_width_m: river.mouth_width_m,
-        source_width_m: river.source_width_m,
-        source_depth_m: river.source_depth_m,
-        mouth_depth_m: river.mouth_depth_m,
-        bank_width_m: river.bank_width_m,
-        minimum_depth_m: river.minimum_depth_m,
-        depression_repair_radius_cells: river.depression_repair_radius_cells,
-        maximum_breach_depth_m: river.maximum_breach_depth_m,
-        seed,
-        field_stack,
-        surface_recipe: None,
-    }
-}
-
-pub fn build_river_carve(
-    registry: &ConfigRegistry,
-    world: &CompiledWorld,
-    seed_override: Option<u64>,
-    field_stack: terrain_generation::FieldStackParams,
-) -> Option<RiverCarveContext> {
-    let river_def = registry.demo_river()?;
-    let water = registry.water.get(&world.water)?;
-    let seed = seed_override.unwrap_or(world.seed);
-    let recipe = compile_terrain_recipe(registry, world, water, seed_override);
-    let mut config = river_gen_config(river_def, seed, field_stack);
-    config.surface_recipe = Some(recipe);
-    let spline = generate_river_spline(&config, water.sea_level_m)?;
-    Some(RiverCarveContext {
-        spline,
-        bank_width_m: river_def.bank_width_m,
-    })
 }
 
 #[cfg(test)]
@@ -211,10 +210,10 @@ mod tests {
     }
 
     #[test]
-    fn generated_vs3_caves_respond_to_authored_parameters() {
+    fn generated_island_testbed_caves_respond_to_authored_parameters() {
         let registry = load_registry_from_directory(workspace_assets()).expect("registry");
         let world = registry
-            .world_by_id(&StableId::new("world.vs3_island"))
+            .world_by_id(&StableId::new("world.island_testbed"))
             .expect("world");
         let base = registry
             .island_generation_for_world(world)
@@ -255,7 +254,7 @@ mod tests {
     fn generated_cave_count_respects_min_max_bounds() {
         let registry = load_registry_from_directory(workspace_assets()).expect("registry");
         let world = registry
-            .world_by_id(&StableId::new("world.vs3_island"))
+            .world_by_id(&StableId::new("world.island_testbed"))
             .expect("world");
         let base = registry
             .island_generation_for_world(world)
@@ -281,5 +280,24 @@ mod tests {
         let registry = load_registry_from_directory(workspace_assets()).expect("registry");
         let hash_a = terrain_recipe_hash(&registry, None, None, None, None);
         assert!(!hash_a.is_empty());
+    }
+
+    #[test]
+    fn island_testbed_world_passes_budget_validation() {
+        let registry = load_registry_from_directory(workspace_assets()).expect("registry");
+        let world = registry
+            .world_by_id(&StableId::new("world.island_testbed"))
+            .expect("world");
+        let base = registry
+            .island_generation_for_world(world)
+            .expect("island");
+        let water = registry.water.get(&world.water).expect("water");
+        let messages =
+            terrain_generation::validate_island_world_budget(base, world, water.sea_level_m);
+        assert!(
+            messages.is_empty(),
+            "shipped island_testbed island/world YAML must satisfy the world budget:\n  - {}",
+            messages.join("\n  - ")
+        );
     }
 }

@@ -3,8 +3,8 @@ use std::path::PathBuf;
 
 use bevy::prelude::*;
 use procedural_textures::{
-    ProceduralMaterialsDocument, TerrainMaterialRecipe, arrays_fingerprint,
-    default_island_recipes, document_fingerprint,
+    ProceduralMaterialsDocument, TerrainMaterialRecipe, default_island_recipes,
+    document_fingerprint,
 };
 
 use crate::arrays::{TerrainArrayHandles, upload_texture_arrays};
@@ -139,11 +139,4 @@ pub fn build_material_from_arrays(
         layer_scales,
         chunk_slots: default_chunk_slots(),
     })
-}
-
-pub fn fingerprint_matches_baked(
-    arrays: &procedural_textures::CpuTextureArrays,
-    recipe_hash: [u8; 32],
-) -> [u8; 32] {
-    arrays_fingerprint(arrays, recipe_hash)
 }

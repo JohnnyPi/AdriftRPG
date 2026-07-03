@@ -72,6 +72,10 @@ impl Default for PhysicsTweaks {
 }
 
 /// World / residency overrides (Phase 3+).
+///
+/// The legacy `use_expanded_profile` flag (op-based expanded_slice worlds)
+/// was removed with the two-world condensation; world selection lives in the
+/// Setup screen via `UserSetupPrefs.world_id`.
 #[derive(Resource, Clone, Debug)]
 pub struct WorldTweaks {
     pub density_radius: i32,
@@ -80,7 +84,6 @@ pub struct WorldTweaks {
     pub decoration_radius: i32,
     pub high_detail_radius: i32,
     pub show_residency_rings: bool,
-    pub use_expanded_profile: bool,
 }
 
 impl Default for WorldTweaks {
@@ -92,7 +95,6 @@ impl Default for WorldTweaks {
             decoration_radius: 5,
             high_detail_radius: 4,
             show_residency_rings: false,
-            use_expanded_profile: true,
         }
     }
 }
@@ -134,10 +136,12 @@ impl Default for TerrainTweaks {
 }
 
 /// Water body overrides (Phase 5+).
+///
+/// `pool_elevation_m` was removed with the legacy demo hydrology (the
+/// unbounded upland pool at 31.5 m); atlas worlds have sea + generated river.
 #[derive(Resource, Clone, Debug)]
 pub struct WaterTweaks {
     pub sea_level_m: f32,
-    pub pool_elevation_m: f32,
     pub shallow_color: [f32; 3],
     pub deep_color: [f32; 3],
     pub use_overrides: bool,
@@ -147,7 +151,6 @@ impl Default for WaterTweaks {
     fn default() -> Self {
         Self {
             sea_level_m: 0.0,
-            pool_elevation_m: 31.5,
             shallow_color: [0.2, 0.55, 0.65],
             deep_color: [0.05, 0.2, 0.35],
             use_overrides: false,
@@ -155,24 +158,22 @@ impl Default for WaterTweaks {
     }
 }
 
-/// River overrides (Phase 6+).
+/// River debug visualization (Phase 6+).
+///
+/// The river itself comes from the island atlas; the legacy
+/// source-radius / mouth-width generation inputs were removed with
+/// `demo_river.yaml`. Tune rivers via island_gen hydrology parameters.
 #[derive(Resource, Clone, Debug)]
 pub struct RiverTweaks {
-    pub source_radius_m: f32,
-    pub mouth_width_m: f32,
     pub show_spline: bool,
     pub show_flow_arrows: bool,
-    pub use_overrides: bool,
 }
 
 impl Default for RiverTweaks {
     fn default() -> Self {
         Self {
-            source_radius_m: 24.0,
-            mouth_width_m: 6.5,
             show_spline: false,
             show_flow_arrows: false,
-            use_overrides: false,
         }
     }
 }

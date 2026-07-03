@@ -1,0 +1,9 @@
+﻿schema_version: 1
+id: terrain.island_large
+description: Large island — surface comes from the island atlas; no authored ops.
+# Recipe-space: ~1000 m from the volcano center along the 215 deg collapse
+# bearing, near the coastline on the flank-collapse side (same side as the
+# cave mouth). resolve_player_spawn searches nearby for walkable ground.
+spawn: [525.0, 0.0, 770.0]
+includes: []
+operations: []

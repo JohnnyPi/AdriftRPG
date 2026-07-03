@@ -12,12 +12,14 @@ use shared::StableId;
 use tracing::{info, warn};
 
 /// User-editable setup state persisted between sessions.
+///
+/// Older saved files may contain a `use_expanded_profile` key from the
+/// removed op-based expanded_slice worlds; serde ignores unknown fields, so
+/// those files still load.
 #[derive(Resource, Clone, Debug, Serialize, Deserialize)]
 pub struct UserSetupPrefs {
     pub world_id: String,
     pub seed: u64,
-    #[serde(default)]
-    pub use_expanded_profile: bool,
     #[serde(default)]
     pub island_overrides: BTreeMap<String, f32>,
     #[serde(default)]
@@ -33,9 +35,8 @@ fn default_preview_resolution() -> u32 {
 impl Default for UserSetupPrefs {
     fn default() -> Self {
         Self {
-            world_id: "world.vs3_island".to_string(),
+            world_id: "world.island_testbed".to_string(),
             seed: 48_129,
-            use_expanded_profile: false,
             island_overrides: BTreeMap::new(),
             preview_color_mode: "elevation".to_string(),
             preview_resolution: 256,
@@ -94,11 +95,4 @@ pub fn save_user_prefs(prefs: &UserSetupPrefs) -> Result<(), String> {
     fs::write(&path, text).map_err(|e| e.to_string())?;
     info!(path = %path.display(), "saved user setup preferences");
     Ok(())
-}
-
-/// Sync legacy WorldTweaks from persisted prefs for systems that still read them.
-pub fn sync_world_tweaks_from_prefs(prefs: &UserSetupPrefs, world: &mut crate::ui::WorldTweaks) {
-    world.use_expanded_profile = prefs.use_expanded_profile
-        || prefs.world_id == "world.expanded_slice"
-        || prefs.world_id == "world.expanded_slice_hd";
 }

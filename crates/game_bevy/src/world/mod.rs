@@ -3,7 +3,7 @@ mod preview;
 mod profile;
 
 pub use preview::{generate_map_preview, hash_prefs, MapPreviewState};
-pub use profile::{requested_world_id, WorldProfilePlugin};
+pub use profile::{effective_world_from_prefs, requested_world_id, WorldProfilePlugin};
 
 use bevy::prelude::*;
 use terrain_generation::RecipeDensitySource;

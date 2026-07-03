@@ -10,6 +10,7 @@ use avian3d::prelude::*;
 use bindings::init_debug_bindings;
 use crate::camera::{CameraDebugSnapshot, MainGameCamera, MmoCamera};
 use crate::data::ConfigRegistryResource;
+use crate::data::UserSetupPrefs;
 use crate::environment::biome_context::BiomeSampleContext;
 use crate::environment::biomes::{
     biome_color, biome_discrete_debug_color, biome_scalar_debug_value, classify_biome, BiomeCatalog,
@@ -24,6 +25,7 @@ use crate::terrain::{
 };
 use terrain_material_bevy::TerrainPbrMaterial;
 use crate::terrain::draw_residency_rings;
+use crate::world::effective_world_from_prefs;
 use crate::environment::fog::FogStack;
 use crate::ui::{EcologyTweaks, RiverTweaks, TerrainTweaks, WorldTweaks};
 use terrain_generation::build_coast_mask;
@@ -394,6 +396,7 @@ fn update_debug_panel(
     seed_override: Res<WorldSeedOverride>,
     pending: Res<TerrainRegenPending>,
     registry: Res<ConfigRegistryResource>,
+    prefs: Res<UserSetupPrefs>,
     time: Res<Time>,
     mut panel: Local<Option<Entity>>,
     mut commands: Commands,
@@ -408,10 +411,12 @@ fn update_debug_panel(
 
     let ready = pipeline
         .chunks
-        .iter()
+        .values()
         .filter(|c| c.state == crate::terrain::ChunkState::Ready)
         .count();
-    let world_seed = registry.0.active_world().map(|w| w.seed).unwrap_or(0);
+    let world_seed = effective_world_from_prefs(&registry.0, &prefs)
+        .map(|w| w.seed)
+        .unwrap_or(0);
     let fps = 1.0 / time.delta_secs().max(0.0001);
     let regen_line = if pending.pending {
         format!("Terrain regen PENDING (F8) hash={}", pending.recipe_hash)

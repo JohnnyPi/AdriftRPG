@@ -14,7 +14,7 @@ mod validate;
 mod volcano;
 
 pub use params::*;
-pub use validate::{validate_atlas, ValidationReport};
+pub use validate::{min_peak_elevation_m, validate_atlas, ValidationReport};
 
 use crate::field2d::{residual_from_absolute, Field2D};
 use crate::island_atlas::IslandAtlas;
@@ -30,10 +30,16 @@ use hydrology::{
 use soil_field::compute_soil_depth;
 use volcano::{local_detail_at, regional_detail_at, volcanic_height};
 
+/// Build the island atlas from `params`, exactly as given.
+///
+/// This function does NOT rescale: it used to call `fit_to_ocean_extent()` on
+/// a clone internally, which silently and non-uniformly crushed any oversized
+/// island into a distorted miniature (steepened slopes, proportionally
+/// amplified noise and warp) on every runtime build. Fitting is now an
+/// explicit caller decision, and runtime/diagnostic paths gate configs through
+/// `world_setup::validate_island_world_budget` instead, which rejects any
+/// island the fit would have altered.
 pub fn build_island_atlas(params: &IslandGenParams) -> IslandAtlas {
-    let mut owned = params.clone();
-    owned.fit_to_ocean_extent();
-    let params = &owned;
     let resolution = params.resolution;
     let regional_spacing = resolution.regional_m;
     let local_spacing = resolution.local_m;
@@ -425,7 +431,9 @@ mod tests {
     }
 
     #[test]
-    fn default_params_pass_validation_when_fitted_to_extent() {
+    fn default_params_pass_validation() {
+        // Default params are authored at world scale (mirroring
+        // vs3_volcanic_island.yaml) and must build cleanly with no rescaling.
         let params = IslandGenParams::default();
         let atlas = build_island_atlas(&params);
         assert!(
@@ -483,7 +491,9 @@ mod tests {
         let atlas = build_island_atlas(&params);
         let recipe = TerrainRecipe {
             seed: params.seed,
-            sea_level: 0.0,
+            // Must match IslandGenParams::default().island.sea_level_m (and the
+            // water def) -- see validate_island_world_budget's agreement check.
+            sea_level: 2.0,
             spawn_x: 70.0,
             spawn_z: 160.0,
             coord_offset: [128.0, 0.0, 128.0],
@@ -504,10 +514,16 @@ mod tests {
             (sy - floor - 0.05).abs() < 0.55,
             "spawn foot should sit on surface (floor={floor}, sy={sy})"
         );
+        // World-scale defaults: relief is 48 m, but (0, 0) sits inside the
+        // caldera (radius 10 m, depth 7 m), so the center reads ~41 m, not the
+        // rim height. Alpine classification starts at 28 m elevation
+        // (biomes.expanded_slice mountain_alpine); assert the summit region
+        // clears it with margin rather than asserting the old fitted-island
+        // peak of 50+.
         let peak_y = source.surface_height_at(0.0, 0.0);
         assert!(
-            peak_y > 50.0,
-            "volcano center should remain alpine-capable after slice fitting (peak_y={peak_y})"
+            peak_y > 35.0,
+            "volcano center should remain alpine-capable (peak_y={peak_y})"
         );
         let headroom = source.density_at(sx, sy + 2.0, sz);
         assert!(
@@ -524,7 +540,8 @@ mod tests {
         let atlas = build_island_atlas(&params);
         let recipe = TerrainRecipe {
             seed: params.seed,
-            sea_level: 0.0,
+            // Must match IslandGenParams::default().island.sea_level_m.
+            sea_level: 2.0,
             spawn_x: 70.0,
             spawn_z: 160.0,
             coord_offset: [128.0, 0.0, 128.0],

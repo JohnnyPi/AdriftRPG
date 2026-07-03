@@ -5,7 +5,6 @@ mod camera;
 mod data;
 mod debug_tools;
 mod environment;
-mod expanded;
 mod interaction;
 mod performance;
 mod physics;
@@ -20,7 +19,6 @@ mod vegetation;
 mod water;
 mod world;
 
-pub use expanded::ExpandedVerticalSlicePlugin;
 pub use performance::{PerformanceReport, PerformanceValidationPlugin};
 pub use plugin::VerticalSlicePlugin;
 pub use state::AppState;

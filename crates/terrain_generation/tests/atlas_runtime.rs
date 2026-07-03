@@ -19,7 +19,7 @@ fn workspace_assets() -> PathBuf {
 fn atlas_harness_matches_runtime_island_params() {
     let registry = load_registry_from_directory(workspace_assets()).expect("registry");
     let world = registry
-        .world_by_id(&shared::StableId::new("world.vs3_island"))
+        .world_by_id(&shared::StableId::new("world.island_testbed"))
         .expect("world");
     let water = registry.water.get(&world.water).expect("water");
     let base = registry
@@ -55,10 +55,10 @@ fn atlas_harness_matches_runtime_island_params() {
 }
 
 #[test]
-fn expanded_hd_seed_800000_spawn_chunk_has_mesh() {
+fn testbed_seed_800000_spawn_chunk_has_mesh() {
     let source = build_atlas_density_source(
         &load_registry_from_directory(workspace_assets()).expect("registry"),
-        &shared::StableId::new("world.expanded_slice_hd"),
+        &shared::StableId::new("world.island_testbed"),
         800_000,
     );
     let (sx, sy, sz, report) = source.resolve_player_spawn(2.0, 48.0);
@@ -94,15 +94,15 @@ fn expanded_hd_seed_800000_spawn_chunk_has_mesh() {
 }
 
 #[test]
-fn expanded_hd_seed_800000_meshes_most_surface_chunks() {
+fn testbed_seed_800000_meshes_most_surface_chunks() {
     let registry = load_registry_from_directory(workspace_assets()).expect("registry");
     let source = build_atlas_density_source(
         &registry,
-        &shared::StableId::new("world.expanded_slice_hd"),
+        &shared::StableId::new("world.island_testbed"),
         800_000,
     );
     let world = registry
-        .world_by_id(&shared::StableId::new("world.expanded_slice_hd"))
+        .world_by_id(&shared::StableId::new("world.island_testbed"))
         .expect("world");
     let extent = [
         world.world_extent_chunks[0] as i32,
@@ -125,9 +125,9 @@ fn expanded_hd_seed_800000_meshes_most_surface_chunks() {
     }
     assert!(
         meshed > 200,
-        "expected most surface terrain chunks to mesh for expanded HD seed 800000, got {meshed}"
+        "expected most surface terrain chunks to mesh for testbed seed 800000, got {meshed}"
     );
-    eprintln!("expanded_hd_800000 meshed_chunks={meshed}");
+    eprintln!("island_testbed_800000 meshed_chunks={meshed}");
 
     let atlas = source.atlas().expect("atlas");
     let mut edge_mask = 0.0f32;

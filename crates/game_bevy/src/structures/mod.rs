@@ -162,27 +162,3 @@ fn parse_collision(value: &str) -> CollisionProfileId {
         _ => CollisionProfileId::Terrain,
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use game_data::load_registry_from_directory;
-    use std::path::PathBuf;
-
-    fn workspace_assets() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../assets")
-            .canonicalize()
-            .expect("assets")
-    }
-
-    #[test]
-    fn coastal_fort_yaml_compiles_with_parts() {
-        let registry = load_registry_from_directory(workspace_assets()).expect("registry");
-        let fort = registry
-            .structures
-            .get(&shared::StableId::new("structure.coastal_fort"))
-            .expect("fort");
-        assert_eq!(fort.parts.len(), 6);
-        assert!(fort.parts.iter().any(|p| p.tag.as_deref() == Some("gate")));
-    }
-}

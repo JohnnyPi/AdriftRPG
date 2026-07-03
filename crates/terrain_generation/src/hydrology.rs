@@ -1,6 +1,7 @@
 // crates/terrain_generation/src/hydrology.rs
 //! Hydrology backend with river spline support.
 
+#[cfg(test)]
 use crate::river::{generate_river_spline, RiverGenConfig};
 use crate::water_body::{RiverSpline, WaterBodyRegistry};
 
@@ -29,6 +30,7 @@ pub struct RiverHydrology {
 }
 
 impl RiverHydrology {
+    #[cfg(test)]
     pub fn generate_demo(seed: u64, sea_level: f32, pool_elevation: f32) -> Self {
         let mut config = RiverGenConfig::default();
         config.seed = seed;

@@ -12,7 +12,7 @@ use crate::terrain::{
     regen_terrain_with_seed, TerrainEditStore, TerrainPipelineState, TerrainRecipeRevision,
     TerrainRegenPending, TerrainRevision, TerrainSpawnPoint, WorldSeedOverride,
 };
-use crate::ui::{TerrainTweaks, WorldTweaks};
+use crate::ui::{TerrainTweaks};
 
 pub struct WorldProfilePlugin;
 
@@ -27,6 +27,13 @@ impl Plugin for WorldProfilePlugin {
 
 pub fn requested_world_id(prefs: &UserSetupPrefs) -> StableId {
     prefs.world_stable_id()
+}
+
+pub fn effective_world_from_prefs<'a>(
+    registry: &'a game_data::ConfigRegistry,
+    prefs: &UserSetupPrefs,
+) -> shared::DataResult<&'a game_data::CompiledWorld> {
+    registry.effective_world(Some(&requested_world_id(prefs)))
 }
 
 fn auto_regen_on_profile_switch(
@@ -44,7 +51,6 @@ fn auto_regen_on_profile_switch(
     mut runtime: ResMut<crate::terrain::TerrainWorldRuntime>,
     mut sky_state: ResMut<SkyState>,
     mut atmosphere: ResMut<crate::ui::AtmosphereTweaks>,
-    mut world_tweaks: ResMut<WorldTweaks>,
     mut last: Local<Option<String>>,
 ) {
     let Some(ref previous) = *last else {
@@ -56,7 +62,6 @@ fn auto_regen_on_profile_switch(
     }
     *last = Some(prefs.world_id.clone());
 
-    crate::data::sync_world_tweaks_from_prefs(&prefs, &mut world_tweaks);
     refresh_presentation_for_profile(
         &registry,
         &prefs,

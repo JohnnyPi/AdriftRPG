@@ -32,9 +32,9 @@ pub use hydrology::{HydrologyBackend, RiverHydrology, StubHydrology};
 pub use island_atlas::{BiomeWeights, IslandAtlas};
 pub use island_gen::{
     build_island_atlas, colorize_preview, colorize_preview_with_heights, colorize_runtime_preview,
-    sample_atlas_surface, BeachParams, CaveParams, CoastParams, ErosionParams, HydrologyParams,
-    IslandGenParams, IslandShapeParams, PREVIEW_PIXEL_SPACING_M, SurfaceNoiseParams,
-    ValidationReport, VolcanoParams,
+    min_peak_elevation_m, sample_atlas_surface, BeachParams, CaveParams, CoastParams,
+    ErosionParams, HydrologyParams, IslandGenParams, IslandShapeParams, PREVIEW_PIXEL_SPACING_M,
+    SurfaceNoiseParams, ValidationReport, VolcanoParams,
 };
 pub use resolution::{GenerationResolution, ResolutionError};
 pub use noise::ValueNoise;
@@ -60,7 +60,7 @@ pub use water_body::{
 };
 pub use world_setup::{
     append_generated_island_caves, build_atlas_density_source, compile_terrain_recipe,
-    island_params_from_compiled,
+    island_params_from_compiled, validate_island_world_budget,
 };
 
 pub trait DensitySource: Send + Sync {

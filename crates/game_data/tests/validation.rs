@@ -128,12 +128,16 @@ fn workspace_registry_resolves_active_profiles() {
 
 #[test]
 fn biome_rules_accept_stub_profile_fields() {
+    // Fully self-contained fixture: world-specific defs (world, biomes,
+    // terrain, materials) are inlined with `*.test` ids instead of copying
+    // asset files from removed worlds. Only world-agnostic config files
+    // (player/camera/performance/water/lighting) are copied from assets.
     let dir = tempdir().expect("tempdir");
     fs::write(
         dir.path().join("app.yaml"),
         r#"schema_version: 1
-id: app.vertical_slice
-world: world.vertical_slice
+id: app.test
+world: world.test
 player: player.default
 camera: camera.mmo_default
 performance: performance.rtx3070_60fps
@@ -143,16 +147,16 @@ performance: performance.rtx3070_60fps
     fs::write(
         dir.path().join("world.yaml"),
         r#"schema_version: 1
-id: world.vertical_slice
+id: world.test
 seed: 1
 voxel:
   cell_size_m: 1.0
 chunks:
   cells: [16, 16, 16]
   world_extent: [6, 3, 6]
-terrain: terrain.vertical_slice
-biomes: biomes.vertical_slice
-materials: materials.vertical_slice
+terrain: terrain.test
+biomes: biomes.test
+materials: materials.test
 water: water.tropical_shallow
 lighting: lighting.late_morning
 "#,
@@ -161,12 +165,12 @@ lighting: lighting.late_morning
     fs::write(
         dir.path().join("biomes.yaml"),
         r#"schema_version: 1
-id: biomes.vertical_slice
+id: biomes.test
 rules:
   - id: grassland
     material_id: 0
     color: [0.3, 0.5, 0.2]
-    vegetation_profile_id: vegetation.vertical_slice
+    vegetation_profile_id: vegetation.test
     ambient_audio_profile_id: audio.coastal_day
     weather_profile_id: weather.clear
     spawn_profile_id: spawn.coastal_wildlife
@@ -177,42 +181,75 @@ rules:
 "#,
     )
     .unwrap();
+    fs::write(
+        dir.path().join("terrain.yaml"),
+        r#"schema_version: 1
+id: terrain.test
+description: Empty terrain scaffold for biome stub validation
+spawn: [0.0, 0.0, 0.0]
+includes: []
+operations: []
+"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("materials.yaml"),
+        r#"schema_version: 2
+id: materials.test
+description: Single-layer material scaffold for biome stub validation
+materials:
+  - key: grass
+    id: 0
+    name: grass
+    albedo: [0.34, 0.52, 0.28]
+    triplanar_scale: 0.5
+    roughness: 0.9
+layers: [grass]
+"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("surface.yaml"),
+        r#"schema_version: 1
+id: surface.test
+description: Minimal surface scaffold for biome stub validation
+classifiers:
+  - id: land_default
+    blend:
+      - { material: grass, weight: 1.0 }
+gates: []
+"#,
+    )
+    .unwrap();
     for name in [
         "player.yaml",
         "camera.yaml",
         "performance.yaml",
         "water.yaml",
         "lighting.yaml",
-        "terrain.yaml",
-        "materials.yaml",
     ] {
         let src = workspace_assets().join("config").join(name);
         if src.exists() {
             fs::copy(&src, dir.path().join(name)).unwrap();
         }
     }
-    let terrain_src = workspace_assets().join("terrain/generation/vertical_slice.terrain.yaml");
-    fs::copy(&terrain_src, dir.path().join("terrain.yaml")).unwrap();
-    let cave_src = workspace_assets().join("terrain/caves/demo_cave.yaml");
-    fs::copy(&cave_src, dir.path().join("demo_cave.yaml")).unwrap();
-    let mat_src = workspace_assets().join("terrain/materials/terrain.materials.yaml");
-    fs::copy(&mat_src, dir.path().join("materials.yaml")).unwrap();
-    let surface_src = workspace_assets().join("terrain/surface/vertical_slice.surface.yaml");
-    fs::copy(&surface_src, dir.path().join("surface.yaml")).unwrap();
 
     let registry = load_registry_from_directory(dir.path()).expect("registry with biome stubs");
-    let biomes = registry.biomes.get(&shared::StableId::new("biomes.vertical_slice")).unwrap();
+    let biomes = registry.biomes.get(&shared::StableId::new("biomes.test")).unwrap();
     assert_eq!(biomes.rules[0].gameplay_tags.len(), 2);
     assert!(biomes.rules[0].vegetation_profile_id.is_some());
 }
 
 #[test]
-fn expanded_hd_world_profile_loads() {
+fn island_worlds_load_with_shared_biomes() {
     let registry = load_registry_from_directory(workspace_assets()).expect("registry");
-    let world = registry
-        .world_by_id(&shared::StableId::new("world.expanded_slice_hd"))
-        .expect("hd world");
-    assert_eq!(world.biomes.as_str(), "biomes.expanded_slice");
+    for id in ["world.island_testbed", "world.island_large"] {
+        let world = registry
+            .world_by_id(&shared::StableId::new(id))
+            .unwrap_or_else(|_| panic!("{id} should load"));
+        assert_eq!(world.biomes.as_str(), "biomes.expanded_slice", "{id}");
+        assert!(world.island_gen.is_some(), "{id} must be atlas-driven");
+    }
 }
 
 #[test]

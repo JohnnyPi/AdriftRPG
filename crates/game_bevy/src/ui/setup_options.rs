@@ -178,7 +178,6 @@ fn draw_setup_options(
                     for id in &worlds {
                         if ui.selectable_label(&prefs.world_id == id, id).clicked() {
                             prefs.world_id = id.clone();
-                            prefs.use_expanded_profile = id.contains("expanded");
                             ui_state.params_stale = true;
                         }
                     }

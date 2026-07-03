@@ -1,19 +1,38 @@
 // crates/game_bevy/src/terrain/pipeline.rs
+//! Terrain chunk pipeline: density → mesh → upload → collider.
+//!
+//! Chunk records are SPARSE: only chunks near the interest center (or with a
+//! live entity / in-flight job) are materialized in `TerrainPipelineState::
+//! chunks`. Records are created on demand when a chunk enters the density
+//! radius and pruned once they fall back to `Unrequested` with no entity
+//! outside it. Scheduling iterates the neighborhood cube around the interest
+//! center, so per-frame cost is O(density_radius³) and independent of world
+//! size — required for the large island world (~1.35M potential chunks),
+//! where the previous eager `Vec` + full linear scans were O(world).
+//!
+//! Tradeoff: empty (fully air/solid) chunks that leave the density radius are
+//! pruned and re-run their density job on re-entry, matching how rendered
+//! chunks already despawned and re-meshed on re-entry.
+
 use avian3d::prelude::*;
 use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task};
+use std::collections::HashMap;
 use std::time::Instant;
-use terrain_generation::{fill_padded_samples, iter_world_chunk_coords, DensitySource, RecipeDensitySource};
+use terrain_generation::{fill_padded_samples, DensitySource, RecipeDensitySource};
 use terrain_meshing::{ChunkMeshingInput, SurfaceNetsMesher, TerrainMeshData, TerrainMesher};
 use tracing::{info, warn};
 use voxel_core::{CHUNK_CELLS, ChunkCoord, WorldCell};
 
 use crate::data::ConfigRegistryResource;
-use crate::data::{UserSetupPrefs, sync_world_tweaks_from_prefs};
+use crate::data::UserSetupPrefs;
 use crate::environment::biome_context::ChunkColumnCache;
+#[cfg(test)]
 use crate::environment::materials::material_for_world_with_cache;
 use crate::environment::surface::ChunkSurfaceResolver;
-use crate::environment::{BiomeCatalog, BiomeInitSet};
+use crate::environment::BiomeInitSet;
+#[cfg(test)]
+use crate::environment::biomes::BiomeCatalog;
 use crate::state::AppState;
 use crate::terrain::material::TerrainMaterialHandle;
 use crate::terrain::mesh_convert::{chunk_world_transform, mesh_from_terrain_data};
@@ -91,7 +110,11 @@ pub struct TerrainRegenPending {
 pub struct TerrainPipelineState {
     pub density_source: Option<RecipeDensitySource>,
     pub spawn_chunk: Option<ChunkCoord>,
-    pub chunks: Vec<ChunkRecord>,
+    /// Sparse chunk records keyed by coordinate; see module docs.
+    pub chunks: HashMap<ChunkCoord, ChunkRecord>,
+    /// World extent in chunks; per axis, coords span `-(e/2) .. -(e/2)+e`
+    /// (matching `terrain_generation::chunk_axis_range`).
+    pub world_extent_chunks: [i32; 3],
     pub frozen: bool,
     pending_density: Vec<PendingDensityJob>,
     pending_mesh: Vec<PendingMeshJob>,
@@ -100,16 +123,17 @@ pub struct TerrainPipelineState {
 }
 
 impl TerrainPipelineState {
-    /// Clears pending work and returns chunk entities that should be despawned.
-    pub fn reset_for_revision(&mut self, revision: u64) -> Vec<Entity> {
+    /// Clears pending work and returns chunk entities that should be
+    /// despawned. All records are dropped; they re-materialize lazily at the
+    /// new revision as the scheduler touches them.
+    pub fn reset_for_revision(&mut self, _revision: u64) -> Vec<Entity> {
         let mut to_despawn = Vec::new();
-        for chunk in &mut self.chunks {
+        for chunk in self.chunks.values_mut() {
             if let Some(entity) = chunk.entity.take() {
                 to_despawn.push(entity);
             }
-            chunk.state = ChunkState::Unrequested;
-            chunk.revision = revision;
         }
+        self.chunks.clear();
         self.pending_density.clear();
         self.pending_mesh.clear();
         self.upload_queue.clear();
@@ -136,8 +160,8 @@ impl TerrainPipelineState {
     /// Invalidate specific chunks after terrain edits.
     pub fn invalidate_chunks(&mut self, coords: &[ChunkCoord], revision: u64) -> Vec<Entity> {
         let mut to_despawn = Vec::new();
-        for chunk in &mut self.chunks {
-            if coords.contains(&chunk.coord) {
+        for coord in coords {
+            if let Some(chunk) = self.chunks.get_mut(coord) {
                 if let Some(entity) = chunk.entity.take() {
                     to_despawn.push(entity);
                 }
@@ -218,10 +242,21 @@ fn warn_if_atlas_validation_failed(source: &RecipeDensitySource) {
     }
 }
 
+/// Inclusive chunk-coordinate bounds of the world volume, matching
+/// `terrain_generation::chunk_axis_range`.
+fn world_chunk_bounds(extent: [i32; 3]) -> ([i32; 3], [i32; 3]) {
+    let min = [-(extent[0] / 2), -(extent[1] / 2), -(extent[2] / 2)];
+    let max = [
+        min[0] + extent[0] - 1,
+        min[1] + extent[1] - 1,
+        min[2] + extent[2] - 1,
+    ];
+    (min, max)
+}
+
 fn init_terrain_world(
     registry: Res<ConfigRegistryResource>,
     prefs: Res<UserSetupPrefs>,
-    mut world_tweaks: ResMut<WorldTweaks>,
     terrain_tweaks: Res<TerrainTweaks>,
     mut pipeline: ResMut<TerrainPipelineState>,
     mut spawn_point: ResMut<TerrainSpawnPoint>,
@@ -230,7 +265,6 @@ fn init_terrain_world(
     mut runtime: ResMut<TerrainWorldRuntime>,
     revision: Res<TerrainRevision>,
 ) {
-    sync_world_tweaks_from_prefs(&prefs, &mut world_tweaks);
     let world_override = density_world_override(&prefs);
     let world = registry
         .0
@@ -258,14 +292,8 @@ fn init_terrain_world(
     ];
 
     pipeline.density_source = Some(source);
-    pipeline.chunks = iter_world_chunk_coords(extent)
-        .map(|coord| ChunkRecord {
-            coord,
-            state: ChunkState::Unrequested,
-            revision: revision.value,
-            entity: None,
-        })
-        .collect();
+    pipeline.world_extent_chunks = extent;
+    pipeline.chunks = HashMap::new();
     recipe_revision.hash = terrain_recipe_hash(
         &registry.0,
         world_override.as_ref(),
@@ -275,12 +303,12 @@ fn init_terrain_world(
     );
 
     info!(
-        chunk_count = pipeline.chunks.len(),
+        potential_chunks = extent[0] as i64 * extent[1] as i64 * extent[2] as i64,
         world = %world.id.as_str(),
         spawn = ?spawn_point.0,
         spawn_valid = spawn_report.passed,
         spawn_notes = ?spawn_report.messages,
-        "terrain world initialized"
+        "terrain world initialized (sparse residency)"
     );
 }
 
@@ -343,6 +371,11 @@ pub fn regen_terrain_with_seed(
     let spawn_cell = WorldCell::new(sx.floor() as i32, sy.floor() as i32, sz.floor() as i32);
     pipeline.density_source = Some(source);
     pipeline.spawn_chunk = Some(spawn_cell.chunk_coord());
+    pipeline.world_extent_chunks = [
+        world.world_extent_chunks[0] as i32,
+        world.world_extent_chunks[1] as i32,
+        world.world_extent_chunks[2] as i32,
+    ];
     runtime.interest_center = spawn_cell.chunk_coord();
     recipe_revision.hash = terrain_recipe_hash(
         &registry.0,
@@ -368,25 +401,9 @@ fn manage_chunk_residency(
     revision: Res<TerrainRevision>,
 ) {
     let center = runtime.interest_center;
-    let mut to_despawn = Vec::new();
-    for chunk in &mut pipeline.chunks {
-        if !within_render_radius(center, chunk.coord, &world_tweaks) {
-            if let Some(entity) = chunk.entity.take() {
-                to_despawn.push(entity);
-                chunk.state = ChunkState::Unrequested;
-                chunk.revision = revision.value;
-            }
-        }
-    }
-    for entity in to_despawn.iter() {
-        pipeline
-            .collider_queue
-            .retain(|pending| pending.entity != *entity);
-    }
-    for entity in to_despawn {
-        commands.entity(entity).despawn();
-    }
 
+    // Cancel out-of-radius pending work first so the affected records fall
+    // back to Unrequested before the prune pass below considers them.
     let mut cancelled = Vec::new();
     pipeline.pending_density.retain(|job| {
         let keep = within_density_radius(center, job.coord, &world_tweaks);
@@ -409,8 +426,34 @@ fn manage_chunk_residency(
         }
         keep
     });
-    for coord in cancelled {
-        reset_transient_chunk_states(&mut pipeline.chunks, std::slice::from_ref(&coord));
+    reset_transient_chunk_states(&mut pipeline.chunks, &cancelled);
+
+    // Despawn entities that left the render radius, and prune quiescent
+    // records (Unrequested, no entity) outside the density radius so the map
+    // stays bounded by the neighborhood rather than growing with everything
+    // ever visited.
+    let mut to_despawn = Vec::new();
+    let revision_value = revision.value;
+    pipeline.chunks.retain(|coord, chunk| {
+        if !within_render_radius(center, *coord, &world_tweaks) {
+            if let Some(entity) = chunk.entity.take() {
+                to_despawn.push(entity);
+                chunk.state = ChunkState::Unrequested;
+                chunk.revision = revision_value;
+            }
+        }
+        chunk.entity.is_some()
+            || chunk.state != ChunkState::Unrequested
+            || within_density_radius(center, *coord, &world_tweaks)
+    });
+
+    for entity in to_despawn.iter() {
+        pipeline
+            .collider_queue
+            .retain(|pending| pending.entity != *entity);
+    }
+    for entity in to_despawn {
+        commands.entity(entity).despawn();
     }
 }
 
@@ -436,44 +479,63 @@ fn dispatch_density_jobs(
     };
 
     let slots = max_jobs - pipeline.pending_density.len();
-    let mut to_start = Vec::new();
+    let mut to_start: Vec<(ChunkCoord, u64)> = Vec::new();
+    let center = runtime.interest_center;
+    let revision_value = revision.value;
+
+    let mut try_start = |pipeline: &mut TerrainPipelineState, coord: ChunkCoord| -> bool {
+        let record = pipeline.chunks.entry(coord).or_insert_with(|| ChunkRecord {
+            coord,
+            state: ChunkState::Unrequested,
+            revision: revision_value,
+            entity: None,
+        });
+        if record.state != ChunkState::Unrequested {
+            return false;
+        }
+        record.state = ChunkState::GeneratingDensity;
+        record.revision = revision_value;
+        true
+    };
 
     if let Some(spawn_chunk) = pipeline.spawn_chunk {
-        if within_density_radius(runtime.interest_center, spawn_chunk, &world_tweaks) {
-            if let Some(chunk) = pipeline
-                .chunks
-                .iter_mut()
-                .find(|c| c.coord == spawn_chunk && c.state == ChunkState::Unrequested)
-            {
-                chunk.state = ChunkState::GeneratingDensity;
-                to_start.push((chunk.coord, chunk.revision));
-            }
+        if within_density_radius(center, spawn_chunk, &world_tweaks)
+            && try_start(&mut pipeline, spawn_chunk)
+        {
+            to_start.push((spawn_chunk, revision_value));
         }
     }
 
-    let mut candidates: Vec<_> = pipeline
-        .chunks
-        .iter()
-        .filter(|c| {
-            c.state == ChunkState::Unrequested
-                && c.revision == revision.value
-                && within_density_radius(runtime.interest_center, c.coord, &world_tweaks)
-        })
-        .map(|c| {
-            let d = chunk_chebyshev_distance(runtime.interest_center, c.coord);
-            (d, c.coord, c.revision)
-        })
-        .collect();
-    candidates.sort_by_key(|(d, _, _)| *d);
+    // Candidates come from the neighborhood cube around the interest center
+    // (clamped to the world volume), not from scanning every record — this is
+    // what keeps scheduling O(radius³) on very large worlds.
+    let (min_b, max_b) = world_chunk_bounds(pipeline.world_extent_chunks);
+    let r = world_tweaks.density_radius;
+    let mut candidates: Vec<(i32, ChunkCoord)> = Vec::new();
+    for cx in (center.x - r).max(min_b[0])..=(center.x + r).min(max_b[0]) {
+        for cy in (center.y - r).max(min_b[1])..=(center.y + r).min(max_b[1]) {
+            for cz in (center.z - r).max(min_b[2])..=(center.z + r).min(max_b[2]) {
+                let coord = ChunkCoord::new(cx, cy, cz);
+                if !within_density_radius(center, coord, &world_tweaks) {
+                    continue;
+                }
+                if let Some(existing) = pipeline.chunks.get(&coord) {
+                    if existing.state != ChunkState::Unrequested {
+                        continue;
+                    }
+                }
+                candidates.push((chunk_chebyshev_distance(center, coord), coord));
+            }
+        }
+    }
+    candidates.sort_by_key(|(d, _)| *d);
 
-    for (d, coord, rev) in candidates {
+    for (_d, coord) in candidates {
         if to_start.len() >= slots {
             break;
         }
-        let _ = d;
-        if let Some(chunk) = pipeline.chunks.iter_mut().find(|c| c.coord == coord) {
-            chunk.state = ChunkState::GeneratingDensity;
-            to_start.push((coord, rev));
+        if try_start(&mut pipeline, coord) {
+            to_start.push((coord, revision_value));
         }
     }
 
@@ -524,7 +586,7 @@ fn poll_density_jobs(
 
     for (coord, revision, started, result) in completed {
         metrics.record_density_ms(started.elapsed().as_secs_f32() * 1000.0);
-        let Some(chunk) = pipeline.chunks.iter_mut().find(|c| c.coord == coord) else {
+        let Some(chunk) = pipeline.chunks.get_mut(&coord) else {
             continue;
         };
         if chunk.revision != revision {
@@ -611,7 +673,7 @@ fn poll_mesh_jobs(
 
     for (coord, revision, started, result) in completed {
         metrics.record_mesh_ms(started.elapsed().as_secs_f32() * 1000.0);
-        let Some(chunk) = pipeline.chunks.iter_mut().find(|c| c.coord == coord) else {
+        let Some(chunk) = pipeline.chunks.get_mut(&coord) else {
             continue;
         };
         if chunk.revision != revision {
@@ -678,10 +740,10 @@ fn upload_chunk_meshes(
         let Some(item) = queue.pop() else {
             break;
         };
-        let Some(chunk_idx) = pipeline.chunks.iter().position(|c| c.coord == item.coord) else {
+        let Some(record_revision) = pipeline.chunks.get(&item.coord).map(|c| c.revision) else {
             continue;
         };
-        if pipeline.chunks[chunk_idx].revision != item.revision {
+        if record_revision != item.revision {
             continue;
         }
 
@@ -711,7 +773,7 @@ fn upload_chunk_meshes(
         let entity = commands
             .spawn((
                 TerrainChunkEntity { coord: item.coord },
-                TerrainChunkMaterial(chunk_material.clone()),
+                TerrainChunkMaterial,
                 Mesh3d(meshes.add(mesh)),
                 MeshMaterial3d(chunk_material),
                 chunk_world_transform(item.coord, cell_size_m),
@@ -719,8 +781,10 @@ fn upload_chunk_meshes(
                 Visibility::default(),
             ))
             .id();
-        pipeline.chunks[chunk_idx].entity = Some(entity);
-        pipeline.chunks[chunk_idx].state = ChunkState::Ready;
+        if let Some(chunk) = pipeline.chunks.get_mut(&item.coord) {
+            chunk.entity = Some(entity);
+            chunk.state = ChunkState::Ready;
+        }
         pipeline.collider_queue.push(PendingCollider {
             entity,
             coord: item.coord,
@@ -775,9 +839,12 @@ fn attach_pending_colliders(
     metrics.collider_queue = pipeline.collider_queue_len();
 }
 
-fn reset_transient_chunk_states(chunks: &mut [ChunkRecord], cancelled: &[ChunkCoord]) {
+fn reset_transient_chunk_states(
+    chunks: &mut HashMap<ChunkCoord, ChunkRecord>,
+    cancelled: &[ChunkCoord],
+) {
     for coord in cancelled {
-        if let Some(chunk) = chunks.iter_mut().find(|c| c.coord == *coord) {
+        if let Some(chunk) = chunks.get_mut(coord) {
             if chunk.entity.is_none()
                 && matches!(
                     chunk.state,
@@ -820,7 +887,10 @@ fn generate_padded_samples_runtime(
     }
 }
 
-/// System-A material path kept for tests and `surface_resolver: None` meshing.
+/// System-A material path kept as a reference implementation for tests
+/// exercising `surface_resolver: None` meshing. Runtime density jobs use
+/// `generate_padded_samples_runtime` instead.
+#[cfg(test)]
 fn generate_padded_samples_with_biomes(
     source: &RecipeDensitySource,
     biomes: &BiomeCatalog,
@@ -868,11 +938,12 @@ fn generate_padded_samples_with_biomes(
 #[cfg(test)]
 mod pipeline_tests {
     use bevy::prelude::Entity;
+    use std::collections::HashMap;
     use super::{
         generate_padded_samples_runtime, generate_padded_samples_with_biomes, reset_transient_chunk_states,
         ChunkRecord,
     };
-    use crate::environment::BiomeCatalog;
+    use crate::environment::biomes::BiomeCatalog;
     use crate::terrain::{ChunkState, TerrainEditStore};
     use game_data::BiomeRuleDefinition;
     use terrain_generation::{
@@ -886,6 +957,20 @@ mod pipeline_tests {
         BiomeCatalog {
             rules: vec![BiomeRuleDefinition::new("grassland", 0, [0.34, 0.52, 0.28])],
         }
+    }
+
+    fn single_record(coord: ChunkCoord, state: ChunkState, entity: Option<Entity>) -> HashMap<ChunkCoord, ChunkRecord> {
+        let mut chunks = HashMap::new();
+        chunks.insert(
+            coord,
+            ChunkRecord {
+                coord,
+                state,
+                revision: 1,
+                entity,
+            },
+        );
+        chunks
     }
 
     #[test]
@@ -1001,27 +1086,25 @@ mod pipeline_tests {
     #[test]
     fn cancelled_out_of_radius_jobs_reset_to_unrequested() {
         let coord = ChunkCoord::new(3, 0, 0);
-        let mut chunks = vec![ChunkRecord {
-            coord,
-            state: ChunkState::AwaitingUpload,
-            revision: 1,
-            entity: None,
-        }];
+        let mut chunks = single_record(coord, ChunkState::AwaitingUpload, None);
         reset_transient_chunk_states(&mut chunks, &[coord]);
-        assert_eq!(chunks[0].state, ChunkState::Unrequested);
+        assert_eq!(chunks[&coord].state, ChunkState::Unrequested);
     }
 
     #[test]
     fn chunks_with_entities_are_not_reset_on_cancellation() {
         let coord = ChunkCoord::new(3, 0, 0);
-        let mut chunks = vec![ChunkRecord {
-            coord,
-            state: ChunkState::Ready,
-            revision: 1,
-            entity: Some(Entity::from_bits(1)),
-        }];
+        let mut chunks = single_record(coord, ChunkState::Ready, Some(Entity::from_bits(1)));
         reset_transient_chunk_states(&mut chunks, &[coord]);
-        assert_eq!(chunks[0].state, ChunkState::Ready);
+        assert_eq!(chunks[&coord].state, ChunkState::Ready);
+    }
+
+    #[test]
+    fn world_chunk_bounds_match_axis_range_convention() {
+        // extent 16 spans -8..=7; extent 10 spans -5..=4 (chunk_axis_range).
+        let (min, max) = super::world_chunk_bounds([16, 10, 16]);
+        assert_eq!(min, [-8, -5, -8]);
+        assert_eq!(max, [7, 4, 7]);
     }
 
     #[test]

@@ -8,6 +8,24 @@ const RIVER_DESCENT_TOLERANCE_M: f32 = 0.5;
 const RIVER_MOUTH_SEA_TOLERANCE_M: f32 = 0.5;
 const MIN_PLAYABLE_LAND_FRACTION: f32 = 0.0025;
 
+/// Fraction of the authored composed edifice (shield + summit) the sampled
+/// peak must retain after the explicit erosion budget is subtracted. The
+/// remaining slack absorbs regional-grid discretization of the summit cone
+/// (the grid samples up to half a cell off-axis), the caldera fringe, and
+/// surface noise troughs.
+const MIN_PEAK_COMPOSED_FRACTION: f32 = 0.7;
+
+/// Cells whose composed elevation sits within this band below the analytic
+/// clamp (`sea + maximum_height_m`) are counted as pinned against the
+/// ceiling. Sized so composed noise (±~2 m) cannot hide a real plateau while
+/// a legitimate summit grazing the clamp stays under the fraction limit.
+const PLATEAU_BAND_M: f32 = 1.0;
+
+/// Maximum fraction of land cells allowed inside the plateau band. A healthy
+/// island composes below its ceiling (0%); the hardcoded-ridge bug pinned
+/// >5% of the land into a clipped cap.
+const MAX_PLATEAU_LAND_FRACTION: f32 = 0.01;
+
 #[derive(Clone, Debug, Default)]
 pub struct ValidationReport {
     pub passed: bool,
@@ -19,8 +37,22 @@ fn min_land_area_m2(params: &IslandGenParams) -> f32 {
     (radius * radius * std::f32::consts::PI * MIN_PLAYABLE_LAND_FRACTION).max(64.0)
 }
 
-fn min_peak_elevation_m(params: &IslandGenParams) -> f32 {
-    params.island.sea_level_m + 0.5 * params.island.maximum_height_m
+/// Minimum acceptable sampled peak.
+///
+/// Derived from the volcano params that actually produce the peak — not from
+/// `island.maximum_height_m`, which is an independent clamp ceiling. Deriving
+/// the floor from the ceiling required peaks the authored cones never
+/// composed; that was only ever satisfied while a hardcoded ridge amplitude
+/// inflated summits into the clamp.
+///
+/// Public so diagnostics (e.g. `tests/vs3_elevation_diag.rs`) assert against
+/// the same floor validation enforces, instead of drifting hardcoded copies.
+pub fn min_peak_elevation_m(params: &IslandGenParams) -> f32 {
+    let composed = params.volcano.shield_height_m + params.volcano.summit_height_m;
+    let erosion_budget =
+        params.erosion.maximum_step_m * params.erosion.stream_power_iterations as f32;
+    (params.island.sea_level_m + composed * MIN_PEAK_COMPOSED_FRACTION - erosion_budget)
+        .max(params.island.sea_level_m)
 }
 
 fn validate_river_graph(
@@ -116,12 +148,20 @@ pub fn validate_atlas(atlas: &IslandAtlas, params: &IslandGenParams) -> Validati
     }
 
     let mut max_h = f32::MIN;
+    let mut local_land_cells = 0u32;
+    let mut plateau_cells = 0u32;
+    let plateau_floor = params.island.sea_level_m + params.island.maximum_height_m - PLATEAU_BAND_M;
     for z in 0..atlas.elevation_local.height {
         for x in 0..atlas.elevation_local.width {
             let wx = atlas.origin[0] + x as f32 * atlas.elevation_local.spacing;
             let wz = atlas.origin[1] + z as f32 * atlas.elevation_local.spacing;
             if atlas.island_mask.sample_bilinear(wx, wz) > 0.5 {
-                max_h = max_h.max(atlas.composed_land_elevation_at(wx, wz));
+                local_land_cells += 1;
+                let h = atlas.composed_land_elevation_at(wx, wz);
+                max_h = max_h.max(h);
+                if h >= plateau_floor {
+                    plateau_cells += 1;
+                }
             }
         }
     }
@@ -129,10 +169,29 @@ pub fn validate_atlas(atlas: &IslandAtlas, params: &IslandGenParams) -> Validati
     if max_h < min_peak {
         passed = false;
         messages.push(format!(
-            "Peak too low: {max_h:.1} m (minimum {min_peak:.1} m from config)"
+            "Peak too low: {max_h:.1} m (minimum {min_peak:.1} m from volcano config)"
         ));
     } else {
         messages.push(format!("Peak elevation {max_h:.1} m: OK"));
+    }
+
+    // Clamp-plateau check: the analytic clamp caps heights at
+    // sea + maximum_height_m, so an over-composed edifice cannot be caught by
+    // the peak value — it shows up as a large land fraction pinned against
+    // the ceiling (the visible symptom of the old hardcoded-ridge bug).
+    let plateau_fraction = if local_land_cells > 0 {
+        plateau_cells as f32 / local_land_cells as f32
+    } else {
+        0.0
+    };
+    if plateau_fraction > MAX_PLATEAU_LAND_FRACTION {
+        passed = false;
+        messages.push(format!(
+            "Clamp plateau: {:.1}% of land pinned at the height ceiling (edifice over-composed for maximum_height_m)",
+            plateau_fraction * 100.0
+        ));
+    } else {
+        messages.push("Height ceiling headroom: OK".into());
     }
 
     let mut fill_violations = 0u32;
@@ -216,7 +275,40 @@ mod tests {
     use crate::island_gen::{build_island_atlas, IslandGenParams};
 
     #[test]
-    fn peak_threshold_scales_with_maximum_height() {
+    fn peak_floor_scales_with_composed_edifice() {
+        // The floor must track the volcano params that produce the peak, and
+        // must NOT move when only the clamp ceiling changes.
+        let base = IslandGenParams::default();
+        let base_floor = min_peak_elevation_m(&base);
+
+        let mut taller = base.clone();
+        taller.volcano.shield_height_m *= 2.0;
+        taller.volcano.summit_height_m *= 2.0;
+        assert!(
+            min_peak_elevation_m(&taller) > base_floor,
+            "floor should rise with a taller composed edifice"
+        );
+
+        let mut higher_ceiling = base.clone();
+        higher_ceiling.island.maximum_height_m *= 2.0;
+        assert!(
+            (min_peak_elevation_m(&higher_ceiling) - base_floor).abs() < 1e-4,
+            "raising only the clamp ceiling must not demand a taller peak"
+        );
+
+        // Sanity on the default relationship: the authored composed peak must
+        // clear its own floor with room for discretization losses.
+        let composed = base.island.sea_level_m
+            + base.volcano.shield_height_m
+            + base.volcano.summit_height_m;
+        assert!(base_floor < composed * 0.85);
+    }
+
+    #[test]
+    fn raising_height_ceiling_alone_does_not_fail_peak_check() {
+        // Regression for the original coupling: with the floor derived from
+        // maximum_height_m, raising the ceiling without touching the volcano
+        // demanded peaks the authored cones never composed.
         let mut params = IslandGenParams::default();
         params.island.maximum_height_m = 80.0;
         params.island.sea_level_m = 0.0;
@@ -227,6 +319,24 @@ mod tests {
             report.messages.iter().any(|m| m.contains("Peak elevation")),
             "expected peak message, got {report:?}"
         );
+    }
+
+    #[test]
+    fn clamp_plateau_fails_ceiling_check() {
+        // Edifice composed far above the ceiling: the analytic clamp flattens
+        // the summit into a plateau at sea + maximum_height_m, which the
+        // ceiling check must reject (this was the visible symptom of the
+        // hardcoded-ridge bug).
+        let mut params = IslandGenParams::default();
+        params.island.maximum_height_m = 20.0;
+        params.fit_to_ocean_extent();
+        let atlas = build_island_atlas(&params);
+        let report = validate_atlas(&atlas, &params);
+        assert!(
+            report.messages.iter().any(|m| m.contains("Clamp plateau")),
+            "expected plateau violation, got {report:?}"
+        );
+        assert!(!report.passed);
     }
 
     #[test]

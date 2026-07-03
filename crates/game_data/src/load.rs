@@ -187,6 +187,6 @@ mod tests {
     #[test]
     fn loads_workspace_assets() {
         let registry = load_registry_from_directory(workspace_assets()).expect("registry loads");
-        assert_eq!(registry.app.id.as_str(), "app.vertical_slice");
+        assert_eq!(registry.app.id.as_str(), "app.default");
     }
 }

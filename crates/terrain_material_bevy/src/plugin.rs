@@ -156,14 +156,3 @@ fn poll_texture_bake(
         pending.task = Some(task);
     }
 }
-
-/// Rebuild textures when YAML recipes change (hot reload).
-pub fn rebuild_procedural_materials(
-    yaml_path: Option<&std::path::PathBuf>,
-    pending: &mut PendingTextureBake,
-    state: &mut TerrainProceduralMaterialState,
-) {
-    state.ready = false;
-    pending.task = None;
-    let _ = yaml_path;
-}

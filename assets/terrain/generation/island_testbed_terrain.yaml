@@ -1,0 +1,6 @@
+﻿schema_version: 1
+id: terrain.island_testbed
+description: Island testbed — surface comes from the island atlas; no authored ops.
+spawn: [70.0, 0.0, 160.0]
+includes: []
+operations: []

@@ -1,5 +1,5 @@
 // crates/game_bevy/src/physics/water_physics.rs
-//! Water physics — buoyancy, flow, shallow movement (VS2 Phase 11).
+//! Water physics — buoyancy, flow, wading and submersion (VS2 Phase 11).
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
@@ -11,6 +11,23 @@ use crate::terrain::TerrainFeatureRegistry;
 use crate::ui::WaterPhysicsTweaks;
 use terrain_generation::WaterQuery;
 
+/// Depth (at the capsule center) beyond `shallow_depth_m` over which drag
+/// ramps from the wading scale down to the fully submerged scale.
+const SUBMERGE_RAMP_M: f32 = 1.0;
+
+/// Per-tick horizontal velocity multiplier when fully submerged. The player
+/// does not float: they sink to the underwater terrain and move along it
+/// slowly, as heavy wading rather than free walking.
+const SUBMERGED_SPEED_SCALE: f32 = 0.45;
+
+/// Terminal sink speed while submerged — water resistance caps free fall so
+/// stepping off the shelf reads as sinking, not plummeting.
+const SUBMERGED_TERMINAL_SINK_MPS: f32 = 2.5;
+
+/// Per-tick damping applied to upward velocity while submerged (kills full
+/// strength jumps underwater without forbidding small hops off the bottom).
+const SUBMERGED_JUMP_DAMP: f32 = 0.85;
+
 #[derive(Component, Default)]
 pub struct WetnessState {
     pub wetness: f32,
@@ -18,6 +35,58 @@ pub struct WetnessState {
 
 #[derive(Component)]
 pub struct WaterSensor;
+
+/// Pure description of how a given immersion depth affects the player.
+/// Kept free of ECS types so it is directly unit-testable.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WadingProfile {
+    /// Per-tick multiplier for horizontal velocity (1.0 = unimpeded).
+    pub horizontal_scale: f32,
+    /// Maximum downward speed, if the water is deep enough to cap it.
+    pub terminal_sink_mps: Option<f32>,
+    /// Wading band: deep enough to slow movement, shallow enough to walk.
+    pub in_shallow_water: bool,
+    /// Capsule center below the surface by more than the shallow band.
+    pub submerged: bool,
+}
+
+impl WadingProfile {
+    pub const DRY: Self = Self {
+        horizontal_scale: 1.0,
+        terminal_sink_mps: None,
+        in_shallow_water: false,
+        submerged: false,
+    };
+}
+
+/// Map immersion depth (measured at the capsule center) to movement effects.
+///
+/// 0..shallow_depth: drag blends from none to the authored shallow scale.
+/// shallow_depth..+ramp: drag blends on toward the submerged scale, sinking
+/// becomes speed-capped, and jumps are damped. Beyond that: fully submerged.
+pub fn wading_profile(depth_at_center: f32, tweaks: &WaterPhysicsTweaks) -> WadingProfile {
+    if depth_at_center <= 0.0 {
+        return WadingProfile::DRY;
+    }
+    let shallow_depth = tweaks.shallow_depth_m.max(0.05);
+    if depth_at_center < shallow_depth {
+        let t = depth_at_center / shallow_depth;
+        return WadingProfile {
+            horizontal_scale: 1.0 + (tweaks.shallow_speed_scale - 1.0) * t,
+            terminal_sink_mps: None,
+            in_shallow_water: true,
+            submerged: false,
+        };
+    }
+    let t = ((depth_at_center - shallow_depth) / SUBMERGE_RAMP_M).clamp(0.0, 1.0);
+    WadingProfile {
+        horizontal_scale: tweaks.shallow_speed_scale
+            + (SUBMERGED_SPEED_SCALE - tweaks.shallow_speed_scale) * t,
+        terminal_sink_mps: Some(SUBMERGED_TERMINAL_SINK_MPS),
+        in_shallow_water: false,
+        submerged: true,
+    }
+}
 
 pub struct WaterPhysicsPlugin;
 
@@ -105,12 +174,26 @@ pub(crate) fn apply_shallow_water_movement(
     };
     for (tf, mut vel, mut movement) in &mut players {
         let point = [tf.translation.x, tf.translation.y, tf.translation.z];
-        if let Some(sample) = hydro.water.water_at(point) {
-            movement.in_shallow_water =
-                sample.depth > 0.0 && sample.depth < tweaks.shallow_depth_m;
-            if movement.in_shallow_water {
-                vel.x *= tweaks.shallow_speed_scale;
-                vel.z *= tweaks.shallow_speed_scale;
+        let depth = hydro
+            .water
+            .water_at(point)
+            .map(|sample| sample.depth)
+            .unwrap_or(0.0);
+        // Previously the flag was only written inside the Some(sample) branch,
+        // so leaving the water entirely left it stuck on.
+        let profile = wading_profile(depth, &tweaks);
+        movement.in_shallow_water = profile.in_shallow_water;
+
+        if profile.horizontal_scale < 1.0 {
+            vel.x *= profile.horizontal_scale;
+            vel.z *= profile.horizontal_scale;
+        }
+        if profile.submerged && vel.y > 0.0 {
+            vel.y *= SUBMERGED_JUMP_DAMP;
+        }
+        if let Some(terminal) = profile.terminal_sink_mps {
+            if vel.y < -terminal {
+                vel.y = -terminal;
             }
         }
     }
@@ -161,5 +244,50 @@ mod water_physics_tests {
             b.position_xz[1] - a.position_xz[1],
         );
         assert!(dir.length_squared() > 1e-4);
+    }
+
+    #[test]
+    fn dry_profile_is_identity() {
+        let tweaks = WaterPhysicsTweaks::default();
+        assert_eq!(wading_profile(0.0, &tweaks), WadingProfile::DRY);
+        assert_eq!(wading_profile(-1.0, &tweaks), WadingProfile::DRY);
+    }
+
+    #[test]
+    fn wading_drag_scales_with_depth() {
+        let tweaks = WaterPhysicsTweaks::default(); // shallow 1.5 m, scale 0.7
+        let ankle = wading_profile(0.15, &tweaks);
+        let waist = wading_profile(1.2, &tweaks);
+        assert!(ankle.in_shallow_water && waist.in_shallow_water);
+        assert!(!ankle.submerged && !waist.submerged);
+        assert!(
+            ankle.horizontal_scale > waist.horizontal_scale,
+            "deeper wading must drag more: ankle {} vs waist {}",
+            ankle.horizontal_scale,
+            waist.horizontal_scale
+        );
+        assert!(waist.horizontal_scale >= tweaks.shallow_speed_scale - 1e-4);
+        assert!(ankle.terminal_sink_mps.is_none());
+    }
+
+    #[test]
+    fn submerged_profile_caps_sinking_and_slows_further() {
+        let tweaks = WaterPhysicsTweaks::default();
+        let deep = wading_profile(tweaks.shallow_depth_m + SUBMERGE_RAMP_M + 1.0, &tweaks);
+        assert!(deep.submerged);
+        assert!(!deep.in_shallow_water);
+        assert_eq!(deep.terminal_sink_mps, Some(SUBMERGED_TERMINAL_SINK_MPS));
+        assert!((deep.horizontal_scale - SUBMERGED_SPEED_SCALE).abs() < 1e-4);
+    }
+
+    #[test]
+    fn profile_is_continuous_across_shallow_boundary() {
+        let tweaks = WaterPhysicsTweaks::default();
+        let just_below = wading_profile(tweaks.shallow_depth_m - 1e-3, &tweaks);
+        let just_above = wading_profile(tweaks.shallow_depth_m + 1e-3, &tweaks);
+        assert!(
+            (just_below.horizontal_scale - just_above.horizontal_scale).abs() < 0.01,
+            "drag must not step discontinuously at the shallow boundary"
+        );
     }
 }

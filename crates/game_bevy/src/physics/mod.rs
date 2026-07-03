@@ -18,6 +18,7 @@ use crate::camera::{
     PlayerInterpolation,
 };
 use crate::data::ConfigRegistryResource;
+use crate::data::UserSetupPrefs;
 use crate::player::{CharacterMotorState, MovementIntent, MovementSpeed, PlayerFacingMode};
 use crate::player::{
     classify_locomotion, resolve_facing_yaw, Player, PlayerCapsuleVisual, PlayerMovementState,
@@ -26,6 +27,7 @@ use crate::state::AppState;
 use crate::terrain::spawn_terrain_uploaded;
 use crate::terrain::{TerrainFeatureRegistry, TerrainPipelineState};
 use crate::ui::MovementTweaks;
+use crate::world::effective_world_from_prefs;
 use terrain_generation::WaterQuery;
 use voxel_core::ChunkCoord;
 
@@ -373,10 +375,11 @@ fn capsule_bottom_offset(player: &CompiledPlayer) -> f32 {
 
 fn detect_player_water(
     registry: Res<ConfigRegistryResource>,
+    prefs: Res<UserSetupPrefs>,
     features: Res<TerrainFeatureRegistry>,
     mut players: Query<(&Transform, &mut PlayerMovementState), With<Player>>,
 ) {
-    let Ok(world) = registry.0.active_world() else {
+    let Ok(world) = effective_world_from_prefs(&registry.0, &prefs) else {
         return;
     };
     let Some(water) = registry.0.water.get(&world.water) else {
@@ -405,6 +408,7 @@ fn detect_player_water(
 fn apply_player_water_physics(
     time: Res<Time<Fixed>>,
     registry: Res<ConfigRegistryResource>,
+    prefs: Res<UserSetupPrefs>,
     pipeline: Res<TerrainPipelineState>,
     intent: Query<&PlayerMoveIntent, With<Player>>,
     mut players: Query<
@@ -412,7 +416,7 @@ fn apply_player_water_physics(
         With<Player>,
     >,
 ) {
-    let Ok(world) = registry.0.active_world() else {
+    let Ok(world) = effective_world_from_prefs(&registry.0, &prefs) else {
         return;
     };
     let Some(water) = registry.0.water.get(&world.water) else {

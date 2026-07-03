@@ -1,7 +1,7 @@
 ﻿schema_version: 1
-id: app.vertical_slice
+id: app.default
 
-world: world.vertical_slice
+world: world.island_testbed
 player: player.default
 camera: camera.mmo_default
 performance: performance.default

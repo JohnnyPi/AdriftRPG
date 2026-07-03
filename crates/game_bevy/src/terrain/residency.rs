@@ -60,7 +60,7 @@ pub fn chunk_has_uploaded_mesh(
     coord: ChunkCoord,
 ) -> bool {
     use crate::terrain::ChunkState;
-    pipeline.chunks.iter().any(|chunk| {
+    pipeline.chunks.values().any(|chunk| {
         chunk.coord == coord && chunk.state == ChunkState::Ready && chunk.entity.is_some()
     })
 }

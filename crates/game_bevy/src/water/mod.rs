@@ -10,6 +10,7 @@ use crate::terrain::{TerrainFeatureRegistry, TerrainPipelineState, TerrainWorldI
 use crate::ui::WaterTweaks;
 use crate::data::UserSetupPrefs;
 use crate::world::requested_world_id;
+use crate::world::effective_world_from_prefs;
 
 #[derive(ShaderType, Clone, Copy, Debug)]
 pub struct WaterParams {
@@ -28,6 +29,13 @@ pub struct WaterMaterial {
 impl Material for WaterMaterial {
     fn fragment_shader() -> ShaderRef {
         "shaders/water.wgsl".into()
+    }
+
+    // Water must render in the transparent pass: as an opaque material the
+    // plane wrote flat unlit-looking color over everything at sea level and
+    // hid the terrain shelf below it.
+    fn alpha_mode(&self) -> AlphaMode {
+        AlphaMode::Blend
     }
 }
 
@@ -98,30 +106,6 @@ fn spawn_water_bodies(
         Mesh3d(meshes.add(Plane3d::default().mesh().size(ocean_extent, ocean_extent))),
         MeshMaterial3d(sea_mat),
         Transform::from_xyz(0.0, sea_level + 0.02, 0.0),
-    ));
-
-    let pool_elevation = if tweaks.use_overrides {
-        tweaks.pool_elevation_m
-    } else {
-        registry
-            .0
-            .upland_pool_hydrology()
-            .map(|h| h.elevation_m)
-            .unwrap_or(31.5)
-    };
-    let pool_world = world.recipe_to_world([82.0, 0.0, 196.0]);
-    let pool_mat = make_water_material(
-        &mut materials,
-        water_def,
-        registry.0.water_body_material(&shared::StableId::new("waterbody.upland_pool")),
-        pool_elevation,
-        &tweaks,
-    );
-    commands.spawn((
-        WaterSurface,
-        Mesh3d(meshes.add(Plane3d::default().mesh().size(48.0, 48.0))),
-        MeshMaterial3d(pool_mat),
-        Transform::from_xyz(pool_world[0], pool_elevation + 0.02, pool_world[2]),
     ));
 
     let river_spline = pipeline
@@ -285,10 +269,11 @@ fn build_river_ribbon_mesh(
 fn animate_water(
     time: Res<Time>,
     registry: Res<ConfigRegistryResource>,
+    prefs: Res<UserSetupPrefs>,
     mut water: Query<&mut MeshMaterial3d<WaterMaterial>>,
     mut materials: ResMut<Assets<WaterMaterial>>,
 ) {
-    let Ok(world) = registry.0.active_world() else {
+    let Ok(world) = effective_world_from_prefs(&registry.0, &prefs) else {
         return;
     };
     let Some(water_def) = registry.0.water.get(&world.water) else {

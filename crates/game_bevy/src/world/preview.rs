@@ -12,6 +12,7 @@ use voxel_core::{fnv1a_update, quantize_density_mm, FNV_OFFSET};
 use crate::data::UserSetupPrefs;
 use crate::terrain::{build_density_source_from_prefs, compile_terrain_recipe, island_params_from_compiled};
 use crate::ui::TerrainTweaks;
+use crate::world::effective_world_from_prefs;
 
 #[derive(Resource, Clone, Debug, Default)]
 pub struct MapPreviewState {
@@ -44,11 +45,7 @@ pub fn hash_prefs(prefs: &UserSetupPrefs) -> u64 {
 }
 
 pub fn build_preview_atlas(registry: &ConfigRegistry, prefs: &UserSetupPrefs) -> IslandAtlas {
-    let world_id = prefs.world_stable_id();
-    let world = registry
-        .world_by_id(&world_id)
-        .or_else(|_| registry.active_world())
-        .expect("world");
+    let world = effective_world_from_prefs(registry, prefs).expect("world");
     if let Some(base) = registry.island_generation_for_world(world) {
         let merged = prefs.apply_overrides(base);
         let water = registry.water.get(&world.water).expect("water");

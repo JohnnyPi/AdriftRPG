@@ -56,7 +56,7 @@ fn spawn_environment_when_ready(
     let Some(spawn_chunk) = pipeline.spawn_chunk else {
         return;
     };
-    let spawn_ready = pipeline.chunks.iter().any(|c| {
+    let spawn_ready = pipeline.chunks.values().any(|c| {
         c.coord == spawn_chunk && c.state == ChunkState::Ready && c.entity.is_some()
     });
     if !spawn_ready {

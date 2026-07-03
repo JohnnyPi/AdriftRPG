@@ -1,5 +1,13 @@
 // crates/terrain_generation/src/world_setup.rs
 //! Shared world/recipe setup from compiled YAML (used by runtime and diagnostics).
+//!
+//! Also home to [`validate_island_world_budget`]: the loud, message-producing
+//! check that an authored island actually fits the world that hosts it
+//! (horizontal footprint vs. chunk extents, vertical relief vs. the chunk
+//! ceiling/floor, sea-level agreement between the water and island defs, and
+//! whether `fit_to_ocean_extent` would have silently rescaled). Callers that
+//! construct atlas worlds should surface these messages instead of letting the
+//! generator absorb a contradictory configuration.
 
 use game_data::{
     CompiledIslandGeneration, CompiledWater, CompiledWorld, ConfigRegistry,
@@ -137,11 +145,182 @@ pub fn island_params_from_compiled(
     }
 }
 
+/// World-space bounds `[min, max)` in meters covered by the chunk volume along
+/// one axis, matching `chunk_gen::chunk_axis_range` (`start = -(extent / 2)`).
+///
+/// Note the asymmetry for odd extents: `extent 3, cells 16` spans `[-16, 32)`.
+fn world_axis_bounds_m(cells: u32, extent_chunks: u32, cell_size_m: f32) -> (f32, f32) {
+    let start_chunk = -((extent_chunks / 2) as i32);
+    let end_chunk = start_chunk + extent_chunks as i32;
+    (
+        start_chunk as f32 * cells as f32 * cell_size_m,
+        end_chunk as f32 * cells as f32 * cell_size_m,
+    )
+}
+
+/// Validate that an authored island fits inside the world that hosts it.
+///
+/// Returns human-readable messages; an empty vector means the configuration is
+/// coherent. This is the loud replacement for `fit_to_ocean_extent`'s silent
+/// (and distorting) rescale: authoring errors should fail with an explanation,
+/// not be absorbed into a warped miniature.
+///
+/// Checks performed:
+/// 1. Horizontal: island footprint support (lobe offsets + falloff + warp) must
+///    fit inside the chunk volume's XZ extents, and inside the atlas
+///    (`fit_to_ocean_extent` must be a no-op).
+/// 2. Vertical ceiling: `maximum_height_m` plus surface-noise amplitudes must
+///    stay below the chunk volume's top, and the composed volcano relief must
+///    not exceed the declared `maximum_height_m`.
+/// 3. Vertical floor: the coastal shelf (plus deep-falloff slack) must stay
+///    above the chunk volume's bottom.
+/// 4. Sea level: the water def's sea level must sit inside the world's Y range
+///    and agree with the island def's `sea_level_m` (cave placement in
+///    `append_generated_island_caves` reads the island value).
+pub fn validate_island_world_budget(
+    compiled: &CompiledIslandGeneration,
+    world: &CompiledWorld,
+    water_sea_level_m: f32,
+) -> Vec<String> {
+    let mut messages = Vec::new();
+    let params = island_params_from_compiled(compiled, world, world.seed, water_sea_level_m);
+
+    let cell_size = world.cell_size_m;
+    let cells = world.chunk_cells;
+    let extent = world.world_extent_chunks;
+    let (x_min, x_max) = world_axis_bounds_m(cells[0], extent[0], cell_size);
+    let (y_min, y_max) = world_axis_bounds_m(cells[1], extent[1], cell_size);
+    let (z_min, z_max) = world_axis_bounds_m(cells[2], extent[2], cell_size);
+
+    // --- 1. Horizontal footprint vs. chunk volume and atlas -----------------
+    let support_radius = params.island.footprint_support_radius_m();
+    let horizontal_budget = x_min
+        .abs()
+        .min(x_max)
+        .min(z_min.abs())
+        .min(z_max);
+    if support_radius > horizontal_budget {
+        messages.push(format!(
+            "island footprint support radius {support_radius:.1} m (diameter \
+             {diameter:.0} m incl. lobe offsets, falloff, and {warp:.1} m warp) exceeds \
+             the chunk volume's horizontal half-extent {horizontal_budget:.1} m; the \
+             coastline will clip at the world edge. Reduce playable_diameter_m or \
+             warp_amplitude, or enlarge chunks.world_extent.",
+            diameter = params.island.playable_diameter_m,
+            warp = params.island.warp_amplitude,
+        ));
+    }
+    let max_fit = params.max_fit_diameter_m();
+    if params.island.playable_diameter_m > max_fit {
+        let scale = max_fit / params.island.playable_diameter_m;
+        messages.push(format!(
+            "playable_diameter_m {diameter:.0} does not fit ocean_extent_m {extent:.0} \
+             (maximum {max_fit:.0} m); fit_to_ocean_extent would silently rescale by \
+             {scale:.3} horizontally and {vscale:.3} vertically, distorting the authored \
+             shape. Author the island at world scale instead.",
+            diameter = params.island.playable_diameter_m,
+            extent = params.ocean_extent_m,
+            vscale = scale.sqrt().clamp(0.25, 1.0),
+        ));
+    }
+
+    // --- 2. Vertical ceiling -------------------------------------------------
+    const CEILING_MARGIN_M: f32 = 2.0;
+    let noise_headroom =
+        params.surface_noise.regional_amplitude_m + params.surface_noise.local_amplitude_m;
+    let worst_case_peak = params.island.maximum_height_m + noise_headroom;
+    if worst_case_peak > y_max - CEILING_MARGIN_M {
+        messages.push(format!(
+            "maximum_height_m {height:.1} + noise amplitudes {noise:.1} = \
+             {peak:.1} m exceeds the chunk volume ceiling {ceiling:.1} m (minus \
+             {margin:.0} m margin); the summit will clip flat at the world top.",
+            height = params.island.maximum_height_m,
+            noise = noise_headroom,
+            peak = worst_case_peak,
+            ceiling = y_max,
+            margin = CEILING_MARGIN_M,
+        ));
+    }
+    let composed_relief = params.volcano.shield_height_m
+        + params.volcano.summit_height_m
+        + params.volcano.caldera_rim_height_m;
+    if composed_relief > params.island.maximum_height_m {
+        messages.push(format!(
+            "composed volcano relief (shield {shield:.1} + summit {summit:.1} + rim \
+             {rim:.1} = {relief:.1} m) exceeds declared maximum_height_m {max:.1}; \
+             raise maximum_height_m or lower the volcano heights so validation and \
+             classification thresholds see the true peak.",
+            shield = params.volcano.shield_height_m,
+            summit = params.volcano.summit_height_m,
+            rim = params.volcano.caldera_rim_height_m,
+            relief = composed_relief,
+            max = params.island.maximum_height_m,
+        ));
+    }
+
+    // --- 3. Vertical floor ---------------------------------------------------
+    // The bathymetry continues past the shelf on the deep slope; reserve slack
+    // for that falloff rather than letting the ocean floor clamp at the chunk
+    // bottom into a vertical wall.
+    const DEEP_FALLOFF_SLACK_M: f32 = 8.0;
+    let shelf_floor = water_sea_level_m - params.coast.shelf_depth_max_m - DEEP_FALLOFF_SLACK_M;
+    if shelf_floor < y_min {
+        messages.push(format!(
+            "coastal shelf bottom (sea {sea:.1} - shelf_depth_max_m {depth:.1} - \
+             {slack:.0} m deep-falloff slack = {floor:.1} m) is below the chunk volume \
+             floor {bottom:.1} m; the ocean floor will clamp into a vertical wall.",
+            sea = water_sea_level_m,
+            depth = params.coast.shelf_depth_max_m,
+            slack = DEEP_FALLOFF_SLACK_M,
+            floor = shelf_floor,
+            bottom = y_min,
+        ));
+    }
+
+    // --- 4. Sea level --------------------------------------------------------
+    if water_sea_level_m <= y_min || water_sea_level_m >= y_max {
+        messages.push(format!(
+            "water sea level {water_sea_level_m:.1} m is outside the chunk volume \
+             Y range [{y_min:.1}, {y_max:.1})."
+        ));
+    }
+    let island_sea = compiled.island.sea_level_m;
+    if (island_sea - water_sea_level_m).abs() > 0.01 {
+        messages.push(format!(
+            "island_gen sea_level_m {island_sea:.2} disagrees with the world's water \
+             def sea level {water_sea_level_m:.2}; the runtime uses the water value \
+             for the atlas but generated cave placement reads the island value \
+             (cave_center_height). Set them equal.",
+        ));
+    }
+
+    messages
+}
+
 pub fn compile_terrain_recipe(
     registry: &ConfigRegistry,
     world: &CompiledWorld,
     water: &CompiledWater,
     seed_override: Option<u64>,
+) -> TerrainRecipe {
+    compile_terrain_recipe_with_island(registry, world, water, seed_override, None)
+}
+
+/// Like [`compile_terrain_recipe`], but generated island cave ops are built
+/// from `island_gen_override` when provided instead of the registry's base
+/// definition.
+///
+/// Callers that apply user overrides to the island def (e.g. setup-screen
+/// prefs) must pass the merged def here; otherwise the cave geometry is
+/// compiled from the base def while the atlas and the terrain-recipe hash use
+/// the merged one, so cave-parameter overrides change the hash without
+/// changing the terrain (or vice versa after a cache hit).
+pub fn compile_terrain_recipe_with_island(
+    registry: &ConfigRegistry,
+    world: &CompiledWorld,
+    water: &CompiledWater,
+    seed_override: Option<u64>,
+    island_gen_override: Option<&CompiledIslandGeneration>,
 ) -> TerrainRecipe {
     let terrain = registry
         .terrain
@@ -159,11 +338,17 @@ pub fn compile_terrain_recipe(
             }
         }
     }
-    if let Some(island_gen) = registry.island_generation_for_world(world) {
+    let island_gen = island_gen_override.or_else(|| registry.island_generation_for_world(world));
+    if let Some(island_gen) = island_gen {
         append_generated_island_caves(&mut ops, island_gen, seed_override.unwrap_or(world.seed));
     }
 
-    if ops.is_empty() {
+    // The hardcoded fallback slice exists so op-based worlds without any
+    // authored operations still produce terrain. Atlas worlds get their terrain
+    // from the island generator; injecting the fallback underneath the atlas
+    // superimposes a phantom surface on the generated island (and previously
+    // did exactly that whenever generated caves were disabled).
+    if ops.is_empty() && island_gen.is_none() {
         return default_vertical_slice_recipe(
             seed_override.unwrap_or(world.seed),
             water.sea_level_m,
@@ -186,6 +371,10 @@ pub fn compile_terrain_recipe(
 }
 
 /// Island-atlas density source matching the runtime compile path (for diagnostics/tests).
+///
+/// Panics with the full message list if [`validate_island_world_budget`] fails:
+/// diagnostics and tests must not run against a world/island configuration the
+/// generator would have to distort or clip to satisfy.
 pub fn build_atlas_density_source(
     registry: &ConfigRegistry,
     world_id: &StableId,
@@ -198,9 +387,19 @@ pub fn build_atlas_density_source(
         .expect("island gen");
     let mut merged = base.clone();
     merged.seed = seed;
+
+    let budget_messages = validate_island_world_budget(&merged, world, water.sea_level_m);
+    if !budget_messages.is_empty() {
+        panic!(
+            "island/world budget validation failed for {world_id:?}:\n  - {}",
+            budget_messages.join("\n  - ")
+        );
+    }
+
     let params = island_params_from_compiled(&merged, world, seed, water.sea_level_m);
     let atlas = build_island_atlas(&params);
-    let recipe = compile_terrain_recipe(registry, world, water, Some(seed));
+    let recipe =
+        compile_terrain_recipe_with_island(registry, world, water, Some(seed), Some(&merged));
     RecipeDensitySource::new(recipe).with_atlas(atlas, 3.5)
 }
 

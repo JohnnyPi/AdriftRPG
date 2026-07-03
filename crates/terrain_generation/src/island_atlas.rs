@@ -1,7 +1,7 @@
 // crates/terrain_generation/src/island_atlas.rs
 //! Aligned island-scale field products (VS3 §2).
 
-use crate::field2d::Field2D;
+use crate::field2d::{smoothstep, Field2D};
 use crate::resolution::GenerationResolution;
 use crate::water_body::RiverSpline;
 
@@ -13,6 +13,20 @@ pub struct BiomeWeights {
     pub beach: f32,
     pub wetland: f32,
 }
+
+/// Island mask value below which a column is treated as pure ocean and takes
+/// its height from bathymetry alone.
+const MASK_OCEAN_MAX: f32 = 0.02;
+
+/// Island mask value above which a column is treated as pure land and takes
+/// its height from the composed land elevation alone. Between the two bounds
+/// land and bathymetry are blended so the coastline transitions continuously.
+///
+/// This replaces the old hard branch (`mask > 0.01 -> land`) plus the
+/// `land_elev > sea + 0.25` escape hatch: with ±regional-noise on the ocean
+/// side, that escape hatch left patches of solid terrain floating exactly at
+/// sea level offshore — the teal "crust" players could stand on.
+const MASK_LAND_MIN: f32 = 0.60;
 
 /// Island-scale field atlas. Each field records its tier (regional vs local spacing)
 /// and epoch (post-erosion hydrology, post-beach slope, etc.) in doc comments below.
@@ -72,16 +86,21 @@ impl IslandAtlas {
         self.elevation_regional.sample_bilinear(x, z) + self.elevation_local.sample_bilinear(x, z)
     }
 
+    /// Terrain height for this column: land elevation on the island interior,
+    /// bathymetry in open ocean, and a mask-weighted blend of the two across
+    /// the coastal fringe so the surface is continuous through the shoreline.
     pub fn surface_height_at(&self, x: f32, z: f32) -> f32 {
-        let mask = self.island_mask.sample_bilinear(x, z);
-        if mask > 0.01 {
+        let mask = self.island_mask.sample_bilinear(x, z).clamp(0.0, 1.0);
+        if mask >= MASK_LAND_MIN {
             return self.composed_land_elevation_at(x, z);
         }
-        let land_elev = self.composed_land_elevation_at(x, z);
-        if land_elev > self.sea_level_m + 0.25 {
-            return land_elev;
+        let sea_floor = self.bathymetry.sample_bilinear(x, z);
+        if mask <= MASK_OCEAN_MAX {
+            return sea_floor;
         }
-        self.bathymetry.sample_bilinear(x, z)
+        let land = self.composed_land_elevation_at(x, z);
+        let t = smoothstep(MASK_OCEAN_MAX, MASK_LAND_MIN, mask);
+        sea_floor + (land - sea_floor) * t
     }
 
     pub fn slope_at(&self, x: f32, z: f32) -> f32 {

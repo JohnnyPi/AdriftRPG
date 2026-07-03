@@ -37,8 +37,10 @@ impl Plugin for VerticalSlicePlugin {
 
 pub fn configure_vertical_slice_app(app: &mut App, window_title: &str) {
     let assets = assets_root();
-    info!(assets_root = %assets.display(), "using asset directory");
-    app.add_plugins((
+
+    // LogPlugin must be installed before any logging happens, so DefaultPlugins
+    // goes in first and the assets_root log moves after it.
+    app.add_plugins(
         DefaultPlugins
             .set(WindowPlugin {
                 primary_window: Some(Window {
@@ -52,6 +54,11 @@ pub fn configure_vertical_slice_app(app: &mut App, window_title: &str) {
                 file_path: assets.to_string_lossy().into_owned(),
                 ..default()
             }),
+    );
+
+    info!(assets_root = %assets.display(), "using asset directory");
+
+    app.add_plugins((
         DataAssetPlugin,
         crate::data::VisualConfigHotReloadPlugin,
         BiomePlugin,

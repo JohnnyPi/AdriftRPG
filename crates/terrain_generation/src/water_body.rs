@@ -74,6 +74,8 @@ pub struct WaterBodyRegistry {
 }
 
 impl WaterBodyRegistry {
+    /// Test helper constructing sea + upland pool bodies for unit tests.
+    #[allow(dead_code)]
     pub fn demo_registry(sea_level: f32, pool_elevation: f32) -> Self {
         let mut bodies = BTreeMap::new();
         bodies.insert(

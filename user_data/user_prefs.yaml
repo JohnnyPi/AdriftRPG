@@ -1,6 +1,5 @@
-world_id: world.expanded_slice_hd
-seed: 800000
-use_expanded_profile: true
+world_id: world.island_testbed
+seed: 48129
 island_overrides: {}
 preview_color_mode: elevation
 preview_resolution: 256

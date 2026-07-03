@@ -63,9 +63,11 @@ pub struct TerrainChunkEntity {
     pub coord: ChunkCoord,
 }
 
-/// Per-chunk material instance carrying chunk-local slot remap uniforms.
-#[derive(Component, Debug, Clone)]
-pub struct TerrainChunkMaterial(pub Handle<terrain_material_bevy::TerrainPbrMaterial>);
+/// Marker for chunks that own a per-chunk material instance (chunk-local slot
+/// remap uniforms baked into its `MeshMaterial3d` handle). Excludes the chunk
+/// from the global-handle sync in `sync_chunk_terrain_materials`.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct TerrainChunkMaterial;
 
 #[derive(Resource, Debug)]
 pub struct TerrainRevision {

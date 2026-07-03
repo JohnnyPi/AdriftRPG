@@ -1,0 +1,107 @@
+﻿schema_version: 1
+id: island_gen.island_testbed
+description: >
+  Small island testbed (formerly island_gen.vs3_volcanic), authored at true
+  world scale. Shape params are unchanged from the verified vs3 tuning; the
+  hydrology and cave sections are retuned so every feature type (river,
+  cave, overhang, beach, shelf) is present and discoverable at 180 m.
+  World budget this file MUST respect (see docs/terrain_yaml_authoring.md):
+    horizontal: chunks cover X/Z in [-128, +128); atlas covers +/-144 (ocean_extent 288)
+    vertical:   chunks cover Y in [-80, +80); sea level is 2.0 (from water.tropical_shallow)
+  Rule of thumb: footprint support radius (~0.59 * diameter + warp) must stay
+  under 128; peak elevation + noise amplitudes must stay under +78.
+
+island:
+  # Support extends to ~0.59 * diameter from center (lobe offsets + falloff),
+  # plus warp_amplitude. 180 -> ~106 m + 6 m warp = 112 m < 128 m chunk half-extent.
+  playable_diameter_m: 180
+  # Absolute elevation ceiling for validation; actual composed peak is ~48 m
+  # (shield 30 + summit 16 + rim 2) before +/-5.2 m of noise.
+  maximum_height_m: 50
+  # Must equal the world's water def sea level (water.tropical_shallow -> 2.0);
+  # generated cave placement reads this value.
+  sea_level_m: 2.0
+  lobe_count: 3
+  # Period = 1/frequency = 50 m -> 3-4 coastline undulations across a 180 m island.
+  warp_frequency: 0.02
+  warp_amplitude: 6
+
+volcano:
+  # Recipe-space coords; world.coord_offset [128,0,128] maps this to world (0,0).
+  center: [128.0, 128.0]
+  # 30 m over 78 m with exponent 1.3: gentle near center, ~27 deg max at the rim.
+  shield_radius_m: 78
+  shield_exponent: 1.3
+  shield_height_m: 30
+  summit_radius_m: 30
+  summit_exponent: 2.2
+  summit_height_m: 16
+  caldera_radius_m: 10
+  caldera_depth_m: 7
+  caldera_rim_height_m: 2
+  radial_ridge_count: 7
+  collapse_direction_deg: 215
+  # Kept proportional to total relief (~12% of peak).
+  collapse_depth_m: 6
+
+surface_noise:
+  # ~8% of island height. Keep regional+local under the headroom left by
+  # maximum_height_m (78 - 48 = 30 m of ceiling margin here).
+  regional_amplitude_m: 4
+  local_amplitude_m: 1.2
+  voxel_amplitude_m: 0.3
+
+hydrology:
+  routing: d8
+  rainfall_base: 1.0
+  # Units: accumulation CELLS on the regional grid (288 m / regional_m 8 = 36x36,
+  # ~400 land cells). The island drains into ~7 radial basins, so the largest
+  # single basin only collects a few dozen cells. The previous thresholds
+  # (stream 25 / river 80) exceeded that and the primary river never formed
+  # ("Primary river missing" in atlas validation). These values guarantee a
+  # carved primary river on the testbed.
+  stream_threshold: 12
+  permanent_river_threshold: 40
+  minimum_stream_length_m: 20
+
+erosion:
+  stream_power_iterations: 22
+  m: 0.48
+  n: 1.0
+  # 22 iterations x 0.15 m cap = <=3.3 m of carving, ~7% of relief.
+  maximum_step_m: 0.15
+  thermal_iterations: 12
+  thermal_transfer_rate: 0.16
+
+coast:
+  # Coastline sits ~78-95 m from center; chunk edge is 128 m. Shelf must fit
+  # in that 30-50 m ring before deep falloff.
+  shelf_width_min_m: 15
+  shelf_width_max_m: 45
+  # Ocean floor budget is -80 m; shelf depths stay shallow, deep slope takes over.
+  shelf_depth_min_m: 6
+  shelf_depth_max_m: 16
+  deep_slope_min: 0.18
+  deep_slope_max: 0.5
+
+beaches:
+  maximum_slope_deg: 13
+  # Beach biome band is elevation <= 14 within 35 m of water; widths sized to land there.
+  width_min_m: 5
+  width_max_m: 14
+  berm_height_min_m: 0.4
+  berm_height_max_m: 1.0
+
+caves:
+  # Testbed caves are deliberately oversized relative to the island so they
+  # can be found in a few minutes of play: bigger passages, thinner cover
+  # (mouth opens at y ~= sea 2.0 + cover 3 + mouth radius ~2.5 = ~7.5 m,
+  # right at the back of the beach on the collapse side, bearing 215 deg).
+  chamber_count_min: 4
+  chamber_count_max: 5
+  passage_radius_min_m: 2.2
+  passage_radius_max_m: 3.6
+  minimum_cover_m: 3
+  # Island relief is ~48 m; 20 m max depth keeps chambers inside the edifice.
+  maximum_depth_m: 20
+  overhang_enabled: true

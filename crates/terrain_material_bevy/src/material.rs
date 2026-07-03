@@ -145,10 +145,6 @@ pub fn layer_scales_from_recipes(
     }
 }
 
-pub fn chunk_slots_from_palette(palette: ChunkSlotPalette) -> ChunkSlotPaletteUniform {
-    palette.into()
-}
-
 pub fn default_chunk_slots() -> ChunkSlotPaletteUniform {
     let mut slots = [UNUSED_SLOT; CHUNK_LOCAL_SLOT_COUNT];
     for (i, slot) in slots.iter_mut().enumerate() {

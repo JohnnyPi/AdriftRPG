@@ -1,0 +1,29 @@
+﻿schema_version: 1
+id: routes.island_testbed
+
+# Recipe-space waypoints (volcano center [128,128], spawn [70,160], caldera
+# radius 10 — routes stay outside the caldera). These are traversal-smoke
+# routes for route_validation.rs; tune them into gameplay routes in-engine
+# once the island shape is verified.
+routes:
+  # Spawn along the lower west/south flank toward the cave chamber ring
+  # (radius ~20-45 m from center).
+  - id: route_spawn_to_cave_ring
+    waypoints:
+      - [70.0, 160.0]
+      - [82.0, 142.0]
+      - [92.0, 118.0]
+      - [98.0, 104.0]
+  # Cave ring up the flank to the outer summit rim (ends r~15 from center,
+  # outside the caldera bowl).
+  - id: route_cave_ring_to_rim
+    waypoints:
+      - [98.0, 104.0]
+      - [108.0, 112.0]
+      - [116.0, 118.0]
+  # Rim descent down the east flank to the lower coast band.
+  - id: route_rim_to_east_coast
+    waypoints:
+      - [140.0, 136.0]
+      - [158.0, 148.0]
+      - [176.0, 158.0]

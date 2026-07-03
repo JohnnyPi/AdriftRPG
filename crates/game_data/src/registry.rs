@@ -272,19 +272,6 @@ impl ConfigRegistry {
             })
     }
 
-    pub fn demo_river(&self) -> Option<&CompiledRiver> {
-        self.rivers
-            .get(&StableId::new("river.demo_upland"))
-            .or_else(|| self.rivers.values().next())
-    }
-
-    pub fn upland_pool_hydrology(&self) -> Option<&CompiledHydrology> {
-        self.hydrology
-            .values()
-            .find(|h| h.kind == "lake")
-            .or_else(|| self.hydrology.values().next())
-    }
-
     pub fn water_body_material(&self, id: &StableId) -> Option<&CompiledWaterBodyMaterial> {
         self.water_body_materials.get(id)
     }
@@ -339,12 +326,13 @@ impl ConfigRegistry {
     }
 
     pub fn routes_for_world(&self, world: &CompiledWorld) -> Option<&CompiledRoutes> {
-        let id = StableId::new("routes.expanded_slice");
-        if world.id == id || world.id.as_str() == "world.expanded_slice" {
-            self.routes.get(&id).or_else(|| self.routes.values().next())
-        } else {
-            None
-        }
+        // Routes follow the world id's suffix by convention:
+        // `world.island_testbed` looks up `routes.island_testbed`. Returns
+        // None when no routes have been authored for the world. (The old
+        // hardcoded `routes.expanded_slice` fallback — including its
+        // "any routes at all" branch — died with the op-based worlds.)
+        let suffix = world.id.as_str().strip_prefix("world.")?;
+        self.routes.get(&StableId::new(format!("routes.{suffix}")))
     }
 
     pub fn active_player(&self) -> DataResult<&CompiledPlayer> {

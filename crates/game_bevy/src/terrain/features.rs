@@ -1,21 +1,29 @@
 // crates/game_bevy/src/terrain/features.rs
-//! Terrain feature registry — rivers, water bodies, caves (VS2 §19).
+//! Terrain feature registry — rivers and water bodies (VS2 §19).
+//!
+//! Hydrology for the atlas island worlds consists of the global sea plus the
+//! atlas-generated river (when the island produced one). The legacy demo
+//! hydrology (`WaterBodyRegistry::demo_registry` + `demo_river.yaml`) was
+//! removed with the op-based slice worlds: its "upland pool" was an
+//! *unbounded* horizontal body at 31.5 m, which made `water_at` report every
+//! point on the island below that elevation as deep water — driving swim
+//! physics, submerged speed scaling, and the water floor clamp on dry land.
 
 use bevy::prelude::*;
-use game_data::ConfigRegistry;
 use shared::StableId;
 use std::collections::BTreeMap;
+use terrain_generation::water_body::{WaterBodyKind, WaterSurfaceDefinition};
 use terrain_generation::{
-    generate_river_spline, RiverHydrology, RiverSpline, WaterBody, WaterBodyId, WaterBodyRegistry,
-    WaterQuery,
+    RiverHydrology, RiverSpline, WaterBody, WaterBodyId, WaterBodyRegistry, WaterQuery,
 };
 
 use crate::data::ConfigRegistryResource;
-use crate::state::AppState;
-use crate::terrain::recipe::river_gen_config;
-use crate::terrain::{TerrainRegenPending, TerrainRecipeRevision, TerrainWorldInitSet};
-use crate::ui::{RiverTweaks, TerrainTweaks, WorldTweaks};
 use crate::data::UserSetupPrefs;
+use crate::state::AppState;
+use crate::terrain::{
+    TerrainPipelineState, TerrainRegenPending, TerrainRecipeRevision, TerrainWorldInitSet,
+};
+use crate::ui::TerrainTweaks;
 use crate::world::requested_world_id;
 
 #[derive(Resource, Clone, Debug, Default)]
@@ -55,173 +63,60 @@ impl Plugin for TerrainFeaturePlugin {
 
 #[derive(Clone, PartialEq, Debug)]
 struct HydrologyTweakKey {
-    world_expanded: bool,
-    river_source_radius: f32,
-    river_mouth_width: f32,
-    river_overrides: bool,
     ridge: f32,
     valley: f32,
     terrain_overrides: bool,
 }
 
-fn sync_hydrology_from_tweaks(
-    registry: Res<ConfigRegistryResource>,
-    prefs: Res<UserSetupPrefs>,
-    world_tweaks: Res<WorldTweaks>,
-    river_tweaks: Res<RiverTweaks>,
-    terrain_tweaks: Res<TerrainTweaks>,
-    mut features: ResMut<TerrainFeatureRegistry>,
-    mut pending: ResMut<TerrainRegenPending>,
-    mut recipe_revision: ResMut<TerrainRecipeRevision>,
-    mut last: Local<Option<HydrologyTweakKey>>,
-) {
-    let key = HydrologyTweakKey {
-        world_expanded: world_tweaks.use_expanded_profile,
-        river_source_radius: river_tweaks.source_radius_m,
-        river_mouth_width: river_tweaks.mouth_width_m,
-        river_overrides: river_tweaks.use_overrides,
-        ridge: terrain_tweaks.ridge_amplitude,
-        valley: terrain_tweaks.valley_depth,
-        terrain_overrides: terrain_tweaks.use_overrides,
-    };
-    if last.as_ref() == Some(&key) {
-        return;
-    }
-    let changed = last.is_some();
-    *last = Some(key.clone());
-
-    let world_id = requested_world_id(&prefs);
+/// Sea level of the requested world's water definition.
+fn world_sea_level(registry: &ConfigRegistryResource, prefs: &UserSetupPrefs) -> f32 {
+    let world_id = requested_world_id(prefs);
     let world = registry.0.world_by_id(&world_id).expect("world profile");
-    let sea = registry
+    registry
         .0
         .water
         .get(&world.water)
         .map(|w| w.sea_level_m)
-        .unwrap_or(0.0);
-    let pool_elevation = registry
-        .0
-        .upland_pool_hydrology()
-        .map(|h| h.elevation_m)
-        .unwrap_or(31.5);
-
-    let hydrology = build_hydrology(
-        &registry.0,
-        world,
-        sea,
-        pool_elevation,
-        &river_tweaks,
-        terrain_tweaks.field_stack_params(),
-    );
-    if let Some(river) = hydrology.river.clone() {
-        features.rivers.insert(1, river);
-    } else {
-        features.rivers.remove(&1);
-    }
-    features.water_bodies = hydrology.water.bodies.clone();
-    features.hydrology = Some(hydrology);
-
-    if changed && (key.terrain_overrides || key.river_overrides) {
-        pending.pending = true;
-        recipe_revision.hash.clear();
-    }
+        .unwrap_or(0.0)
 }
 
-fn init_terrain_features(
-    registry: Res<ConfigRegistryResource>,
-    prefs: Res<UserSetupPrefs>,
-    river_tweaks: Res<RiverTweaks>,
-    terrain_tweaks: Res<TerrainTweaks>,
-    pipeline: Res<crate::terrain::TerrainPipelineState>,
-    mut features: ResMut<TerrainFeatureRegistry>,
-) {
-    let world_id = requested_world_id(&prefs);
-    let world = registry.0.world_by_id(&world_id).expect("world profile");
-    let sea = registry
-        .0
-        .water
-        .get(&world.water)
-        .map(|w| w.sea_level_m)
-        .unwrap_or(0.0);
-    let pool_elevation = registry
-        .0
-        .upland_pool_hydrology()
-        .map(|h| h.elevation_m)
-        .unwrap_or(31.5);
-
-    let mut hydrology = build_hydrology(
-        &registry.0,
-        world,
-        sea,
-        pool_elevation,
-        &river_tweaks,
-        terrain_tweaks.field_stack_params(),
-    );
-
-    // Island atlas rivers are already in world space; prefer them over legacy demo routing.
-    if let Some(source) = pipeline.density_source.as_ref() {
-        if let Some(atlas) = source.atlas() {
-            if let Some(ref atlas_river) = atlas.river_graph {
-                hydrology.river = Some(atlas_river.clone());
-                use terrain_generation::water_body::{
-                    WaterBody, WaterBodyId, WaterBodyKind, WaterSurfaceDefinition,
-                };
-                hydrology.water.bodies.insert(
-                    WaterBodyId(3),
-                    WaterBody {
-                        id: WaterBodyId(3),
-                        stable_id: StableId::new("water.river.demo"),
-                        kind: WaterBodyKind::River,
-                        surface: WaterSurfaceDefinition::SplineRibbon {
-                            control_points: atlas_river.points.clone(),
-                        },
-                        material_id: StableId::new("water.river"),
-                    },
-                );
-            }
-        }
-    }
-
-    if let Some(river) = hydrology.river.clone() {
-        features.rivers.insert(1, river);
-    }
-    features.water_bodies = hydrology.water.bodies.clone();
-    features.hydrology = Some(hydrology);
+/// The island atlas river, if the generated island produced one. River
+/// control points are already in world space.
+fn atlas_river(pipeline: &TerrainPipelineState) -> Option<RiverSpline> {
+    pipeline
+        .density_source
+        .as_ref()?
+        .atlas()?
+        .river_graph
+        .clone()
 }
 
-pub fn build_hydrology(
-    registry: &ConfigRegistry,
-    world: &game_data::CompiledWorld,
-    sea_level: f32,
-    pool_elevation: f32,
-    river_tweaks: &RiverTweaks,
-    field_stack: terrain_generation::FieldStackParams,
-) -> RiverHydrology {
-    let mut config = registry
-        .demo_river()
-        .map(|river| river_gen_config(river, world.seed, field_stack))
-        .unwrap_or_default();
-    if world.coord_offset != [0.0, 0.0, 0.0] {
-        config.source_center = [
-            config.source_center[0] - world.coord_offset[0],
-            config.source_center[1] - world.coord_offset[2],
-        ];
-    }
-    if river_tweaks.use_overrides {
-        config.source_radius_m = river_tweaks.source_radius_m;
-        config.mouth_width_m = river_tweaks.mouth_width_m;
-    }
-    let river = generate_river_spline(&config, sea_level);
-    // Path points are already in world space when source_center was converted above.
-    let mut water = WaterBodyRegistry::demo_registry(sea_level, pool_elevation);
+/// Build hydrology for an atlas island world: the global sea plus the
+/// generated river (when present).
+///
+/// Note: the sea is an unbounded horizontal body, so carved volumes below
+/// sea level (e.g. deep cave chambers on low flanks) register as flooded.
+/// That is the intended global-ocean assumption for now.
+pub fn build_hydrology(sea_level: f32, river: Option<RiverSpline>) -> RiverHydrology {
+    let mut bodies = BTreeMap::new();
+    bodies.insert(
+        WaterBodyId(1),
+        WaterBody {
+            id: WaterBodyId(1),
+            stable_id: StableId::new("water.sea"),
+            kind: WaterBodyKind::Sea,
+            surface: WaterSurfaceDefinition::Horizontal {
+                elevation: sea_level,
+            },
+            material_id: StableId::new("water.tropical_shallow"),
+        },
+    );
     if let Some(ref spline) = river {
-        use terrain_generation::water_body::{
-            WaterBody, WaterBodyId, WaterBodyKind, WaterSurfaceDefinition,
-        };
-        water.bodies.insert(
+        bodies.insert(
             WaterBodyId(3),
             WaterBody {
                 id: WaterBodyId(3),
-                stable_id: StableId::new("water.river.demo"),
+                stable_id: StableId::new("water.river.island"),
                 kind: WaterBodyKind::River,
                 surface: WaterSurfaceDefinition::SplineRibbon {
                     control_points: spline.points.clone(),
@@ -230,7 +125,70 @@ pub fn build_hydrology(
             },
         );
     }
-    RiverHydrology { river, water }
+    RiverHydrology {
+        river,
+        water: WaterBodyRegistry {
+            bodies,
+            sea_level_m: sea_level,
+        },
+    }
+}
+
+fn apply_hydrology(features: &mut TerrainFeatureRegistry, hydrology: RiverHydrology) {
+    if let Some(river) = hydrology.river.clone() {
+        features.rivers.insert(1, river);
+    } else {
+        features.rivers.remove(&1);
+    }
+    features.water_bodies = hydrology.water.bodies.clone();
+    features.hydrology = Some(hydrology);
+}
+
+fn init_terrain_features(
+    registry: Res<ConfigRegistryResource>,
+    prefs: Res<UserSetupPrefs>,
+    pipeline: Res<TerrainPipelineState>,
+    mut features: ResMut<TerrainFeatureRegistry>,
+) {
+    let sea = world_sea_level(&registry, &prefs);
+    let hydrology = build_hydrology(sea, atlas_river(&pipeline));
+    apply_hydrology(&mut features, hydrology);
+}
+
+fn sync_hydrology_from_tweaks(
+    registry: Res<ConfigRegistryResource>,
+    prefs: Res<UserSetupPrefs>,
+    terrain_tweaks: Res<TerrainTweaks>,
+    pipeline: Res<TerrainPipelineState>,
+    mut features: ResMut<TerrainFeatureRegistry>,
+    mut pending: ResMut<TerrainRegenPending>,
+    mut recipe_revision: ResMut<TerrainRecipeRevision>,
+    mut last: Local<Option<HydrologyTweakKey>>,
+) {
+    let key = HydrologyTweakKey {
+        ridge: terrain_tweaks.ridge_amplitude,
+        valley: terrain_tweaks.valley_depth,
+        terrain_overrides: terrain_tweaks.use_overrides,
+    };
+    if last.as_ref() == Some(&key) {
+        return;
+    }
+    let first_run = last.is_none();
+    *last = Some(key);
+    if first_run {
+        // init_terrain_features (OnEnter) already built hydrology this frame.
+        // The previous version rebuilt here from the legacy demo config,
+        // clobbering the atlas river one frame after init.
+        return;
+    }
+
+    let sea = world_sea_level(&registry, &prefs);
+    let hydrology = build_hydrology(sea, atlas_river(&pipeline));
+    apply_hydrology(&mut features, hydrology);
+
+    // Terrain field parameters changed: the density source must regenerate.
+    pending.pending = true;
+    recipe_revision.hash.clear();
 }
 
 fn update_camera_water_state(

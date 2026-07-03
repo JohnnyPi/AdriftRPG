@@ -100,6 +100,14 @@ fn rule_matches(rule: &BiomeRuleDefinition, ctx: &BiomeSampleContext) -> bool {
     if rule.id == "shallow_water" && !ctx.is_underwater() {
         return false;
     }
+    // Seabed rules describe submerged terrain. Their YAML elevation bands
+    // extend up to sea level (offshore_shelf reaches +2 m so the shelf can
+    // shoal to shore), so without this gate they also match dry coastal land
+    // whose surface sits inside that band — e.g. a resolved spawn on a berm
+    // 1.6 m above sea classifying as OffshoreShelf.
+    if (rule.id == "deep_water" || rule.id == "offshore_shelf") && ctx.elevation >= 0.0 {
+        return false;
+    }
     if rule.id == "cave" && !ctx.is_cave() {
         return false;
     }
@@ -259,6 +267,13 @@ mod tests {
     use super::*;
     use terrain_generation::default_vertical_slice_recipe;
 
+    /// Recipe-space scan window shared by the island variety tests: covers
+    /// the testbed island coast-to-summit (center [128,128], support radius
+    /// ~112 m -> world coords -88..+88 after the [128,0,128] offset).
+    const SCAN_RECIPE_MIN: usize = 40;
+    const SCAN_RECIPE_MAX: usize = 216;
+    const SCAN_STEP: usize = 8;
+
     fn test_source() -> RecipeDensitySource {
         RecipeDensitySource::new(default_vertical_slice_recipe(42, 2.0))
     }
@@ -288,6 +303,43 @@ mod tests {
     }
 
     #[test]
+    fn seabed_rules_never_match_dry_land() {
+        use crate::environment::biome_context::BiomeSampleContext;
+
+        // Catalog mirroring biomes.expanded_slice ordering: seabed rules
+        // first, with offshore_shelf's band reaching above sea level
+        // (elevation +2).
+        let mut deep = BiomeRuleDefinition::new("deep_water", 1, [0.08, 0.28, 0.42]);
+        deep.elevation_max = Some(-5.0);
+        let mut shelf = BiomeRuleDefinition::new("offshore_shelf", 1, [0.12, 0.45, 0.52]);
+        shelf.elevation_min = Some(-15.0);
+        shelf.elevation_max = Some(2.0);
+        let mut beach = BiomeRuleDefinition::new("beach", 1, [0.86, 0.78, 0.58]);
+        beach.elevation_min = Some(-1.0);
+        beach.elevation_max = Some(14.0);
+        beach.water_distance_max = Some(35.0);
+        let catalog = BiomeCatalog {
+            rules: vec![deep, shelf, beach],
+        };
+
+        // Dry berm: surface 1.6 m above sea (world_y = sea 2.0 + 1.6), close
+        // to the waterline. Inside offshore_shelf's elevation band, but the
+        // surface is not submerged — it must classify as beach, not seabed.
+        let dry_berm = BiomeSampleContext::for_test(3.6, 1.6, 4.0, 6.0);
+        let kind = classify_biome_from_context(&catalog, &dry_berm);
+        assert_eq!(
+            kind,
+            BiomeKind::Beach,
+            "dry coastal land classified as a seabed biome"
+        );
+
+        // Genuinely submerged shelf (surface 4 m below sea) still matches.
+        let submerged = BiomeSampleContext::for_test(-2.0, -4.0, 3.0, 0.0);
+        let kind = classify_biome_from_context(&catalog, &submerged);
+        assert_eq!(kind, BiomeKind::OffshoreShelf);
+    }
+
+    #[test]
     fn biome_elevation_follows_surface_not_sample_height() {
         use crate::data::UserSetupPrefs;
         use crate::terrain::build_density_source_from_prefs;
@@ -300,7 +352,7 @@ mod tests {
             .expect("assets");
         let registry = load_registry_from_directory(assets).expect("registry");
         let mut prefs = UserSetupPrefs::default();
-        prefs.world_id = "world.expanded_slice_hd".into();
+        prefs.world_id = "world.island_testbed".into();
         prefs.seed = 800_000;
         let source = build_density_source_from_prefs(
             &registry,
@@ -309,7 +361,7 @@ mod tests {
         );
         let catalog = BiomeCatalog::from_registry(
             &registry,
-            Some(&shared::StableId::new("world.expanded_slice_hd")),
+            Some(&shared::StableId::new("world.island_testbed")),
         );
 
         let mut wx = 0.0f32;
@@ -358,7 +410,7 @@ mod tests {
     }
 
     #[test]
-    fn expanded_island_biome_distribution_has_variety() {
+    fn testbed_island_biome_distribution_has_variety() {
         use game_data::load_registry_from_directory;
         use std::collections::BTreeSet;
         use std::path::PathBuf;
@@ -369,46 +421,39 @@ mod tests {
             .expect("assets");
         let registry = load_registry_from_directory(assets).expect("registry");
         let world = registry
-            .world_by_id(&shared::StableId::new("world.expanded_slice"))
-            .expect("expanded world");
+            .world_by_id(&shared::StableId::new("world.island_testbed"))
+            .expect("testbed world");
         let catalog = BiomeCatalog::from_registry(
             &registry,
-            Some(&shared::StableId::new("world.expanded_slice")),
+            Some(&shared::StableId::new("world.island_testbed")),
         );
         let source = crate::terrain::build_density_source(
             &registry,
-            Some(&shared::StableId::new("world.expanded_slice")),
+            Some(&shared::StableId::new("world.island_testbed")),
             None,
             terrain_generation::FieldStackParams::default(),
         );
 
+        // Land-only scan across the island (see SCAN_* docs). The old
+        // expanded_slice version also asserted on hand-picked recipe points
+        // tuned to the removed op-based terrain; the grid scan covers the
+        // same ground without depending on authored heights.
         let mut kinds = BTreeSet::new();
-        let sample_points = [
-            (70.0, 160.0),
-            (55.0, 145.0),
-            (82.0, 196.0),
-            (120.0, 140.0),
-            (188.0, 178.0),
-            (56.0, 116.0),
-        ];
-        for (rx, rz) in sample_points {
-            let wx = rx - world.coord_offset[0];
-            let wz = rz - world.coord_offset[2];
-            let y = source.surface_height_at(wx, wz);
-            kinds.insert(classify_biome(&catalog, &source, wx, y, wz, -0.1));
-        }
-        for rx in (55..=190).step_by(10) {
-            for rz in (90..=200).step_by(10) {
+        for rx in (SCAN_RECIPE_MIN..=SCAN_RECIPE_MAX).step_by(SCAN_STEP) {
+            for rz in (SCAN_RECIPE_MIN..=SCAN_RECIPE_MAX).step_by(SCAN_STEP) {
                 let wx = rx as f32 - world.coord_offset[0];
                 let wz = rz as f32 - world.coord_offset[2];
-                let y = source.surface_height_at(wx, wz);
+                let y = source.terrain_surface_height_at(wx, wz);
+                if y <= source.recipe().sea_level + 0.5 {
+                    continue;
+                }
                 kinds.insert(classify_biome(&catalog, &source, wx, y, wz, -0.1));
             }
         }
 
         assert!(
             kinds.len() >= 3,
-            "expected at least 3 biome kinds on expanded island, got {:?}",
+            "expected at least 3 biome kinds on testbed island, got {:?}",
             kinds
         );
         assert!(kinds.contains(&BiomeKind::RockyUpland) || kinds.contains(&BiomeKind::Alpine));
@@ -420,7 +465,7 @@ mod tests {
     }
 
     #[test]
-    fn expanded_hd_seed_800000_has_biome_variety_at_spawn_and_coast() {
+    fn testbed_seed_800000_has_biome_variety_at_spawn_and_coast() {
         use crate::data::UserSetupPrefs;
         use crate::terrain::build_density_source_from_prefs;
         use game_data::load_registry_from_directory;
@@ -433,7 +478,7 @@ mod tests {
             .expect("assets");
         let registry = load_registry_from_directory(assets).expect("registry");
         let mut prefs = UserSetupPrefs::default();
-        prefs.world_id = "world.expanded_slice_hd".into();
+        prefs.world_id = "world.island_testbed".into();
         prefs.seed = 800_000;
         let source = build_density_source_from_prefs(
             &registry,
@@ -442,7 +487,7 @@ mod tests {
         );
         let catalog = BiomeCatalog::from_registry(
             &registry,
-            Some(&shared::StableId::new("world.expanded_slice_hd")),
+            Some(&shared::StableId::new("world.island_testbed")),
         );
         let (sx, sy, sz, report) = source.resolve_player_spawn(2.0, 48.0);
         assert!(report.passed, "spawn failed: {:?}", report.messages);
@@ -464,8 +509,8 @@ mod tests {
         );
 
         let mut kinds = BTreeSet::new();
-        for rx in (40..=200).step_by(8) {
-            for rz in (40..=220).step_by(8) {
+        for rx in (SCAN_RECIPE_MIN..=SCAN_RECIPE_MAX).step_by(SCAN_STEP) {
+            for rz in (SCAN_RECIPE_MIN..=SCAN_RECIPE_MAX).step_by(SCAN_STEP) {
                 let wx = rx as f32 - 128.0;
                 let wz = rz as f32 - 128.0;
                 let y = source.terrain_surface_height_at(wx, wz);
@@ -477,7 +522,7 @@ mod tests {
         }
         assert!(
             kinds.len() >= 5,
-            "expected varied biomes on volcanic hd island, got {:?}",
+            "expected varied biomes on testbed volcanic island, got {:?}",
             kinds
         );
         assert!(

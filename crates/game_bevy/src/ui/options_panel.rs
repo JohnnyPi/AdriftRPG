@@ -247,17 +247,7 @@ fn draw_atmosphere_tab(
 }
 
 fn draw_world_tab(ui: &mut egui::Ui, world: &mut WorldTweaks, terrain: &mut TerrainTweaks) {
-    ui.heading("World profile");
-    if ui
-        .checkbox(
-            &mut world.use_expanded_profile,
-            "Use expanded_slice (256 m island)",
-        )
-        .changed()
-    {
-        ui.label("Terrain will regenerate automatically.");
-    }
-    ui.label("Compact profile uses the legacy 96 m vertical_slice basin.");
+    ui.label("World profile is selected on the Setup screen (main menu).");
 
     ui.separator();
     ui.heading("Chunk residency");
@@ -373,15 +363,10 @@ fn draw_water_tab(
         water.use_overrides,
         egui::Slider::new(&mut water.sea_level_m, -2.0..=2.0).text("sea level"),
     );
-    ui.add_enabled(
-        water.use_overrides,
-        egui::Slider::new(&mut water.pool_elevation_m, 10.0..=50.0).text("pool elevation"),
-    );
 
     ui.separator();
     ui.heading("River");
-    ui.add(egui::Slider::new(&mut river.source_radius_m, 8.0..=40.0).text("source radius"));
-    ui.add(egui::Slider::new(&mut river.mouth_width_m, 3.0..=12.0).text("mouth width"));
+    ui.label("River shape comes from island_gen hydrology (Setup screen).");
     ui.checkbox(&mut river.show_spline, "Show river spline (Ctrl+F4)");
     ui.checkbox(&mut river.show_flow_arrows, "Show flow arrows");
 

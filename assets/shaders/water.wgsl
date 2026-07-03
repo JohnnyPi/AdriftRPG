@@ -1,44 +1,101 @@
-#import bevy_pbr::{
-    mesh_functions,
-    forward_io::{Vertex, VertexOutput},
-    view_transformations::position_world_to_clip,
-}
+// assets/shaders/water.wgsl
+//
+// Basic water surface for WaterMaterial (crates/game_bevy/src/water/mod.rs).
+//
+// Uniform packing (must match WaterParams in mod.rs):
+//   shallow_color: rgb = shallow tint, a = transparency
+//   deep_color:    rgb = deep tint
+//   wave:          x = surface elevation (m), y = wave_speed,
+//                  z = wave_amplitude, w = transparency
+//   animation:     x = elapsed time (s), driven by animate_water
+//
+// This is intentionally self-contained (no depth prepass required): apparent
+// depth is approximated from the view angle, so the plane reads shallow near
+// grazing sight lines at the shore and deep when looking straight down.
+// If a DepthPrepass camera is added later, this is the file to upgrade with
+// prepass_depth-based true water-column depth.
+
+#import bevy_pbr::forward_io::VertexOutput
+#import bevy_pbr::mesh_view_bindings::view
 
 struct WaterParams {
     shallow_color: vec4<f32>,
     deep_color: vec4<f32>,
     wave: vec4<f32>,
     animation: vec4<f32>,
-}
+};
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0)
 var<uniform> params: WaterParams;
 
-@vertex
-fn vertex(vertex: Vertex) -> VertexOutput {
-    var out: VertexOutput;
-    let world_from_local = mesh_functions::get_world_from_local(vertex.instance_index);
-    let wave = sin((vertex.position.x + vertex.position.z) * 0.15 + params.animation.x * params.wave.y)
-        * params.wave.z;
-    var pos = vertex.position;
-    pos.y += wave;
-    let world_position = mesh_functions::mesh_position_local_to_world(world_from_local, vec4<f32>(pos, 1.0));
-    out.position = position_world_to_clip(world_position.xyz);
-    out.world_position = world_position;
-    out.world_normal = vec3<f32>(0.0, 1.0, 0.0);
-#ifdef VERTEX_UVS_A
-    out.uv = vertex.uv;
-#endif
-    return out;
+// Sum of a few directional gerstner-lite sine waves; returns height and
+// analytic XZ gradient so the normal is stable (no per-pixel noise "static").
+fn wave_field(p: vec2<f32>, t: f32, speed: f32, amplitude: f32) -> vec3<f32> {
+    var height = 0.0;
+    var grad = vec2<f32>(0.0, 0.0);
+
+    // direction, frequency (rad/m), relative amplitude
+    let dirs = array<vec2<f32>, 4>(
+        normalize(vec2<f32>( 1.0,  0.30)),
+        normalize(vec2<f32>(-0.55, 1.0)),
+        normalize(vec2<f32>( 0.20, -1.0)),
+        normalize(vec2<f32>(-1.0, -0.45)),
+    );
+    let freqs = array<f32, 4>(0.35, 0.55, 0.90, 1.60);
+    let amps  = array<f32, 4>(0.50, 0.28, 0.15, 0.07);
+    let speeds = array<f32, 4>(1.00, 1.35, 1.80, 2.40);
+
+    for (var i = 0; i < 4; i = i + 1) {
+        let d = dirs[i];
+        let f = freqs[i];
+        let a = amps[i] * amplitude;
+        let phase = dot(d, p) * f + t * speeds[i] * speed;
+        height = height + a * sin(phase);
+        grad = grad + d * (a * f * cos(phase));
+    }
+    return vec3<f32>(height, grad.x, grad.y);
 }
 
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let world_pos = in.world_position.xyz;
-    let depth = clamp((params.wave.x - world_pos.y + 1.5) * 0.35, 0.0, 1.0);
-    let color = mix(params.shallow_color.rgb, params.deep_color.rgb, depth);
-    let view = normalize(-world_pos);
-    let fresnel = pow(1.0 - max(dot(view, in.world_normal), 0.0), 3.0);
-    let foam = smoothstep(0.0, 0.15, sin(world_pos.x * 0.5 + params.animation.x) * 0.5 + 0.5) * 0.08;
-    return vec4<f32>(color + fresnel * 0.15 + foam, params.wave.w);
+    let t = params.animation.x;
+    let wave_speed = max(params.wave.y, 0.0);
+    let wave_amplitude = max(params.wave.z, 0.0);
+    let transparency = clamp(params.wave.w, 0.0, 1.0);
+
+    // Animated surface normal from the analytic wave gradient, blended over
+    // the mesh normal so river ribbons (non-horizontal) still behave.
+    let w = wave_field(world_pos.xz, t, wave_speed, wave_amplitude);
+    let wave_normal = normalize(vec3<f32>(-w.y, 1.0, -w.z));
+    let base_normal = normalize(in.world_normal);
+    let n = normalize(mix(base_normal, wave_normal, 0.85));
+
+    let view_dir = normalize(view.world_position.xyz - world_pos);
+    let n_dot_v = clamp(dot(n, view_dir), 0.0, 1.0);
+
+    // Schlick fresnel, F0 ~ 0.02 for water.
+    let fresnel = 0.02 + 0.98 * pow(1.0 - n_dot_v, 5.0);
+
+    // Apparent-depth proxy: grazing angles read shallow, top-down reads deep;
+    // wave crests pull slightly toward the shallow tint for visible motion.
+    let crest = clamp(w.x / max(wave_amplitude, 1e-3) * 0.5 + 0.5, 0.0, 1.0);
+    let depth_factor = clamp(n_dot_v * 0.9 + 0.15 - crest * 0.18, 0.0, 1.0);
+    var water_rgb = mix(params.shallow_color.rgb, params.deep_color.rgb, depth_factor);
+
+    // Sky-ish reflection tint at grazing angles.
+    let sky_tint = vec3<f32>(0.66, 0.78, 0.90);
+    water_rgb = mix(water_rgb, sky_tint, fresnel * 0.85);
+
+    // Cheap sun glint; direction roughly matches the late-morning lighting.
+    let sun_dir = normalize(vec3<f32>(0.35, 0.80, 0.30));
+    let refl = reflect(-view_dir, n);
+    let glint = pow(clamp(dot(refl, sun_dir), 0.0, 1.0), 220.0);
+    water_rgb = water_rgb + vec3<f32>(1.0, 0.98, 0.92) * glint * 0.8;
+
+    // More opaque when looking across the surface or at deep color; the
+    // authored transparency sets the floor seen when looking straight down.
+    let alpha = clamp(mix(transparency, 1.0, max(fresnel, depth_factor * 0.35)), 0.0, 1.0);
+
+    return vec4<f32>(water_rgb, alpha);
 }
