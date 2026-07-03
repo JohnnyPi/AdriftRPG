@@ -115,11 +115,45 @@ pub struct RiverCarveContext {
     pub bank_width_m: f32,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct WorldVolumeBounds {
+    pub x_min: f32,
+    pub x_max: f32,
+    pub y_min: f32,
+    pub y_max: f32,
+    pub z_min: f32,
+    pub z_max: f32,
+}
+
+impl WorldVolumeBounds {
+    pub fn from_compiled_world(world: &game_data::CompiledWorld) -> Self {
+        let (mins, maxs) = world.axis_bounds_m();
+        Self {
+            x_min: mins[0],
+            y_min: mins[1],
+            z_min: mins[2],
+            x_max: maxs[0],
+            y_max: maxs[1],
+            z_max: maxs[2],
+        }
+    }
+
+    /// Keep terrain iso-surfaces inside the chunk volume so every column can mesh.
+    pub fn clamp_surface_y(&self, surface_y: f32) -> f32 {
+        const CEILING_MARGIN_M: f32 = 2.0;
+        surface_y.clamp(
+            self.y_min + crate::topology::FOUNDATION_DEPTH_M,
+            self.y_max - CEILING_MARGIN_M,
+        )
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct RecipeDensitySource {
     recipe: TerrainRecipe,
     river_carve: Option<RiverCarveContext>,
     atlas: Option<Arc<IslandAtlas>>,
+    world_bounds: Option<WorldVolumeBounds>,
 }
 
 /// Coastal inland factor: 0 at the shore, 1 deep inland.
@@ -203,7 +237,23 @@ impl RecipeDensitySource {
             recipe,
             river_carve: None,
             atlas: None,
+            world_bounds: None,
         }
+    }
+
+    pub fn with_world_bounds(mut self, bounds: WorldVolumeBounds) -> Self {
+        self.world_bounds = Some(bounds);
+        self
+    }
+
+    pub fn world_bounds(&self) -> Option<WorldVolumeBounds> {
+        self.world_bounds
+    }
+
+    fn clamp_surface_for_world(&self, surface_y: f32) -> f32 {
+        self.world_bounds
+            .map(|bounds| bounds.clamp_surface_y(surface_y))
+            .unwrap_or(surface_y)
     }
 
     pub fn with_atlas(mut self, atlas: IslandAtlas, bank_width_m: f32) -> Self {
@@ -507,7 +557,7 @@ impl RecipeDensitySource {
         let noise = ValueNoise::new(self.recipe.seed);
         let wx = x - self.recipe.coord_offset[0];
         let wz = z - self.recipe.coord_offset[2];
-        let surface = sample_atlas_surface(atlas, wx, wz);
+        let surface = self.clamp_surface_for_world(sample_atlas_surface(atlas, wx, wz));
         let mut density = y - surface;
 
         for op in &self.recipe.ops {
@@ -706,7 +756,6 @@ impl RecipeDensitySource {
         max_y: f32,
         min_clearance: f32,
     ) -> Option<f32> {
-        let mut lowest = None;
         let mut y = max_y.floor();
         while y >= self.recipe.sea_level - 32.0 {
             let here = self.terrain_density_at(x, y, z);
@@ -715,11 +764,11 @@ impl RecipeDensitySource {
                 && above > 0.0
                 && self.terrain_clearance_above_floor(x, y, z) >= min_clearance
             {
-                lowest = Some(y);
+                return Some(y);
             }
             y -= 0.5;
         }
-        lowest
+        None
     }
 
     pub(crate) fn terrain_clearance_above_floor(&self, x: f32, floor_y: f32, z: f32) -> f32 {

@@ -3,7 +3,7 @@ use bevy::prelude::*;
 
 use crate::data::ConfigRegistryResource;
 use crate::data::UserSetupPrefs;
-use crate::environment::biomes::BiomeCatalog;
+use crate::environment::BiomeCatalog;
 use crate::state::AppState;
 use crate::water::WaterMaterial;
 use procedural_textures::ProceduralMaterialsDocument;

@@ -8,6 +8,7 @@ use super::environment;
 use super::collision::{resolve_camera_collision, update_camera_debug_input};
 use super::components::{CameraDebugSnapshot, CameraInputState};
 use super::debug::draw_camera_debug;
+use super::fly_cam::{capture_fly_cam_from_orbit, update_fly_cam, FlyCamState};
 use super::follow::update_camera_focus;
 use super::input::update_cursor_capture;
 use super::orbit::{read_camera_orbit_input, read_camera_zoom_input};
@@ -26,6 +27,7 @@ impl Plugin for ThirdPersonCameraPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CameraInputState>()
             .init_resource::<CameraDebugSnapshot>()
+            .init_resource::<FlyCamState>()
             .init_resource::<environment::CameraEnvironment>()
             .configure_sets(
                 Update,
@@ -59,7 +61,13 @@ impl Plugin for ThirdPersonCameraPlugin {
             )
             .add_systems(
                 Update,
-                update_camera_focus.in_set(CameraSystemSet::Follow),
+                (
+                    capture_fly_cam_from_orbit,
+                    update_fly_cam,
+                    update_camera_focus,
+                )
+                    .chain()
+                    .in_set(CameraSystemSet::Follow),
             )
             .add_systems(
                 Update,

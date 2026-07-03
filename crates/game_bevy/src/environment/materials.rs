@@ -4,7 +4,8 @@ use terrain_generation::RecipeDensitySource;
 use voxel_core::MaterialId;
 
 use super::biome_context::{BiomeSampleContext, ChunkColumnCache, ROCK_SLOPE_DEG};
-use super::biomes::{biome_color, classify_biome_with_context, BiomeCatalog, BiomeKind};
+use super::biomes::{biome_color, classify_biome_with_context, BiomeKind};
+use crate::environment::BiomeCatalog;
 
 const SURFACE_VOXEL_BAND: f32 = 1.0;
 const WET_ROCK_DISTANCE_M: f32 = 12.0;

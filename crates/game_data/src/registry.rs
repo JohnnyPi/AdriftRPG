@@ -318,11 +318,7 @@ impl ConfigRegistry {
     }
 
     pub fn world_ocean_extent_m(&self, world: &CompiledWorld) -> f32 {
-        world.ocean_extent_m.unwrap_or_else(|| {
-            let cells = world.chunk_cells[0] as f32 * world.cell_size_m;
-            let extent = world.world_extent_chunks[0].max(world.world_extent_chunks[2]) as f32;
-            extent * cells + 32.0
-        })
+        world.effective_ocean_extent_m()
     }
 
     pub fn routes_for_world(&self, world: &CompiledWorld) -> Option<&CompiledRoutes> {

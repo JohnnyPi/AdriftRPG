@@ -10,9 +10,9 @@ mod plugin;
 pub use body_spec::{CollisionProfileId, PhysicsBodySpec, PhysicsBodyType};
 pub use character::{
     CharacterController, CharacterControllerBundle, CharacterControllerPlugin,
-    CharacterPhysicsSystems, GroundedState,
+    CharacterPhysicsSystems, GroundedState, GROUND_CONTACT_SKIN,
 };
-pub use collision::CharacterCollisionQuery;
+pub use collision::{terrain_ground_filter, CharacterCollisionQuery};
 pub use collision_layers::{
     camera_probe_layers, dynamic_prop_layers, layers_for_profile, moving_platform_layers,
     player_layers, terrain_layers, water_sensor_layers, CollisionLayer,

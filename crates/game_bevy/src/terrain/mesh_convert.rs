@@ -27,27 +27,57 @@ pub fn mesh_from_terrain_data(data: &TerrainMeshData, cell_size_m: f32) -> Mesh 
             .collect::<Vec<_>>(),
     );
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, data.normals.clone());
-    if !data.material_vertices.is_empty() {
+    let vertex_count = data.positions.len();
+    let material_vertices = if data.material_vertices.len() == vertex_count {
+        &data.material_vertices
+    } else {
+        &[] as &[terrain_surface::MaterialVertex]
+    };
+    if !material_vertices.is_empty() {
         mesh.insert_attribute(
             Mesh::ATTRIBUTE_COLOR,
-            data.material_vertices
+            material_vertices
                 .iter()
                 .map(|v| [v.weights[0], v.weights[1], v.weights[2], v.weights[3]])
                 .collect::<Vec<_>>(),
         );
         mesh.insert_attribute(
             Mesh::ATTRIBUTE_UV_0,
-            data.material_vertices
+            material_vertices
                 .iter()
                 .map(|v| [v.local_indices[0] as f32, v.local_indices[1] as f32])
                 .collect::<Vec<_>>(),
         );
         mesh.insert_attribute(
             Mesh::ATTRIBUTE_UV_1,
-            data.material_vertices
+            material_vertices
                 .iter()
                 .map(|v| [v.local_indices[2] as f32, v.local_indices[3] as f32])
                 .collect::<Vec<_>>(),
+        );
+        mesh.insert_attribute(
+            Mesh::ATTRIBUTE_TANGENT,
+            material_vertices
+                .iter()
+                .map(|v| [v.tint[0], v.tint[1], v.tint[2], 1.0])
+                .collect::<Vec<_>>(),
+        );
+    } else {
+        mesh.insert_attribute(
+            Mesh::ATTRIBUTE_COLOR,
+            vec![[1.0, 0.0, 0.0, 0.0]; vertex_count],
+        );
+        mesh.insert_attribute(
+            Mesh::ATTRIBUTE_UV_0,
+            vec![[0.0, 0.0]; vertex_count],
+        );
+        mesh.insert_attribute(
+            Mesh::ATTRIBUTE_UV_1,
+            vec![[0.0, 0.0]; vertex_count],
+        );
+        mesh.insert_attribute(
+            Mesh::ATTRIBUTE_TANGENT,
+            vec![[1.0, 1.0, 1.0, 1.0]; vertex_count],
         );
     }
     mesh.insert_indices(Indices::U32(data.indices.clone()));

@@ -2,7 +2,7 @@
 use bevy::prelude::*;
 use physics_bridge::GroundedState;
 
-use crate::environment::biomes::{classify_biome, BiomeCatalog};
+use crate::environment::{biomes::classify_biome, BiomeCatalog};
 use crate::player::{Player, PlayerMovementState};
 use crate::state::AppState;
 use crate::terrain::TerrainPipelineState;

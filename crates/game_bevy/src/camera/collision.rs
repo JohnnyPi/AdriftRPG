@@ -37,6 +37,9 @@ pub fn resolve_camera_collision(
     mut debug: ResMut<CameraDebugSnapshot>,
     mut cameras: Query<&mut MmoCamera>,
 ) {
+    if super::fly_cam::fly_cam_active(&camera_tweaks) {
+        return;
+    }
     let Ok(mut camera) = cameras.single_mut() else {
         return;
     };

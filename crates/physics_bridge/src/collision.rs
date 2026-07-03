@@ -2,8 +2,15 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
+use crate::collision_layers::CollisionLayer;
+
 /// Spatial query helpers for character controllers.
 pub struct CharacterCollisionQuery;
+
+pub fn terrain_ground_filter(excluded: Entity) -> SpatialQueryFilter {
+    SpatialQueryFilter::from_excluded_entities([excluded])
+        .with_mask(CollisionLayer::Terrain)
+}
 
 pub struct GroundHit {
     pub normal: Vec3,

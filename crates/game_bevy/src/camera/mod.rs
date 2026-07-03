@@ -2,6 +2,7 @@
 mod collision;
 mod components;
 mod debug;
+mod fly_cam;
 mod follow;
 mod input;
 mod orbit;

@@ -260,8 +260,38 @@ pub fn colorize_preview(atlas: &IslandAtlas, mode: &str) -> Vec<u8> {
     pixels
 }
 
-/// Finer spacing than the macro atlas grid so the setup preview matches in-world terrain.
+/// Legacy full-res spacing used when no output-side cap is applied (tests / atlas-native previews).
 pub const PREVIEW_PIXEL_SPACING_M: f32 = 2.0;
+
+pub const PREVIEW_OUTPUT_MIN: u32 = 64;
+pub const PREVIEW_OUTPUT_MAX: u32 = 512;
+
+/// Clamp setup-screen preview side length (pixels per axis).
+pub fn clamp_preview_output_side(side: u32) -> u32 {
+    side.clamp(PREVIEW_OUTPUT_MIN, PREVIEW_OUTPUT_MAX).max(2)
+}
+
+/// World extent and per-axis sample spacing for a capped square preview grid.
+pub fn preview_grid_for_atlas(
+    atlas: &IslandAtlas,
+    output_side: u32,
+) -> (u32, u32, f32, f32) {
+    let width = clamp_preview_output_side(output_side);
+    let height = width;
+    let extent_x = (atlas.width().saturating_sub(1)) as f32 * atlas.spacing_m();
+    let extent_z = (atlas.height().saturating_sub(1)) as f32 * atlas.spacing_m();
+    let spacing_x = if width > 1 {
+        extent_x / (width - 1) as f32
+    } else {
+        extent_x
+    };
+    let spacing_z = if height > 1 {
+        extent_z / (height - 1) as f32
+    } else {
+        extent_z
+    };
+    (width, height, spacing_x, spacing_z)
+}
 
 fn preview_value_at_world(atlas: &IslandAtlas, wx: f32, wz: f32, mode: &str) -> f32 {
     match mode {
@@ -278,20 +308,21 @@ fn preview_value_at_world(atlas: &IslandAtlas, wx: f32, wz: f32, mode: &str) -> 
     }
 }
 
-/// Colorize a high-resolution preview using runtime terrain heights (world XZ).
+/// Colorize a capped preview using runtime terrain heights (world XZ).
+///
+/// `output_side` is the target pixel count per axis (clamped to
+/// [`PREVIEW_OUTPUT_MIN`]..=[`PREVIEW_OUTPUT_MAX`]); sample spacing is derived
+/// from the atlas world extent so large worlds stay responsive.
 pub fn colorize_runtime_preview<F>(
     atlas: &IslandAtlas,
     mode: &str,
-    sample_spacing_m: f32,
+    output_side: u32,
     height_at: F,
 ) -> (Vec<u8>, u32, u32)
 where
     F: Fn(f32, f32) -> f32,
 {
-    let extent_x = (atlas.width().saturating_sub(1)) as f32 * atlas.spacing_m();
-    let extent_z = (atlas.height().saturating_sub(1)) as f32 * atlas.spacing_m();
-    let width = (extent_x / sample_spacing_m).ceil() as u32 + 1;
-    let height = (extent_z / sample_spacing_m).ceil() as u32 + 1;
+    let (width, height, spacing_x, spacing_z) = preview_grid_for_atlas(atlas, output_side);
     let w = width as usize;
     let h = height as usize;
     let mut pixels = vec![0u8; w * h * 4];
@@ -300,8 +331,8 @@ where
     if mode == "elevation" || mode.is_empty() {
         for z in 0..height {
             for x in 0..width {
-                let wx = atlas.origin[0] + x as f32 * sample_spacing_m;
-                let wz = atlas.origin[1] + z as f32 * sample_spacing_m;
+                let wx = atlas.origin[0] + x as f32 * spacing_x;
+                let wz = atlas.origin[1] + z as f32 * spacing_z;
                 let elev = height_at(wx, wz);
                 if elev > sea + 0.25 {
                     max_land = max_land.max(elev);
@@ -315,8 +346,8 @@ where
     if mode != "elevation" && !mode.is_empty() {
         for z in 0..height {
             for x in 0..width {
-                let wx = atlas.origin[0] + x as f32 * sample_spacing_m;
-                let wz = atlas.origin[1] + z as f32 * sample_spacing_m;
+                let wx = atlas.origin[0] + x as f32 * spacing_x;
+                let wz = atlas.origin[1] + z as f32 * spacing_z;
                 let v = preview_value_at_world(atlas, wx, wz, mode);
                 min_v = min_v.min(v);
                 max_v = max_v.max(v);
@@ -326,8 +357,8 @@ where
     let range = (max_v - min_v).max(0.001);
     for z in 0..height {
         for x in 0..width {
-            let wx = atlas.origin[0] + x as f32 * sample_spacing_m;
-            let wz = atlas.origin[1] + z as f32 * sample_spacing_m;
+            let wx = atlas.origin[0] + x as f32 * spacing_x;
+            let wz = atlas.origin[1] + z as f32 * spacing_z;
             let (r, g, b) = if mode == "elevation" || mode.is_empty() {
                 let elev = height_at(wx, wz);
                 let land = if elev > sea + 0.25 { 1.0 } else { 0.0 };
@@ -352,7 +383,8 @@ pub fn colorize_preview_with_heights<F>(atlas: &IslandAtlas, mode: &str, height_
 where
     F: Fn(f32, f32) -> f32,
 {
-    colorize_runtime_preview(atlas, mode, atlas.spacing_m(), height_at).0
+    let side = atlas.width().max(atlas.height());
+    colorize_runtime_preview(atlas, mode, side, height_at).0
 }
 
 fn preview_value(atlas: &IslandAtlas, x: u32, z: u32, mode: &str) -> f32 {
@@ -661,7 +693,8 @@ mod tests {
         );
     }
 
-    /// Diagnostic: beyond-atlas samples clamp to edge cells, not y = 0 shallow seabed.
+    /// Diagnostic: beyond-atlas samples continue the offshore slope instead of
+    /// snapping to a shallow false seabed.
     #[test]
     fn surface_height_atlas_rim_does_not_snap_to_zero() {
         let atlas = build_island_atlas(&IslandGenParams::default());
@@ -672,12 +705,12 @@ mod tests {
         let h_edge = atlas.surface_height_at(max_x, cz);
         let h_beyond = atlas.surface_height_at(max_x + spacing * 4.0, cz);
         assert!(
-            (h_beyond - h_edge).abs() < 0.5,
-            "beyond-atlas should clamp to edge value, not jump: edge={h_edge} beyond={h_beyond}"
+            h_beyond < h_edge,
+            "beyond-atlas should deepen past the rim: edge={h_edge} beyond={h_beyond}"
         );
         assert!(
-            h_beyond > atlas.sea_level_m - 35.0,
-            "rim should not snap to false shallow seabed (y={h_beyond}, inner={h_inner})"
+            h_beyond < h_inner,
+            "offshore extrapolation should stay below the inner shelf (y={h_beyond}, inner={h_inner})"
         );
     }
 }

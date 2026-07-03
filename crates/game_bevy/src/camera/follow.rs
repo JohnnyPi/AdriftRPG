@@ -3,18 +3,24 @@ use bevy::prelude::*;
 
 use crate::data::ConfigRegistryResource;
 use crate::player::Player;
+use crate::ui::CameraTweaks;
 
 use super::components::{CameraFollowTarget, MmoCamera, PlayerInterpolation};
+use super::fly_cam::fly_cam_active;
 use super::{clamp_visual_delta, components::wrap_angle, smooth_angle, smooth_scalar, smooth_vec3};
 
 pub fn update_camera_focus(
     time: Res<Time>,
     fixed_time: Res<Time<Fixed>>,
     registry: Res<ConfigRegistryResource>,
+    camera_tweaks: Res<CameraTweaks>,
     players: Query<&PlayerInterpolation, With<Player>>,
     follow_targets: Query<Entity, With<CameraFollowTarget>>,
     mut cameras: Query<&mut MmoCamera>,
 ) {
+    if fly_cam_active(&camera_tweaks) {
+        return;
+    }
     let Ok(mut camera) = cameras.single_mut() else {
         return;
     };

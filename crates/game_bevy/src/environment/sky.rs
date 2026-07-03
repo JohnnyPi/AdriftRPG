@@ -129,9 +129,10 @@ fn spawn_atmospheric_sky(
     });
     commands.spawn((
         AtmosphericSky,
-        Mesh3d(meshes.add(Sphere::new(500.0))),
+        Mesh3d(meshes.add(Sphere::new(1.0))),
         MeshMaterial3d(mat),
-        Transform::IDENTITY,
+        // Inverted sphere: camera sits inside; render the inner surface behind geometry.
+        Transform::from_scale(Vec3::splat(-450.0)),
     ));
     let _ = registry;
 }

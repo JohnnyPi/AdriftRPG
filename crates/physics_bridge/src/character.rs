@@ -3,7 +3,7 @@ use avian3d::math::AdjustPrecision;
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
-use crate::collision::CharacterCollisionQuery;
+use crate::collision::{terrain_ground_filter, CharacterCollisionQuery};
 
 #[derive(Component, Debug, Default)]
 pub struct GroundedState {
@@ -92,7 +92,7 @@ fn probe_ground(
 ) {
     for (entity, transform, controller, collider, mut grounded) in &mut query {
         let max_distance = controller.ground_snap_m + controller.step_height + 0.15;
-        let filter = SpatialQueryFilter::from_excluded_entities([entity]);
+        let filter = terrain_ground_filter(entity);
         if let Some(hit) = CharacterCollisionQuery::ground_cast(
             &spatial,
             collider,
@@ -191,6 +191,8 @@ fn move_character(
 
 const GROUND_CONTACT_SKIN_M: f32 = 0.015;
 
+pub const GROUND_CONTACT_SKIN: f32 = GROUND_CONTACT_SKIN_M;
+
 /// Pull the capsule down onto walkable ground within the configured snap distance.
 fn snap_to_ground(
     spatial: SpatialQuery,
@@ -210,7 +212,7 @@ fn snap_to_ground(
             continue;
         }
         let max_distance = controller.ground_snap_m + GROUND_CONTACT_SKIN_M;
-        let filter = SpatialQueryFilter::from_excluded_entities([entity]);
+        let filter = terrain_ground_filter(entity);
         let Some(hit) = CharacterCollisionQuery::ground_cast(
             &spatial,
             collider,

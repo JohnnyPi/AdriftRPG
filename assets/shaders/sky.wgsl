@@ -75,7 +75,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 
     let sun_dot = max(dot(view_dir, normalize(sky.sun_dir.xyz)), 0.0);
     let sun_disc = smoothstep(1.0 - sky.mie.w, 1.0, sun_dot);
-    color += vec3<f32>(1.0, 0.95, 0.85) * sun_disc * sky.mie.x * (1.0 - night_mix * 0.85);
+    let mie_glow = pow(sun_dot, 8.0) * sky.mie.x * 0.35;
+    color += vec3<f32>(1.0, 0.95, 0.85) * (sun_disc + mie_glow) * (1.0 - night_mix * 0.85);
 
     let moon_dot = max(dot(view_dir, normalize(sky.moon.xyz)), 0.0);
     let moon_disc = smoothstep(1.0 - sky.moon.w, 1.0, moon_dot);

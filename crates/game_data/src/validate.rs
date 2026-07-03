@@ -1,6 +1,7 @@
 // crates/game_data/src/validate.rs
 use shared::{DataError, DataResult, StableId};
 
+use crate::compile::CompiledWorld;
 use crate::definitions::*;
 
 #[derive(Debug, Default)]
@@ -357,11 +358,26 @@ fn validate_world(world: &WorldDefinition, ids: &[StableId], report: &mut Valida
     if let Some(ref resolution) = world.resolution {
         validate_generation_resolution(
             resolution,
-            world.ocean_extent_m.unwrap_or(256.0),
+            effective_ocean_extent_for_world(world),
             &format!("world `{}`", world.header.id),
             report,
         );
     }
+}
+
+fn world_horizontal_extent_m(world: &WorldDefinition) -> f32 {
+    let cell_span = world.chunks.cells[0] as f32 * world.voxel.cell_size_m;
+    let x_extent = world.chunks.world_extent[0] as f32 * cell_span;
+    let z_extent = world.chunks.world_extent[2] as f32 * cell_span;
+    x_extent.max(z_extent)
+}
+
+fn effective_ocean_extent_for_world(world: &WorldDefinition) -> f32 {
+    let horizontal = world_horizontal_extent_m(world);
+    let authored = world
+        .ocean_extent_m
+        .unwrap_or(horizontal + CompiledWorld::DERIVED_OCEAN_PADDING_M);
+    authored.max(horizontal)
 }
 
 fn validate_performance(perf: &PerformanceDefinition, report: &mut ValidationReport) {

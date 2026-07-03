@@ -12,7 +12,8 @@ use terrain_surface::{
 };
 
 use super::biome_context::ChunkColumnCache;
-use super::biomes::BiomeKind;
+use super::biomes::{biome_surface_tint, BiomeKind};
+use crate::environment::BiomeCatalog;
 use super::materials::terrain_material_key_from_paint_material;
 use crate::terrain::TerrainEditStore;
 
@@ -27,6 +28,7 @@ pub struct ChunkSurfaceResolver {
     classifier: RuleSurfaceClassifier,
     slot_remapper: Mutex<ChunkSlotRemapper>,
     edit_store: TerrainEditStore,
+    biome_catalog: BiomeCatalog,
     origin_x: i32,
     origin_y: i32,
     origin_z: i32,
@@ -45,6 +47,7 @@ impl ChunkSurfaceResolver {
         edit_store: TerrainEditStore,
         palette: &CompiledTerrainMaterials,
         rules: &CompiledSurfaceRules,
+        biome_catalog: BiomeCatalog,
     ) -> Self {
         let layer_order: Vec<MaterialKey> = palette
             .layer_order
@@ -66,6 +69,7 @@ impl ChunkSurfaceResolver {
             ),
             slot_remapper: Mutex::new(ChunkSlotRemapper::new()),
             edit_store,
+            biome_catalog,
             source,
             origin_x,
             origin_y,
@@ -334,7 +338,10 @@ impl SurfaceMeshResolver for ChunkSurfaceResolver {
         let blend = self.classifier.classify(&context);
         let (globals, weights) = resolve_blend(blend, &self.layer_registry);
         let mut remapper = self.slot_remapper.lock().expect("slot remapper lock");
-        remap_blend_to_local_slots(globals, weights, &mut remapper)
+        let mut vertex = remap_blend_to_local_slots(globals, weights, &mut remapper);
+        let kind = biome_kind_from_surface(context.biome);
+        vertex.tint = biome_surface_tint(&self.biome_catalog, kind);
+        vertex
     }
 
     fn chunk_palette(&self) -> ChunkSlotPalette {
@@ -342,6 +349,22 @@ impl SurfaceMeshResolver for ChunkSurfaceResolver {
             .lock()
             .expect("slot remapper lock")
             .palette_snapshot()
+    }
+}
+
+pub fn biome_kind_from_surface(biome: terrain_surface::BiomeId) -> BiomeKind {
+    match biome {
+        terrain_surface::BiomeId::Grassland => BiomeKind::Grassland,
+        terrain_surface::BiomeId::Forest => BiomeKind::Forest,
+        terrain_surface::BiomeId::Scrub => BiomeKind::Scrub,
+        terrain_surface::BiomeId::CoastalScrub => BiomeKind::CoastalScrub,
+        terrain_surface::BiomeId::Wetland => BiomeKind::Wetland,
+        terrain_surface::BiomeId::Beach => BiomeKind::Beach,
+        terrain_surface::BiomeId::Alpine => BiomeKind::Alpine,
+        terrain_surface::BiomeId::RockyUpland => BiomeKind::RockyUpland,
+        terrain_surface::BiomeId::Cave => BiomeKind::Cave,
+        terrain_surface::BiomeId::Riverbank => BiomeKind::Riverbank,
+        terrain_surface::BiomeId::ShallowWater => BiomeKind::ShallowWater,
     }
 }
 
@@ -462,6 +485,41 @@ mod tests {
         }
     }
 
+    fn test_catalog() -> BiomeCatalog {
+        use game_data::BiomeRuleDefinition;
+        BiomeCatalog {
+            rules: vec![
+                BiomeRuleDefinition::new("grassland", 0, [0.34, 0.52, 0.28]),
+                BiomeRuleDefinition::new("beach", 1, [0.86, 0.78, 0.58]),
+            ],
+        }
+    }
+
+    #[test]
+    fn vertex_blend_applies_biome_surface_tint() {
+        let source = RecipeDensitySource::new(default_vertical_slice_recipe(42, 2.0));
+        let top = source.terrain_surface_height_at(-22.0, -18.0);
+        let column_cache = ChunkColumnCache::build(&source, 0, 0, 5);
+        let resolver = ChunkSurfaceResolver::from_compiled(
+            source,
+            column_cache,
+            0,
+            0,
+            0,
+            1.0,
+            TerrainEditStore::default(),
+            &test_palette(),
+            &test_rules(),
+            test_catalog(),
+        );
+        let vertex = resolver.vertex_blend([-22.0, top, -18.0], [0.0, 1.0, 0.0]);
+        assert!(
+            vertex.tint.iter().any(|&c| (c - 1.0).abs() > 0.05),
+            "expected biome tint to differ from white, got {:?}",
+            vertex.tint
+        );
+    }
+
     #[test]
     fn vertex_blend_runs_on_open_terrain() {
         let source = RecipeDensitySource::new(default_vertical_slice_recipe(42, 2.0));
@@ -477,6 +535,7 @@ mod tests {
             TerrainEditStore::default(),
             &test_palette(),
             &test_rules(),
+            test_catalog(),
         );
         let vertex = resolver.vertex_blend([-22.0, top, -18.0], [0.0, 1.0, 0.0]);
         assert!(vertex.weights.iter().sum::<f32>() > 0.99);
@@ -528,6 +587,7 @@ mod tests {
             edits,
             &test_palette(),
             &test_rules(),
+            test_catalog(),
         );
         let mesh = SurfaceNetsMesher
             .build_mesh(&ChunkMeshingInput {

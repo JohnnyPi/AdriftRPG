@@ -18,6 +18,8 @@ pub struct EnvironmentLightingState {
     pub current_exposure: f32,
     pub moon_enabled: bool,
     pub moon_illuminance: f32,
+    /// Last frame's sun-driven ambient (before cave dimming).
+    pub effective_ambient_brightness: f32,
 }
 
 impl Default for EnvironmentLightingState {
@@ -36,6 +38,7 @@ impl Default for EnvironmentLightingState {
             current_exposure: 1.0,
             moon_enabled: false,
             moon_illuminance: 0.15,
+            effective_ambient_brightness: 300.0,
         }
     }
 }
@@ -56,22 +59,50 @@ pub fn sun_direction_from_angles(azimuth_deg: f32, elevation_deg: f32) -> Vec3 {
 
 pub struct EnvironmentLightingPlugin;
 
+#[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
+pub struct SyncEnvironmentLightingSet;
+
 impl Plugin for EnvironmentLightingPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<EnvironmentLightingState>()
-            .add_systems(Update, sync_environment_lighting);
+            .configure_sets(Update, SyncEnvironmentLightingSet)
+            .add_systems(Update, sync_environment_lighting.in_set(SyncEnvironmentLightingSet));
     }
 }
 
 fn sync_environment_lighting(
     mut state: ResMut<EnvironmentLightingState>,
     tweaks: Option<Res<crate::ui::AtmosphereTweaks>>,
+    sky_state: Option<Res<super::sky::SkyState>>,
     mut sun: Query<(&mut DirectionalLight, &mut Transform), With<super::SunLight>>,
     mut ambient: ResMut<GlobalAmbientLight>,
+    mut clear: ResMut<ClearColor>,
     time: Res<Time>,
 ) {
-    if let Some(tweaks) = tweaks {
-        if tweaks.use_overrides {
+    let yaml_ambient = state.ambient_brightness;
+    let mut sun_illuminance = state.sun_illuminance;
+    let mut ambient_brightness = yaml_ambient;
+
+    if let Some(tweaks) = tweaks.as_ref() {
+        if tweaks.drive_sun_from_time_of_day {
+            let (azimuth, elevation) =
+                crate::ui::sun_angles_from_time_of_day(tweaks.time_of_day_hours);
+            state.sun_azimuth_deg = azimuth;
+            state.sun_elevation_deg = elevation;
+            sun_illuminance = crate::ui::sun_illuminance_for_elevation(elevation);
+            ambient_brightness =
+                crate::ui::ambient_brightness_for_elevation(elevation, yaml_ambient);
+            if let Some(sky) = sky_state.as_ref() {
+                let night_mix =
+                    super::sky::night_mix_from_elevation(state.sun_elevation_deg);
+                let horizon = lerp_rgb(sky.horizon_color, sky.night_horizon_color, night_mix);
+                clear.0 = Color::srgb(
+                    horizon[0] * 0.88,
+                    horizon[1] * 0.92,
+                    horizon[2] * 1.02,
+                );
+            }
+        } else if tweaks.use_overrides {
             state.sun_azimuth_deg = tweaks.sun_azimuth_deg;
             state.sun_elevation_deg = tweaks.sun_elevation_deg;
             state.exposure_min = tweaks.exposure_min;
@@ -88,14 +119,24 @@ fn sync_environment_lighting(
 
     let dir = sun_direction_from_angles(state.sun_azimuth_deg, state.sun_elevation_deg);
     for (mut light, mut transform) in &mut sun {
-        light.illuminance = state.sun_illuminance * state.current_exposure;
+        light.illuminance = sun_illuminance;
         light.color = Color::srgb(state.sun_color[0], state.sun_color[1], state.sun_color[2]);
         *transform = Transform::from_rotation(Quat::from_rotation_arc(-Vec3::Z, dir));
     }
-    ambient.brightness = state.ambient_brightness * state.current_exposure;
+    ambient.brightness = ambient_brightness;
+    state.effective_ambient_brightness = ambient_brightness;
     ambient.color = Color::srgb(
         state.ambient_color[0],
         state.ambient_color[1],
         state.ambient_color[2],
     );
+}
+
+fn lerp_rgb(day: [f32; 3], night: [f32; 3], mix: f32) -> [f32; 3] {
+    let t = mix.clamp(0.0, 1.0);
+    [
+        day[0] * (1.0 - t) + night[0] * t,
+        day[1] * (1.0 - t) + night[1] * t,
+        day[2] * (1.0 - t) + night[2] * t,
+    ]
 }

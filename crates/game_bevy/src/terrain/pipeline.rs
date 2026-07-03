@@ -30,9 +30,7 @@ use crate::environment::biome_context::ChunkColumnCache;
 #[cfg(test)]
 use crate::environment::materials::material_for_world_with_cache;
 use crate::environment::surface::ChunkSurfaceResolver;
-use crate::environment::BiomeInitSet;
-#[cfg(test)]
-use crate::environment::biomes::BiomeCatalog;
+use crate::environment::{BiomeCatalog, BiomeInitSet};
 use crate::state::AppState;
 use crate::terrain::material::TerrainMaterialHandle;
 use crate::terrain::mesh_convert::{chunk_world_transform, mesh_from_terrain_data};
@@ -42,7 +40,7 @@ use crate::terrain::residency::{
     chunk_chebyshev_distance, TerrainWorldRuntime, within_density_radius, within_physics_radius,
     within_render_radius,
 };
-use crate::terrain::{ChunkState, TerrainChunkEntity, TerrainChunkMaterial, TerrainEditStore, TerrainRevision};
+use crate::terrain::{ChunkState, TerrainChunkEntity, TerrainChunkMaterial, TerrainChunkPalette, TerrainEditStore, TerrainRevision};
 use crate::ui::{TerrainTweaks, WorldTweaks};
 use physics_bridge::terrain_layers;
 
@@ -483,7 +481,7 @@ fn dispatch_density_jobs(
     let center = runtime.interest_center;
     let revision_value = revision.value;
 
-    let mut try_start = |pipeline: &mut TerrainPipelineState, coord: ChunkCoord| -> bool {
+    let try_start = |pipeline: &mut TerrainPipelineState, coord: ChunkCoord| -> bool {
         let record = pipeline.chunks.entry(coord).or_insert_with(|| ChunkRecord {
             coord,
             state: ChunkState::Unrequested,
@@ -568,6 +566,7 @@ fn poll_density_jobs(
     runtime: Res<TerrainWorldRuntime>,
     registry: Res<ConfigRegistryResource>,
     prefs: Res<UserSetupPrefs>,
+    biomes: Res<BiomeCatalog>,
 ) {
     if pipeline.frozen {
         return;
@@ -620,6 +619,7 @@ fn poll_density_jobs(
             .get(&world.surface)
             .expect("surface rules")
             .clone();
+        let biome_catalog = biomes.clone();
         let mesh_task = AsyncComputeTaskPool::get().spawn(async move {
             let resolver = ChunkSurfaceResolver::from_compiled(
                 source,
@@ -631,6 +631,7 @@ fn poll_density_jobs(
                 edit_snapshot,
                 &palette,
                 &surface_rules,
+                biome_catalog,
             );
             let mesher = SurfaceNetsMesher;
             let input = ChunkMeshingInput {
@@ -774,6 +775,7 @@ fn upload_chunk_meshes(
             .spawn((
                 TerrainChunkEntity { coord: item.coord },
                 TerrainChunkMaterial,
+                TerrainChunkPalette(item.mesh_data.chunk_palette),
                 Mesh3d(meshes.add(mesh)),
                 MeshMaterial3d(chunk_material),
                 chunk_world_transform(item.coord, cell_size_m),

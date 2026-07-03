@@ -19,7 +19,7 @@ use crate::{
     build_island_atlas, default_vertical_slice_recipe, BeachParams, CaveParams, CoastParams,
     CoastModifierKind, CombineOp, ErosionParams, GenerationResolution, HydrologyParams,
     IslandGenParams, IslandShapeParams, RecipeDensitySource, RecipeOp, SurfaceNoiseParams,
-    TerrainRecipe, VolcanoParams,
+    TerrainRecipe, VolcanoParams, WorldVolumeBounds,
 };
 
 /// Convert authored recipe XZ to world XZ (atlas grid space).
@@ -28,6 +28,15 @@ fn recipe_xz_to_world(recipe_x: f32, recipe_z: f32, world: &CompiledWorld) -> [f
         recipe_x - world.coord_offset[0],
         recipe_z - world.coord_offset[2],
     ]
+}
+
+/// Padding kept between the island footprint and the atlas rim when deriving
+/// extent from the chunk volume (see `CompiledWorld::DERIVED_OCEAN_PADDING_M`).
+pub const DERIVED_OCEAN_PADDING_M: f32 = game_data::CompiledWorld::DERIVED_OCEAN_PADDING_M;
+
+/// Atlas square extent that fully covers the world's horizontal chunk volume.
+pub fn effective_ocean_extent_m(world: &CompiledWorld) -> f32 {
+    world.effective_ocean_extent_m()
 }
 
 fn merge_resolution(
@@ -47,7 +56,7 @@ fn resolve_generation_resolution(
     world: &CompiledWorld,
     compiled: &CompiledIslandGeneration,
 ) -> GenerationResolution {
-    let extent_m = world.ocean_extent_m.unwrap_or(256.0);
+    let extent_m = effective_ocean_extent_m(world);
     if let Some(ref island_res) = compiled.resolution {
         return merge_resolution(island_res, extent_m);
     }
@@ -70,7 +79,7 @@ pub fn island_params_from_compiled(
     IslandGenParams {
         seed,
         center,
-        ocean_extent_m: world.ocean_extent_m.unwrap_or(256.0),
+        ocean_extent_m: effective_ocean_extent_m(world),
         resolution,
         island: IslandShapeParams {
             playable_diameter_m: compiled.island.playable_diameter_m,
@@ -145,18 +154,6 @@ pub fn island_params_from_compiled(
     }
 }
 
-/// World-space bounds `[min, max)` in meters covered by the chunk volume along
-/// one axis, matching `chunk_gen::chunk_axis_range` (`start = -(extent / 2)`).
-///
-/// Note the asymmetry for odd extents: `extent 3, cells 16` spans `[-16, 32)`.
-fn world_axis_bounds_m(cells: u32, extent_chunks: u32, cell_size_m: f32) -> (f32, f32) {
-    let start_chunk = -((extent_chunks / 2) as i32);
-    let end_chunk = start_chunk + extent_chunks as i32;
-    (
-        start_chunk as f32 * cells as f32 * cell_size_m,
-        end_chunk as f32 * cells as f32 * cell_size_m,
-    )
-}
 
 /// Validate that an authored island fits inside the world that hosts it.
 ///
@@ -185,12 +182,20 @@ pub fn validate_island_world_budget(
     let mut messages = Vec::new();
     let params = island_params_from_compiled(compiled, world, world.seed, water_sea_level_m);
 
-    let cell_size = world.cell_size_m;
-    let cells = world.chunk_cells;
-    let extent = world.world_extent_chunks;
-    let (x_min, x_max) = world_axis_bounds_m(cells[0], extent[0], cell_size);
-    let (y_min, y_max) = world_axis_bounds_m(cells[1], extent[1], cell_size);
-    let (z_min, z_max) = world_axis_bounds_m(cells[2], extent[2], cell_size);
+    let (mins, maxs) = world.axis_bounds_m();
+    let (x_min, y_min, z_min) = (mins[0], mins[1], mins[2]);
+    let (x_max, y_max, z_max) = (maxs[0], maxs[1], maxs[2]);
+
+    if let Some(authored) = world.ocean_extent_m {
+        let span = world.horizontal_extent_m();
+        if authored + 0.01 < span {
+            messages.push(format!(
+                "ocean_extent_m {authored:.0} is smaller than the chunk volume horizontal \
+                 span {span:.0}; runtime generation expands the atlas to the world size, but \
+                 YAML should match to avoid confusion."
+            ));
+        }
+    }
 
     // --- 1. Horizontal footprint vs. chunk volume and atlas -----------------
     let support_radius = params.island.footprint_support_radius_m();
@@ -400,7 +405,10 @@ pub fn build_atlas_density_source(
     let atlas = build_island_atlas(&params);
     let recipe =
         compile_terrain_recipe_with_island(registry, world, water, Some(seed), Some(&merged));
-    RecipeDensitySource::new(recipe).with_atlas(atlas, 3.5)
+    let bounds = WorldVolumeBounds::from_compiled_world(world);
+    RecipeDensitySource::new(recipe)
+        .with_world_bounds(bounds)
+        .with_atlas(atlas, 3.5)
 }
 
 pub fn append_generated_island_caves(

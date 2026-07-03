@@ -42,6 +42,18 @@ impl SurfaceMaterialBlend {
 pub struct MaterialVertex {
     pub local_indices: [u8; 4],
     pub weights: [f32; 4],
+    /// Biome color multiplier (defaults to white).
+    pub tint: [f32; 3],
+}
+
+impl Default for MaterialVertex {
+    fn default() -> Self {
+        Self {
+            local_indices: [0; 4],
+            weights: [1.0, 0.0, 0.0, 0.0],
+            tint: [1.0, 1.0, 1.0],
+        }
+    }
 }
 
 pub fn resolve_blend(
@@ -67,6 +79,7 @@ pub fn remap_blend_to_local_slots(
     MaterialVertex {
         local_indices,
         weights,
+        tint: [1.0, 1.0, 1.0],
     }
 }
 

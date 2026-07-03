@@ -13,6 +13,7 @@ use terrain_material_bevy::{
 use crate::data::ConfigRegistryResource;
 use crate::data::UserSetupPrefs;
 use crate::state::AppState;
+use crate::terrain::{TerrainChunkEntity, TerrainChunkPalette};
 use crate::world::requested_world_id;
 
 pub use terrain_material_bevy::TerrainPbrMaterial;
@@ -36,7 +37,7 @@ impl Plugin for TerrainMaterialPlugin {
             (
                 sync_world_terrain_material_recipes,
                 sync_terrain_material_handle,
-                sync_chunk_terrain_materials,
+                refresh_chunk_terrain_materials,
             )
                 .chain()
                 .run_if(in_state(AppState::Running)),
@@ -44,19 +45,38 @@ impl Plugin for TerrainMaterialPlugin {
     }
 }
 
-fn sync_chunk_terrain_materials(
+fn refresh_chunk_terrain_materials(
     handle: Res<TerrainMaterialHandle>,
-    mut chunks: Query<
-        &mut MeshMaterial3d<TerrainPbrMaterial>,
-        (
-            With<crate::terrain::TerrainChunkEntity>,
-            Without<crate::terrain::TerrainChunkMaterial>,
-        ),
-    >,
+    state: Res<TerrainProceduralMaterialState>,
+    mut materials: ResMut<Assets<TerrainPbrMaterial>>,
+    mut last_fingerprint: Local<Option<[u8; 32]>>,
+    mut last_chunk_count: Local<usize>,
+    chunks: Query<(&MeshMaterial3d<TerrainPbrMaterial>, &TerrainChunkPalette), With<TerrainChunkEntity>>,
 ) {
-    for mut material in &mut chunks {
-        if material.0 != handle.0 {
-            material.0 = handle.0.clone();
+    if !state.ready {
+        *last_fingerprint = None;
+        *last_chunk_count = 0;
+        return;
+    }
+
+    let chunk_count = chunks.iter().count();
+    let fingerprint_changed = last_fingerprint.as_ref() != Some(&state.recipe_fingerprint);
+    let new_chunks = chunk_count > *last_chunk_count;
+    if !fingerprint_changed && !new_chunks {
+        return;
+    }
+    *last_fingerprint = Some(state.recipe_fingerprint);
+    *last_chunk_count = chunk_count;
+
+    let Some(template) = materials.get(&handle.0).cloned() else {
+        return;
+    };
+
+    for (mat_handle, palette) in &chunks {
+        if let Some(mut mat) = materials.get_mut(&mat_handle.0) {
+            let mut updated = template.with_chunk_palette(palette.0);
+            updated.settings.debug_mode = 0;
+            *mat = updated;
         }
     }
 }

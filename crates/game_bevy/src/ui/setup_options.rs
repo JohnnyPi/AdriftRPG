@@ -10,7 +10,8 @@ use crate::data::{
 };
 use crate::state::AppState;
 use crate::world::{
-    generate_map_preview, hash_prefs, MapPreviewState,
+    cancel_map_preview_build, hash_prefs, poll_map_preview_build, start_map_preview_build,
+    MapPreviewState,
 };
 
 pub struct SetupOptionsPlugin;
@@ -34,6 +35,7 @@ impl Plugin for SetupOptionsPlugin {
                 (
                     release_cursor_on_setup,
                     track_preview_param_changes,
+                    poll_map_preview_build_system,
                 )
                     .run_if(in_state(AppState::SetupOptions)),
             )
@@ -46,11 +48,15 @@ impl Plugin for SetupOptionsPlugin {
 
 fn on_enter_setup_options(mut preview: ResMut<MapPreviewState>, mut ui_state: ResMut<SetupUiState>) {
     preview.dirty = false;
-    preview.building = false;
+    cancel_map_preview_build(&mut preview);
     preview.error = None;
     ui_state.params_stale = true;
     ui_state.preview_texture = None;
     ui_state.preview_texture_generation = 0;
+}
+
+fn poll_map_preview_build_system(mut preview: ResMut<MapPreviewState>) {
+    poll_map_preview_build(&mut preview);
 }
 
 fn release_cursor_on_setup(
@@ -249,9 +255,8 @@ fn draw_setup_options(
                 .add_enabled(!preview.building, egui::Button::new("Generate preview"))
                 .clicked();
             if generate {
-                preview.building = true;
                 preview.error = None;
-                generate_map_preview(&registry.0, &prefs, &mut preview);
+                start_map_preview_build(&registry.0, &prefs, &mut preview);
                 ui_state.params_stale = false;
                 ui_state.preview_texture_generation = 0;
                 ui_state.preview_texture = None;

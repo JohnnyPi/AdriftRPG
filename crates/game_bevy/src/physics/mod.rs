@@ -2,9 +2,10 @@
 use bevy::prelude::*;
 use physics_bridge::{
     CharacterController, CharacterControllerBundle, CharacterControllerPlugin,
-    CharacterPhysicsSystems, GroundedState, LinearVelocity, PhysicsBridgePlugin, player_layers,
+    CharacterPhysicsSystems, GroundedState, LinearVelocity, PhysicsBridgePlugin,
+    player_layers, CharacterCollisionQuery, GROUND_CONTACT_SKIN, terrain_ground_filter,
 };
-use avian3d::prelude::CollisionLayers;
+use avian3d::prelude::{Collider, CollisionLayers, SpatialQuery};
 use game_data::CompiledPlayer;
 
 mod props;
@@ -12,6 +13,12 @@ mod water_physics;
 
 pub use props::DynamicPropPlugin;
 pub use water_physics::WaterPhysicsPlugin;
+
+/// Retry ground placement until terrain colliders are hit.
+#[derive(Component, Debug)]
+pub struct NeedsGroundSnap {
+    pub attempts: u8,
+}
 
 use crate::camera::{
     camera_forward_xz, camera_right_xz, CameraInputState, CharacterFacing, MmoCamera,
@@ -25,8 +32,9 @@ use crate::player::{
 };
 use crate::state::AppState;
 use crate::terrain::spawn_terrain_uploaded;
-use crate::terrain::{TerrainFeatureRegistry, TerrainPipelineState};
+use crate::terrain::{spawn_terrain_collider_ready, TerrainFeatureRegistry, TerrainPipelineState};
 use crate::ui::MovementTweaks;
+use crate::ui::CameraTweaks;
 use crate::world::effective_world_from_prefs;
 use terrain_generation::WaterQuery;
 use voxel_core::ChunkCoord;
@@ -38,8 +46,8 @@ pub struct AwaitingSpawnTerrain {
     pub chunk: ChunkCoord,
 }
 
-#[derive(Component, Debug)]
-pub struct SpawnTerrainReleased;
+const GROUND_SNAP_MAX_ATTEMPTS: u8 = 120;
+const GROUND_SNAP_PROBE_M: f32 = 12.0;
 
 #[derive(Component, Default, Debug)]
 pub struct PlayerMoveIntent {
@@ -57,6 +65,7 @@ impl Plugin for GamePhysicsPlugin {
                 (
                     tag_player_awaiting_terrain,
                     hold_player_until_spawn_terrain,
+                    snap_players_to_ground,
                     gather_player_movement,
                     detect_player_water,
                     apply_character_movement,
@@ -117,63 +126,130 @@ pub fn attach_character_physics(player: &CompiledPlayer, entity: &mut EntityComm
         PlayerFacingMode::default(),
         PlayerMoveIntent::default(),
         crate::physics::water_physics::WetnessState::default(),
+        NeedsGroundSnap { attempts: 0 },
     ));
 }
 
 fn tag_player_awaiting_terrain(
     mut commands: Commands,
     pipeline: Res<TerrainPipelineState>,
-    players: Query<Entity, (With<Player>, Without<AwaitingSpawnTerrain>, Without<SpawnTerrainReleased>)>,
+    colliders: Query<Entity, With<Collider>>,
+    players: Query<Entity, (With<Player>, Without<AwaitingSpawnTerrain>, Without<NeedsGroundSnap>)>,
 ) {
     let Some(chunk) = pipeline.spawn_chunk else {
         return;
     };
-    let spawn_ready = spawn_terrain_uploaded(&pipeline, chunk);
-    if spawn_ready {
-        return;
-    }
+    let mesh_ready = spawn_terrain_uploaded(&pipeline, chunk);
+    let collider_ready = spawn_terrain_collider_ready(&pipeline, chunk, &colliders);
+
     for entity in &players {
-        commands.entity(entity).insert(AwaitingSpawnTerrain { chunk });
+        if mesh_ready && collider_ready {
+            commands.entity(entity).insert(NeedsGroundSnap { attempts: 0 });
+        } else {
+            commands.entity(entity).insert(AwaitingSpawnTerrain { chunk });
+        }
     }
 }
 
 fn hold_player_until_spawn_terrain(
+    spatial: SpatialQuery,
     mut commands: Commands,
     pipeline: Res<TerrainPipelineState>,
     registry: Res<ConfigRegistryResource>,
+    colliders: Query<Entity, With<Collider>>,
     mut players: Query<
-        (Entity, &AwaitingSpawnTerrain, &mut Transform, &mut LinearVelocity),
+        (
+            Entity,
+            &AwaitingSpawnTerrain,
+            &mut Transform,
+            &mut LinearVelocity,
+            &Collider,
+        ),
         With<Player>,
     >,
 ) {
-    let Some(source) = pipeline.density_source.as_ref() else {
+    let Some(_source) = pipeline.density_source.as_ref() else {
         return;
     };
     let Ok(player) = registry.0.active_player() else {
         return;
     };
-    let capsule_center_y = player.capsule_half_height_m + player.capsule_radius_m;
 
-    for (entity, awaiting, mut transform, mut velocity) in &mut players {
+    for (entity, awaiting, mut transform, mut velocity, collider) in &mut players {
         velocity.0 = Vec3::ZERO;
-        let ready = spawn_terrain_uploaded(&pipeline, awaiting.chunk);
-        if ready {
-            let floor = source
-                .walkable_terrain_floor_at(
-                    transform.translation.x,
-                    transform.translation.z,
-                    transform.translation.y + 6.0,
-                    terrain_generation::PLAYER_SPAWN_MIN_CLEARANCE_M,
-                )
-                .unwrap_or_else(|| {
-                    source.terrain_surface_height_at(
-                        transform.translation.x,
-                        transform.translation.z,
-                    )
-                });
-            transform.translation.y = floor + terrain_generation::SPAWN_FLOOR_EPSILON_M + capsule_center_y;
+        let mesh_ready = spawn_terrain_uploaded(&pipeline, awaiting.chunk);
+        let collider_ready = spawn_terrain_collider_ready(&pipeline, awaiting.chunk, &colliders);
+        if mesh_ready && collider_ready {
+            place_capsule_on_physics_ground(
+                &spatial,
+                entity,
+                collider,
+                &mut transform,
+                player,
+            );
             commands.entity(entity).remove::<AwaitingSpawnTerrain>();
-            commands.entity(entity).insert(SpawnTerrainReleased);
+            commands
+                .entity(entity)
+                .insert(NeedsGroundSnap { attempts: 0 });
+        }
+    }
+}
+
+/// Drop the capsule onto the physics trimesh (not the analytic heightfield).
+fn place_capsule_on_physics_ground(
+    spatial: &SpatialQuery,
+    entity: Entity,
+    collider: &Collider,
+    transform: &mut Transform,
+    player: &CompiledPlayer,
+) -> bool {
+    let probe_height = GROUND_SNAP_PROBE_M.max(player.step_height_m + player.ground_snap_m + 3.0);
+    let start_y = transform.translation.y;
+    transform.translation.y += probe_height;
+    let filter = terrain_ground_filter(entity);
+    let cast_distance = probe_height + 2.0;
+    if let Some(hit) = CharacterCollisionQuery::ground_cast(
+        spatial,
+        collider,
+        transform.translation,
+        transform.rotation,
+        cast_distance,
+        &filter,
+    ) {
+        transform.translation.y -= hit.distance - GROUND_CONTACT_SKIN;
+        return true;
+    }
+    transform.translation.y = start_y;
+    false
+}
+
+fn snap_players_to_ground(
+    spatial: SpatialQuery,
+    mut commands: Commands,
+    registry: Res<ConfigRegistryResource>,
+    mut players: Query<
+        (Entity, &mut NeedsGroundSnap, &mut Transform, &Collider, &GroundedState),
+        With<Player>,
+    >,
+) {
+    let Ok(player) = registry.0.active_player() else {
+        return;
+    };
+
+    for (entity, mut snap, mut transform, collider, grounded) in &mut players {
+        if grounded.grounded {
+            commands.entity(entity).remove::<NeedsGroundSnap>();
+            continue;
+        }
+
+        if place_capsule_on_physics_ground(&spatial, entity, collider, &mut transform, player) {
+            commands.entity(entity).remove::<NeedsGroundSnap>();
+            continue;
+        }
+
+        snap.attempts = snap.attempts.saturating_add(1);
+        if snap.attempts >= GROUND_SNAP_MAX_ATTEMPTS {
+            commands.entity(entity).remove::<NeedsGroundSnap>();
         }
     }
 }
@@ -182,12 +258,16 @@ fn gather_player_movement(
     registry: Res<ConfigRegistryResource>,
     keyboard: Res<ButtonInput<KeyCode>>,
     input_state: Res<CameraInputState>,
+    camera_tweaks: Res<CameraTweaks>,
     cameras: Query<&MmoCamera>,
     mut players: Query<
         (&mut PlayerMoveIntent, &mut MovementIntent),
         (With<Player>, Without<AwaitingSpawnTerrain>),
     >,
 ) {
+    if camera_tweaks.fly_cam {
+        return;
+    }
     let Ok(camera) = cameras.single() else {
         return;
     };
@@ -394,11 +474,21 @@ fn detect_player_water(
     for (transform, mut movement) in &mut players {
         let center = transform.translation;
         let feet_y = center.y - feet_offset;
-        let sample = features
+        let feet_point = [center.x, feet_y, center.z];
+        let center_point = [center.x, center.y, center.z];
+        let feet_depth = features
             .hydrology
             .as_ref()
-            .and_then(|hydro| hydro.water.water_at([center.x, center.y, center.z]));
-        movement.submerged_depth = sample.map(|s| s.depth).unwrap_or(0.0);
+            .and_then(|hydro| hydro.water.water_at(feet_point))
+            .map(|s| s.depth)
+            .unwrap_or(0.0);
+        let center_depth = features
+            .hydrology
+            .as_ref()
+            .and_then(|hydro| hydro.water.water_at(center_point))
+            .map(|s| s.depth)
+            .unwrap_or(0.0);
+        movement.submerged_depth = feet_depth.max(center_depth);
         movement.in_water = feet_y < sea + 0.05 || movement.submerged_depth > 0.05;
         movement.in_shallow_water = movement.in_water
             && (feet_y > sea - SHALLOW_WATER_DEPTH_M || movement.submerged_depth < SHALLOW_WATER_DEPTH_M);
@@ -410,6 +500,7 @@ fn apply_player_water_physics(
     registry: Res<ConfigRegistryResource>,
     prefs: Res<UserSetupPrefs>,
     pipeline: Res<TerrainPipelineState>,
+    tweaks: Res<crate::ui::WaterPhysicsTweaks>,
     intent: Query<&PlayerMoveIntent, With<Player>>,
     mut players: Query<
         (&mut Transform, &mut LinearVelocity, &mut PlayerMovementState),
@@ -440,9 +531,22 @@ fn apply_player_water_physics(
 
         let center_y = transform.translation.y;
         let feet_y = center_y - feet_offset;
+        let depth = movement.submerged_depth;
+        let wading_depth = (sea - feet_y).max(0.0);
+        let deep_water = depth > tweaks.shallow_depth_m || wading_depth > tweaks.shallow_depth_m;
 
         if intent.jump_held {
             velocity.y = velocity.y.max(SWIM_UP_SPEED_MPS);
+        } else if deep_water {
+            velocity.y += gravity * depth.min(1.2) * tweaks.buoyancy_strength * 0.08;
+            if velocity.y < 0.0 {
+                velocity.y *= 0.98;
+            }
+        } else if wading_depth > 0.05 {
+            velocity.y += gravity * wading_depth.min(1.0) * tweaks.buoyancy_strength * 0.04;
+            if velocity.y < 0.0 {
+                velocity.y *= 0.99;
+            }
         } else if center_y < sea + 0.15 && velocity.y < 0.0 {
             velocity.y += gravity * (1.0 - WATER_SINK_GRAVITY_SCALE) * dt;
         }
@@ -453,7 +557,12 @@ fn apply_player_water_physics(
                 transform.translation.z,
             );
             let min_center_y = floor + feet_offset + terrain_generation::SPAWN_FLOOR_EPSILON_M;
-            if transform.translation.y < min_center_y {
+            if !deep_water && transform.translation.y < min_center_y {
+                transform.translation.y = min_center_y;
+                if velocity.y < 0.0 {
+                    velocity.y = 0.0;
+                }
+            } else if deep_water && feet_y < floor + 0.05 {
                 transform.translation.y = min_center_y;
                 if velocity.y < 0.0 {
                     velocity.y = 0.0;
@@ -461,7 +570,8 @@ fn apply_player_water_physics(
             }
         }
 
-        movement.in_shallow_water = feet_y > sea - SHALLOW_WATER_DEPTH_M
+        movement.in_shallow_water = !deep_water
+            && feet_y > sea - SHALLOW_WATER_DEPTH_M
             && feet_y < sea + 0.25
             && movement.submerged_depth < SHALLOW_WATER_DEPTH_M;
     }

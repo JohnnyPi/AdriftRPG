@@ -41,7 +41,7 @@ pub fn spawn_game_camera(
         },
         Projection::Perspective(PerspectiveProjection {
             near: 0.1,
-            far: 500.0,
+            far: 2500.0,
             ..default()
         }),
         Transform::from_translation(spawn_focus),

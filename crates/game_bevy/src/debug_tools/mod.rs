@@ -13,8 +13,9 @@ use crate::data::ConfigRegistryResource;
 use crate::data::UserSetupPrefs;
 use crate::environment::biome_context::BiomeSampleContext;
 use crate::environment::biomes::{
-    biome_color, biome_discrete_debug_color, biome_scalar_debug_value, classify_biome, BiomeCatalog,
+    biome_color, biome_discrete_debug_color, biome_scalar_debug_value, classify_biome,
 };
+use crate::environment::BiomeCatalog;
 use crate::environment::materials::{assign_material_color, material_for_world};
 use crate::state::AppState;
 use crate::terrain::{

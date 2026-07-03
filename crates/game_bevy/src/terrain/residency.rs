@@ -2,6 +2,7 @@
 //! Interest-based chunk residency (VS2 §3.3).
 
 use bevy::prelude::*;
+use avian3d::prelude::Collider;
 use voxel_core::{ChunkCoord, WorldCell, CHUNK_CELLS};
 
 use crate::player::Player;
@@ -83,6 +84,33 @@ pub fn spawn_terrain_uploaded(
         }
     }
     false
+}
+
+/// True when the spawn chunk's terrain mesh has a physics collider attached.
+pub fn spawn_terrain_collider_ready(
+    pipeline: &crate::terrain::TerrainPipelineState,
+    spawn: ChunkCoord,
+    colliders: &Query<Entity, With<Collider>>,
+) -> bool {
+    let Some(entity) = pipeline
+        .chunks
+        .get(&spawn)
+        .and_then(|chunk| chunk.entity)
+    else {
+        for dy in -1..=1i32 {
+            if dy == 0 {
+                continue;
+            }
+            let neighbor = ChunkCoord::new(spawn.x, spawn.y + dy, spawn.z);
+            if let Some(entity) = pipeline.chunks.get(&neighbor).and_then(|c| c.entity) {
+                if colliders.get(entity).is_ok() {
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
+    colliders.get(entity).is_ok()
 }
 
 pub fn within_density_radius(center: ChunkCoord, coord: ChunkCoord, tweaks: &WorldTweaks) -> bool {

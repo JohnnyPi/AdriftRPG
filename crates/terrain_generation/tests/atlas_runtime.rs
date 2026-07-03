@@ -145,3 +145,41 @@ fn testbed_seed_800000_meshes_most_surface_chunks() {
         "island mask reaches visible world edge and will clip abruptly (edge_mask={edge_mask:.2})"
     );
 }
+
+#[test]
+fn testbed_world_edge_columns_mesh_seabed() {
+    let registry = load_registry_from_directory(workspace_assets()).expect("registry");
+    let source = build_atlas_density_source(
+        &registry,
+        &shared::StableId::new("world.island_testbed"),
+        800_000,
+    );
+    let world = registry
+        .world_by_id(&shared::StableId::new("world.island_testbed"))
+        .expect("world");
+    let (mins, maxs) = world.axis_bounds_m();
+    let edge_x = mins[0] + 8.0;
+    let edge_z = mins[2] + 8.0;
+    let surface_y = source.terrain_surface_height_at(edge_x, edge_z);
+    assert!(
+        surface_y > mins[1] + 10.0 && surface_y < maxs[1] - 4.0,
+        "world-edge seabed should stay inside the chunk volume (y={surface_y}, bounds [{}, {}))",
+        mins[1],
+        maxs[1]
+    );
+
+    let cell_y = surface_y.floor() as i32;
+    let coord = WorldCell::new(edge_x.floor() as i32, cell_y, edge_z.floor() as i32).chunk_coord();
+    let samples = generate_padded_samples(&source, coord, MaterialId(0));
+    let mesh = SurfaceNetsMesher
+        .build_mesh(&ChunkMeshingInput {
+            samples: &samples,
+            chunk_cells: CHUNK_CELLS,
+            surface_resolver: None,
+        })
+        .expect("mesh");
+    assert!(
+        !mesh.positions.is_empty(),
+        "world-edge column ({edge_x:.0}, {edge_z:.0}) should produce seabed geometry"
+    );
+}

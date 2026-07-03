@@ -338,6 +338,43 @@ impl CompiledWorld {
             position[2] - self.coord_offset[2],
         ]
     }
+
+    /// Horizontal span of the chunk volume on X/Z in meters (square side length).
+    pub fn horizontal_extent_m(&self) -> f32 {
+        let cell_span = self.chunk_cells[0] as f32 * self.cell_size_m;
+        let x_extent = self.world_extent_chunks[0] as f32 * cell_span;
+        let z_extent = self.world_extent_chunks[2] as f32 * cell_span;
+        x_extent.max(z_extent)
+    }
+
+    /// World-space axis bounds `[min, max)` in meters, matching `chunk_axis_range`.
+    pub fn axis_bounds_m(&self) -> ([f32; 3], [f32; 3]) {
+        let axis = |cells: u32, extent_chunks: u32| -> (f32, f32) {
+            let start_chunk = -((extent_chunks / 2) as i32);
+            let end_chunk = start_chunk + extent_chunks as i32;
+            (
+                start_chunk as f32 * cells as f32 * self.cell_size_m,
+                end_chunk as f32 * cells as f32 * self.cell_size_m,
+            )
+        };
+        let (x_min, x_max) = axis(self.chunk_cells[0], self.world_extent_chunks[0]);
+        let (y_min, y_max) = axis(self.chunk_cells[1], self.world_extent_chunks[1]);
+        let (z_min, z_max) = axis(self.chunk_cells[2], self.world_extent_chunks[2]);
+        ([x_min, y_min, z_min], [x_max, y_max, z_max])
+    }
+
+    /// Padding between the island footprint and the atlas rim when deriving extent
+    /// from the chunk volume.
+    pub const DERIVED_OCEAN_PADDING_M: f32 = 32.0;
+
+    /// Square atlas extent that fully covers the world's horizontal chunk volume.
+    pub fn effective_ocean_extent_m(&self) -> f32 {
+        let horizontal = self.horizontal_extent_m();
+        let authored = self
+            .ocean_extent_m
+            .unwrap_or(horizontal + Self::DERIVED_OCEAN_PADDING_M);
+        authored.max(horizontal)
+    }
 }
 
 fn default_surface_for_materials(materials: &StableId) -> StableId {

@@ -3,8 +3,9 @@ use bevy::prelude::*;
 use terrain_generation::RecipeDensitySource;
 
 use crate::data::ConfigRegistryResource;
-use crate::environment::biomes::{classify_biome, BiomeCatalog, BiomeKind};
-use crate::physics::SpawnTerrainReleased;
+use crate::environment::biomes::{classify_biome, BiomeKind};
+use crate::environment::BiomeCatalog;
+use crate::physics::NeedsGroundSnap;
 use crate::player::Player;
 use crate::state::AppState;
 use crate::terrain::{
@@ -43,7 +44,7 @@ fn spawn_environment_when_ready(
     ecology: Res<EcologyTweaks>,
     world_tweaks: Res<WorldTweaks>,
     runtime: Res<TerrainWorldRuntime>,
-    players: Query<(&Transform, Entity), (With<Player>, With<SpawnTerrainReleased>, Without<EnvironmentSpawned>)>,
+    players: Query<(&Transform, Entity), (With<Player>, Without<NeedsGroundSnap>, Without<EnvironmentSpawned>)>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {

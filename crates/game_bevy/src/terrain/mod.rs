@@ -29,7 +29,7 @@ pub use pipeline::{
     TerrainRegenPending, TerrainSpawnPoint, TerrainWorldInitSet,
 };
 pub use residency::{
-    draw_residency_rings, spawn_terrain_uploaded,
+    draw_residency_rings, spawn_terrain_collider_ready, spawn_terrain_uploaded,
     world_position_in_decoration_radius, world_position_in_high_detail_radius,
     ChunkResidencyPlugin, TerrainWorldRuntime,
 };
@@ -63,9 +63,12 @@ pub struct TerrainChunkEntity {
     pub coord: ChunkCoord,
 }
 
+/// Per-chunk material slot palette used to refresh procedural textures after bake.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct TerrainChunkPalette(pub terrain_surface::ChunkSlotPalette);
+
 /// Marker for chunks that own a per-chunk material instance (chunk-local slot
-/// remap uniforms baked into its `MeshMaterial3d` handle). Excludes the chunk
-/// from the global-handle sync in `sync_chunk_terrain_materials`.
+/// remap uniforms baked into its `MeshMaterial3d` handle).
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct TerrainChunkMaterial;
 

@@ -148,6 +148,22 @@ fn rule_matches(rule: &BiomeRuleDefinition, ctx: &BiomeSampleContext) -> bool {
     true
 }
 
+/// Multiplier applied to triplanar albedo so biome rules tint the terrain surface.
+pub fn biome_surface_tint(catalog: &BiomeCatalog, kind: BiomeKind) -> [f32; 3] {
+    const STRENGTH: f32 = 1.0;
+    let id = biome_id_str(kind);
+    let (color, tint) = if let Some(rule) = catalog.rules.iter().find(|r| r.id == id) {
+        (rule.color, rule.tint)
+    } else {
+        (fallback_biome_rgb(kind), [1.0, 1.0, 1.0])
+    };
+    [
+        (1.0 + (color[0] * tint[0] - 1.0) * STRENGTH).clamp(0.08, 2.5),
+        (1.0 + (color[1] * tint[1] - 1.0) * STRENGTH).clamp(0.08, 2.5),
+        (1.0 + (color[2] * tint[2] - 1.0) * STRENGTH).clamp(0.08, 2.5),
+    ]
+}
+
 pub fn biome_color(catalog: &BiomeCatalog, kind: BiomeKind) -> Color {
     let id = biome_id_str(kind);
     if let Some(rule) = catalog.rules.iter().find(|r| r.id == id) {
@@ -220,22 +236,27 @@ fn fallback_material_id(kind: BiomeKind) -> u16 {
     }
 }
 
-fn fallback_biome_color(kind: BiomeKind) -> Color {
+fn fallback_biome_rgb(kind: BiomeKind) -> [f32; 3] {
     match kind {
-        BiomeKind::Beach => Color::srgb(0.86, 0.78, 0.58),
-        BiomeKind::Grassland => Color::srgb(0.34, 0.52, 0.28),
-        BiomeKind::RockyUpland => Color::srgb(0.45, 0.44, 0.42),
-        BiomeKind::Cave => Color::srgb(0.28, 0.26, 0.30),
-        BiomeKind::ShallowWater => Color::srgb(0.18, 0.62, 0.58),
-        BiomeKind::Wetland => Color::srgb(0.28, 0.42, 0.22),
-        BiomeKind::Riverbank => Color::srgb(0.32, 0.48, 0.26),
-        BiomeKind::Forest => Color::srgb(0.22, 0.42, 0.20),
-        BiomeKind::Scrub => Color::srgb(0.48, 0.52, 0.28),
-        BiomeKind::Alpine => Color::srgb(0.58, 0.56, 0.54),
-        BiomeKind::CoastalScrub => Color::srgb(0.52, 0.54, 0.32),
-        BiomeKind::DeepWater => Color::srgb(0.08, 0.28, 0.42),
-        BiomeKind::OffshoreShelf => Color::srgb(0.12, 0.45, 0.52),
+        BiomeKind::Beach => [0.86, 0.78, 0.58],
+        BiomeKind::Grassland => [0.34, 0.52, 0.28],
+        BiomeKind::RockyUpland => [0.45, 0.44, 0.42],
+        BiomeKind::Cave => [0.28, 0.26, 0.30],
+        BiomeKind::ShallowWater => [0.18, 0.62, 0.58],
+        BiomeKind::Wetland => [0.28, 0.42, 0.22],
+        BiomeKind::Riverbank => [0.32, 0.48, 0.26],
+        BiomeKind::Forest => [0.22, 0.42, 0.20],
+        BiomeKind::Scrub => [0.48, 0.52, 0.28],
+        BiomeKind::Alpine => [0.58, 0.56, 0.54],
+        BiomeKind::CoastalScrub => [0.52, 0.54, 0.32],
+        BiomeKind::DeepWater => [0.08, 0.28, 0.42],
+        BiomeKind::OffshoreShelf => [0.12, 0.45, 0.52],
     }
+}
+
+fn fallback_biome_color(kind: BiomeKind) -> Color {
+    let rgb = fallback_biome_rgb(kind);
+    Color::srgb(rgb[0], rgb[1], rgb[2])
 }
 
 pub struct BiomePlugin;

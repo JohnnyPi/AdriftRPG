@@ -4,9 +4,10 @@ use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder};
 use tracing::info;
 
 use crate::data::ConfigRegistryResource;
+use crate::environment::lighting_state::sun_direction_from_angles;
+use crate::environment::{CaveAmbientZone, SunLight};
 use crate::player::spawn_player;
 use crate::state::AppState;
-use crate::environment::{CaveAmbientZone, SunLight};
 use crate::terrain::TerrainSpawnPoint;
 use crate::terrain::TerrainWorldInitSet;
 
@@ -39,19 +40,50 @@ fn spawn_bootstrap_scene(
         .map(|p| p.gravity_mps2)
         .unwrap_or(player.gravity_mps2);
 
-    let sky_color = Color::srgb(
-        lighting.fog_color[0],
-        lighting.fog_color[1],
-        lighting.fog_color[2],
-    );
+    let sun_dir = registry
+        .0
+        .active_atmosphere()
+        .map(|atmo| sun_direction_from_angles(atmo.sun_azimuth_deg, atmo.sun_elevation_deg))
+        .unwrap_or_else(|| {
+            Vec3::new(
+                lighting.sun_direction[0],
+                lighting.sun_direction[1],
+                lighting.sun_direction[2],
+            )
+            .normalize_or_zero()
+        });
+    let (sun_illuminance, sun_color) = registry
+        .0
+        .active_atmosphere()
+        .map(|atmo| (atmo.sun_illuminance_lux, atmo.sun_color))
+        .unwrap_or((lighting.sun_illuminance_lux, lighting.sun_color));
+
+    let sky_color = if let Some(atmo) = registry.0.active_atmosphere() {
+        Color::srgb(atmo.ambient_color[0] * 0.9, atmo.ambient_color[1] * 0.95, atmo.ambient_color[2] * 1.05)
+    } else {
+        Color::srgb(
+            lighting.fog_color[0],
+            lighting.fog_color[1],
+            lighting.fog_color[2],
+        )
+    };
     commands.insert_resource(ClearColor(sky_color));
 
-    ambient.color = Color::srgb(
-        lighting.ambient_color[0],
-        lighting.ambient_color[1],
-        lighting.ambient_color[2],
-    );
-    ambient.brightness = lighting.ambient_brightness;
+    if let Some(atmo) = registry.0.active_atmosphere() {
+        ambient.color = Color::srgb(
+            atmo.ambient_color[0],
+            atmo.ambient_color[1],
+            atmo.ambient_color[2],
+        );
+        ambient.brightness = atmo.ambient_brightness;
+    } else {
+        ambient.color = Color::srgb(
+            lighting.ambient_color[0],
+            lighting.ambient_color[1],
+            lighting.ambient_color[2],
+        );
+        ambient.brightness = lighting.ambient_brightness;
+    }
 
     commands.insert_resource(avian3d::prelude::Gravity(Vec3::new(
         0.0,
@@ -62,25 +94,13 @@ fn spawn_bootstrap_scene(
     commands.spawn((
         SunLight,
         DirectionalLight {
-            illuminance: lighting.sun_illuminance_lux,
-            color: Color::srgb(
-                lighting.sun_color[0],
-                lighting.sun_color[1],
-                lighting.sun_color[2],
-            ),
+            illuminance: sun_illuminance,
+            color: Color::srgb(sun_color[0], sun_color[1], sun_color[2]),
             shadow_maps_enabled: lighting.sun_shadows_enabled && performance.shadows_enabled,
             ..default()
         },
         cascade_shadow_config(&performance.shadow_quality),
-        Transform::from_rotation(Quat::from_rotation_arc(
-            -Vec3::Z,
-            Vec3::new(
-                lighting.sun_direction[0],
-                lighting.sun_direction[1],
-                lighting.sun_direction[2],
-            )
-            .normalize_or_zero(),
-        )),
+        Transform::from_rotation(Quat::from_rotation_arc(-Vec3::Z, sun_dir)),
     ));
 
     commands.spawn((

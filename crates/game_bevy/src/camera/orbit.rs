@@ -3,17 +3,23 @@ use bevy::input::mouse::{AccumulatedMouseMotion, MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 
 use crate::data::ConfigRegistryResource;
+use crate::ui::CameraTweaks;
 
 use super::components::{CameraInputState, MmoCamera};
+use super::fly_cam::fly_cam_active;
 use super::{parse_recenter_key, components::wrap_angle};
 
 pub fn read_camera_orbit_input(
     registry: Res<ConfigRegistryResource>,
+    camera_tweaks: Res<CameraTweaks>,
     input_state: Res<CameraInputState>,
     mouse_motion: Res<AccumulatedMouseMotion>,
     keyboard: Res<ButtonInput<KeyCode>>,
     mut cameras: Query<&mut MmoCamera>,
 ) {
+    if fly_cam_active(&camera_tweaks) {
+        return;
+    }
     let Ok(mut camera) = cameras.single_mut() else {
         return;
     };

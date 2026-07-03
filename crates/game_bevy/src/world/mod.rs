@@ -2,7 +2,10 @@
 mod preview;
 mod profile;
 
-pub use preview::{generate_map_preview, hash_prefs, MapPreviewState};
+pub use preview::{
+    cancel_map_preview_build, hash_prefs, poll_map_preview_build, start_map_preview_build,
+    MapPreviewState,
+};
 pub use profile::{effective_world_from_prefs, requested_world_id, WorldProfilePlugin};
 
 use bevy::prelude::*;

@@ -7,7 +7,7 @@ use voxel_core::{MaterialId, TerrainEditCommand};
 
 use crate::camera::{camera_view_direction, MainGameCamera, MmoCamera};
 use crate::debug_tools::DebugKeyBindings;
-use crate::environment::biomes::BiomeCatalog;
+use crate::environment::BiomeCatalog;
 use crate::environment::biomes::BiomeKind;
 use crate::environment::materials::material_for_world;
 use crate::player::Player;

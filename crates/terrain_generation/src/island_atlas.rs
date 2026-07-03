@@ -82,14 +82,19 @@ impl IslandAtlas {
         self.resolution.local_m
     }
 
+    /// World-space XZ bounds covered by the atlas raster (inclusive edges).
+    pub fn world_xz_bounds(&self) -> ([f32; 2], [f32; 2]) {
+        let spacing = self.spacing_m();
+        let max_x = self.origin[0] + (self.width().saturating_sub(1)) as f32 * spacing;
+        let max_z = self.origin[1] + (self.height().saturating_sub(1)) as f32 * spacing;
+        ([self.origin[0], self.origin[1]], [max_x, max_z])
+    }
+
     pub fn composed_land_elevation_at(&self, x: f32, z: f32) -> f32 {
         self.elevation_regional.sample_bilinear(x, z) + self.elevation_local.sample_bilinear(x, z)
     }
 
-    /// Terrain height for this column: land elevation on the island interior,
-    /// bathymetry in open ocean, and a mask-weighted blend of the two across
-    /// the coastal fringe so the surface is continuous through the shoreline.
-    pub fn surface_height_at(&self, x: f32, z: f32) -> f32 {
+    fn surface_height_in_field(&self, x: f32, z: f32) -> f32 {
         let mask = self.island_mask.sample_bilinear(x, z).clamp(0.0, 1.0);
         if mask >= MASK_LAND_MIN {
             return self.composed_land_elevation_at(x, z);
@@ -101,6 +106,48 @@ impl IslandAtlas {
         let land = self.composed_land_elevation_at(x, z);
         let t = smoothstep(MASK_OCEAN_MAX, MASK_LAND_MIN, mask);
         sea_floor + (land - sea_floor) * t
+    }
+
+    /// Terrain height for this column: land elevation on the island interior,
+    /// bathymetry in open ocean, and a mask-weighted blend of the two across
+    /// the coastal fringe so the surface is continuous through the shoreline.
+    ///
+    /// Outside the raster extent the seabed continues to deepen so chunk
+    /// boundaries and the world volume stay filled with solid ocean floor.
+    pub fn surface_height_at(&self, x: f32, z: f32) -> f32 {
+        let ([min_x, min_z], [max_x, max_z]) = self.world_xz_bounds();
+        if x >= min_x && x <= max_x && z >= min_z && z <= max_z {
+            return self.surface_height_in_field(x, z);
+        }
+
+        let cx = x.clamp(min_x, max_x);
+        let cz = z.clamp(min_z, max_z);
+        let edge_height = self.surface_height_in_field(cx, cz);
+        let dx = if x < min_x {
+            min_x - x
+        } else if x > max_x {
+            x - max_x
+        } else {
+            0.0
+        };
+        let dz = if z < min_z {
+            min_z - z
+        } else if z > max_z {
+            z - max_z
+        } else {
+            0.0
+        };
+        let outside = (dx * dx + dz * dz).sqrt();
+        if outside <= f32::EPSILON {
+            return edge_height;
+        }
+
+        // Continue the offshore shelf/deep slope past the atlas rim.
+        let coast_d = self.coast_distance.sample_bilinear(cx, cz).max(0.0);
+        let deep_slope = 0.28f32;
+        let shelf_depth = (self.sea_level_m - edge_height).max(0.0);
+        let target_depth = shelf_depth + (coast_d + outside) * deep_slope;
+        self.sea_level_m - target_depth
     }
 
     pub fn slope_at(&self, x: f32, z: f32) -> f32 {
@@ -129,6 +176,62 @@ impl IslandAtlas {
 
     pub fn sample_coast_distance(&self, wx: f32, wz: f32) -> f32 {
         self.coast_distance.sample_bilinear(wx, wz)
+    }
+}
+
+#[cfg(test)]
+mod extrapolation_tests {
+    use super::*;
+    use crate::field2d::Field2D;
+    use crate::resolution::GenerationResolution;
+
+    fn minimal_atlas(sea: f32, edge_floor: f32) -> IslandAtlas {
+        let spacing = 4.0;
+        let origin = [-20.0, -20.0];
+        let mut mask = Field2D::<f32>::new(11, 11, origin, spacing);
+        mask.samples.fill(0.0);
+        let mut bathy = Field2D::<f32>::new(11, 11, origin, spacing);
+        bathy.samples.fill(edge_floor);
+        let mut coast = Field2D::<f32>::new(11, 11, origin, spacing);
+        coast.samples.fill(40.0);
+        IslandAtlas {
+            resolution: GenerationResolution {
+                regional_m: 8.0,
+                local_m: spacing,
+                ..GenerationResolution::for_extent(80.0)
+            },
+            seed: 1,
+            sea_level_m: sea,
+            voxel_amplitude_m: 0.0,
+            origin,
+            elevation_regional: Field2D::new(11, 11, origin, spacing),
+            elevation_local: Field2D::new(11, 11, origin, spacing),
+            bathymetry: bathy,
+            island_mask: mask,
+            slope: Field2D::new(11, 11, origin, spacing),
+            coast_distance: coast,
+            filled_elevation: Field2D::new(11, 11, origin, spacing),
+            flow_direction: Field2D::new(11, 11, origin, spacing),
+            flow_accumulation: Field2D::new(11, 11, origin, spacing),
+            river_mask: Field2D::new(11, 11, origin, spacing),
+            wetness: Field2D::new(11, 11, origin, spacing),
+            sediment: Field2D::new(11, 11, origin, spacing),
+            cliff_mask: Field2D::new(11, 11, origin, spacing),
+            beach_mask: Field2D::new(11, 11, origin, spacing),
+            soil_depth: Field2D::new(11, 11, origin, spacing),
+            biome_weights: Field2D::new(11, 11, origin, spacing),
+            river_graph: None,
+            validation_passed: true,
+            validation_messages: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn surface_deepens_outside_atlas_bounds() {
+        let atlas = minimal_atlas(2.0, -8.0);
+        let inside = atlas.surface_height_at(0.0, 0.0);
+        let outside = atlas.surface_height_at(80.0, 0.0);
+        assert!(outside < inside, "outside {outside} should be deeper than inside {inside}");
     }
 }
 

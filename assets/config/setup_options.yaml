@@ -133,6 +133,8 @@ groups:
 preview_modes:
   - id: elevation
     label: Elevation
+  - id: biomes
+    label: Biome map
   - id: island_mask
     label: Island mask
   - id: flow_accumulation

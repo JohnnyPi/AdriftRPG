@@ -2,19 +2,23 @@
 //! Overhead map preview for the setup screen.
 
 use bevy::prelude::*;
+use bevy::tasks::{AsyncComputeTaskPool, Task};
 use game_data::ConfigRegistry;
 use terrain_generation::{
-    build_island_atlas, colorize_runtime_preview, land_surface_height, GenerationResolution,
-    IslandAtlas, PREVIEW_PIXEL_SPACING_M,
+    build_island_atlas, clamp_preview_output_side, colorize_runtime_preview, land_surface_height,
+    preview_grid_for_atlas, GenerationResolution, IslandAtlas,
 };
+use tracing::info;
 use voxel_core::{fnv1a_update, quantize_density_mm, FNV_OFFSET};
 
 use crate::data::UserSetupPrefs;
+use crate::environment::BiomeCatalog;
+use crate::environment::biomes::{biome_color, classify_biome};
 use crate::terrain::{build_density_source_from_prefs, compile_terrain_recipe, island_params_from_compiled};
 use crate::ui::TerrainTweaks;
 use crate::world::effective_world_from_prefs;
 
-#[derive(Resource, Clone, Debug, Default)]
+#[derive(Resource, Debug, Default)]
 pub struct MapPreviewState {
     pub dirty: bool,
     pub building: bool,
@@ -30,6 +34,21 @@ pub struct MapPreviewState {
     pub width: u32,
     pub height: u32,
     pub params_hash: u64,
+    pending_task: Option<Task<MapPreviewBuildResult>>,
+}
+
+struct MapPreviewBuildResult {
+    atlas: IslandAtlas,
+    pixels: Vec<u8>,
+    width: u32,
+    height: u32,
+    color_mode: String,
+    params_hash: u64,
+    validation_passed: bool,
+    validation_messages: Vec<String>,
+    spawn_validation_passed: bool,
+    spawn_validation_messages: Vec<String>,
+    error: Option<String>,
 }
 
 pub fn hash_prefs(prefs: &UserSetupPrefs) -> u64 {
@@ -37,6 +56,7 @@ pub fn hash_prefs(prefs: &UserSetupPrefs) -> u64 {
     hash = fnv1a_update(hash, prefs.world_id.as_str().as_bytes());
     hash = fnv1a_update(hash, prefs.seed.to_le_bytes());
     hash = fnv1a_update(hash, prefs.preview_color_mode.as_bytes());
+    hash = fnv1a_update(hash, prefs.preview_resolution.to_le_bytes());
     for (key, value) in &prefs.island_overrides {
         hash = fnv1a_update(hash, key.as_bytes());
         hash = fnv1a_update(hash, quantize_density_mm(*value).to_le_bytes());
@@ -62,7 +82,7 @@ fn fallback_recipe_preview(
 ) -> IslandAtlas {
     let water = registry.water.get(&world.water).expect("water");
     let recipe = compile_terrain_recipe(registry, world, water, Some(seed));
-    let extent = world.ocean_extent_m.unwrap_or(256.0);
+    let extent = world.effective_ocean_extent_m();
     let resolution = GenerationResolution::for_extent(extent);
     let spacing = resolution.local_m;
     let width = (extent / spacing).ceil() as u32 + 1;
@@ -110,44 +130,142 @@ fn fallback_recipe_preview(
     }
 }
 
-pub fn rebuild_preview_pixels(
-    preview: &mut MapPreviewState,
+fn build_preview_pixels(
+    registry: &ConfigRegistry,
+    prefs: &UserSetupPrefs,
     atlas: &IslandAtlas,
-    color_mode: &str,
-    height_at: impl Fn(f32, f32) -> f32,
-) {
-    let (pixels, width, height) =
-        colorize_runtime_preview(atlas, color_mode, PREVIEW_PIXEL_SPACING_M, height_at);
-    preview.width = width;
-    preview.height = height;
-    preview.pixels = Some(pixels);
+    output_side: u32,
+) -> (Vec<u8>, u32, u32) {
+    let terrain_tweaks = TerrainTweaks::default();
+    let source = build_density_source_from_prefs(registry, prefs, terrain_tweaks.field_stack_params());
+    let mode = prefs.preview_color_mode.as_str();
+    if mode == "biomes" {
+        let catalog = BiomeCatalog::from_registry(registry, Some(&prefs.world_stable_id()));
+        let (width, height, spacing_x, spacing_z) = preview_grid_for_atlas(atlas, output_side);
+        let w = width as usize;
+        let h = height as usize;
+        let mut pixels = vec![0u8; w * h * 4];
+        let sea = atlas.sea_level_m;
+        for z in 0..height {
+            for x in 0..width {
+                let wx = atlas.origin[0] + x as f32 * spacing_x;
+                let wz = atlas.origin[1] + z as f32 * spacing_z;
+                let surface_y = source.terrain_surface_height_at(wx, wz);
+                let color = if surface_y <= sea + 0.25 {
+                    Color::srgb(0.08, 0.28, 0.42)
+                } else {
+                    let biome = classify_biome(&catalog, &source, wx, surface_y, wz, -0.1);
+                    biome_color(&catalog, biome)
+                };
+                let srgba = color.to_srgba();
+                let i = ((z as usize * w + x as usize) * 4) as usize;
+                pixels[i] = (srgba.red * 255.0) as u8;
+                pixels[i + 1] = (srgba.green * 255.0) as u8;
+                pixels[i + 2] = (srgba.blue * 255.0) as u8;
+                pixels[i + 3] = 255;
+            }
+        }
+        (pixels, width, height)
+    } else {
+        colorize_runtime_preview(atlas, mode, output_side, |wx, wz| {
+            source.terrain_surface_height_at(wx, wz)
+        })
+    }
 }
 
-/// Build atlas, colorize pixels, and run spawn validation for the setup screen.
-pub fn generate_map_preview(
+fn build_map_preview_data(registry: &ConfigRegistry, prefs: &UserSetupPrefs) -> MapPreviewBuildResult {
+    let output_side = clamp_preview_output_side(prefs.preview_resolution);
+    info!(
+        world = %prefs.world_id,
+        seed = prefs.seed,
+        mode = %prefs.preview_color_mode,
+        output_side,
+        "building setup map preview"
+    );
+
+    let atlas = build_preview_atlas(registry, prefs);
+    let validation_passed = atlas.validation_passed;
+    let validation_messages = atlas.validation_messages.clone();
+    let mode = prefs.preview_color_mode.clone();
+    let (pixels, width, height) = build_preview_pixels(registry, prefs, &atlas, output_side);
+
+    info!(
+        world = %prefs.world_id,
+        width,
+        height,
+        atlas_cells = atlas.width().max(atlas.height()),
+        "setup map preview ready"
+    );
+
+    let (spawn_ok, spawn_msgs) = validate_spawn_for_preview(registry, prefs);
+
+    MapPreviewBuildResult {
+        atlas,
+        pixels,
+        width,
+        height,
+        color_mode: mode,
+        params_hash: hash_prefs(prefs),
+        validation_passed,
+        validation_messages,
+        spawn_validation_passed: spawn_ok,
+        spawn_validation_messages: spawn_msgs,
+        error: None,
+    }
+}
+
+fn apply_map_preview_build(preview: &mut MapPreviewState, result: MapPreviewBuildResult) {
+    preview.atlas = Some(result.atlas);
+    preview.pixels = Some(result.pixels);
+    preview.width = result.width;
+    preview.height = result.height;
+    preview.color_mode = result.color_mode;
+    preview.params_hash = result.params_hash;
+    preview.validation_passed = result.validation_passed;
+    preview.validation_messages = result.validation_messages;
+    preview.spawn_validation_passed = result.spawn_validation_passed;
+    preview.spawn_validation_messages = result.spawn_validation_messages;
+    preview.error = result.error;
+    preview.generation = preview.generation.wrapping_add(1);
+    preview.dirty = false;
+    preview.building = false;
+}
+
+/// Drop an in-flight preview task (e.g. when leaving the setup screen).
+pub fn cancel_map_preview_build(preview: &mut MapPreviewState) {
+    preview.pending_task = None;
+    preview.building = false;
+}
+
+/// Queue async preview generation so the UI thread stays responsive.
+pub fn start_map_preview_build(
     registry: &ConfigRegistry,
     prefs: &UserSetupPrefs,
     preview: &mut MapPreviewState,
 ) {
-    let atlas = build_preview_atlas(registry, prefs);
-    preview.validation_passed = atlas.validation_passed;
-    preview.validation_messages = atlas.validation_messages.clone();
-    let terrain_tweaks = TerrainTweaks::default();
-    let source = build_density_source_from_prefs(registry, prefs, terrain_tweaks.field_stack_params());
-    let mode = prefs.preview_color_mode.clone();
-    rebuild_preview_pixels(preview, &atlas, &mode, |wx, wz| {
-        source.terrain_surface_height_at(wx, wz)
-    });
-    preview.atlas = Some(atlas);
-    preview.color_mode = mode;
-    preview.params_hash = hash_prefs(prefs);
-    preview.generation = preview.generation.wrapping_add(1);
-    preview.dirty = false;
-    preview.building = false;
+    preview.pending_task = None;
+    preview.building = true;
     preview.error = None;
-    let (spawn_ok, spawn_msgs) = validate_spawn_for_preview(registry, prefs);
-    preview.spawn_validation_passed = spawn_ok;
-    preview.spawn_validation_messages = spawn_msgs;
+
+    let registry = registry.clone();
+    let prefs = prefs.clone();
+    preview.pending_task = Some(AsyncComputeTaskPool::get().spawn(async move {
+        build_map_preview_data(&registry, &prefs)
+    }));
+}
+
+/// Poll an in-flight preview build (call from `Update`).
+pub fn poll_map_preview_build(preview: &mut MapPreviewState) {
+    let Some(mut task) = preview.pending_task.take() else {
+        return;
+    };
+    if let Some(result) =
+        bevy::tasks::block_on(bevy::tasks::futures_lite::future::poll_once(&mut task))
+    {
+        apply_map_preview_build(preview, result);
+    } else {
+        preview.pending_task = Some(task);
+    }
 }
 
 pub fn validate_spawn_for_preview(registry: &ConfigRegistry, prefs: &UserSetupPrefs) -> (bool, Vec<String>) {

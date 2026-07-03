@@ -195,6 +195,9 @@ fn vertex(vertex: Vertex) -> VertexOutput {
 #ifdef VERTEX_UVS_B
     out.uv_b = vertex.uv_b;
 #endif
+#ifdef VERTEX_TANGENTS
+    out.world_tangent = vec4<f32>(vertex.tangent.xyz, vertex.tangent.w);
+#endif
 #ifdef VERTEX_COLORS
     out.color = vertex.color;
 #endif
@@ -230,6 +233,10 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     let ddy_p = dpdy(world_pos);
 
     var albedo = vec3<f32>(0.0);
+    var biome_tint = vec3<f32>(1.0, 1.0, 1.0);
+#ifdef VERTEX_TANGENTS
+    biome_tint = in.world_tangent.xyz;
+#endif
     var roughness = 0.0;
     var metallic = 0.0;
     var occlusion = 0.0;
@@ -302,6 +309,10 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
         occlusion /= weight_sum;
         detail_normal = normalize(detail_normal / weight_sum);
     }
+
+#ifdef VERTEX_TANGENTS
+    albedo *= biome_tint;
+#endif
 
     if settings.debug_mode == 1u {
         var dominant = 0u;

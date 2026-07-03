@@ -24,6 +24,7 @@ impl Plugin for EnvironmentConfigPlugin {
 }
 
 fn init_presentation_from_registry(
+    mut commands: Commands,
     registry: Res<ConfigRegistryResource>,
     prefs: Res<UserSetupPrefs>,
     _world_tweaks: Res<WorldTweaks>,
@@ -39,6 +40,12 @@ fn init_presentation_from_registry(
         &mut sky_state,
         &mut atmosphere,
     );
+
+    commands.insert_resource(ClearColor(Color::srgb(
+        sky_state.horizon_color[0],
+        sky_state.horizon_color[1],
+        sky_state.horizon_color[2],
+    )));
 
     if let Some(atmo) = registry.0.active_atmosphere() {
         lighting_state.sun_azimuth_deg = atmo.sun_azimuth_deg;

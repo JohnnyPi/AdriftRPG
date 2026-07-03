@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 use shared::StableId;
 use terrain_generation::{
     RecipeDensitySource, build_island_atlas, compile_terrain_recipe,
-    island_params_from_compiled, validate_island_world_budget,
+    island_params_from_compiled, validate_island_world_budget, WorldVolumeBounds,
 };
 
 use crate::data::UserSetupPrefs;
@@ -52,7 +52,10 @@ fn with_validated_atlas(
     validate_island_world_or_panic(compiled, world, water.sea_level_m);
     let params = island_params_from_compiled(compiled, world, seed, water.sea_level_m);
     let atlas = build_island_atlas(&params);
-    source.with_atlas(atlas, 3.5)
+    let bounds = WorldVolumeBounds::from_compiled_world(world);
+    source
+        .with_world_bounds(bounds)
+        .with_atlas(atlas, 3.5)
 }
 
 pub fn build_density_source(

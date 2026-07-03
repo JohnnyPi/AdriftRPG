@@ -178,9 +178,35 @@ impl Default for RiverTweaks {
     }
 }
 
+/// Map clock hours (0–24) to sun azimuth/elevation for lighting tests.
+pub fn sun_angles_from_time_of_day(hours: f32) -> (f32, f32) {
+    use std::f32::consts::PI;
+    let hour = hours.rem_euclid(24.0);
+    // Solar noon at 12:00, sunrise/sunset near 6:00 / 18:00.
+    let day_phase = ((hour - 6.0) / 12.0).clamp(0.0, 1.0) * PI;
+    let elevation = day_phase.sin() * 62.0;
+    let azimuth = 55.0 + hour * 15.0;
+    (azimuth.rem_euclid(360.0), elevation)
+}
+
+/// Directional lux from sun elevation (matches perceived day/night).
+pub fn sun_illuminance_for_elevation(elevation_deg: f32) -> f32 {
+    let day = ((elevation_deg + 8.0) / 70.0).clamp(0.0, 1.0);
+    400.0 + day.powf(1.35) * 99_600.0
+}
+
+/// Ambient fill that dims with the sun.
+pub fn ambient_brightness_for_elevation(elevation_deg: f32, base: f32) -> f32 {
+    let day = ((elevation_deg + 6.0) / 60.0).clamp(0.0, 1.0);
+    base * (0.12 + day * 0.88)
+}
+
 /// Atmosphere / sky overrides (Phase 7–9).
 #[derive(Resource, Clone, Debug)]
 pub struct AtmosphereTweaks {
+    /// When true, sun angles are driven from [`Self::time_of_day_hours`].
+    pub drive_sun_from_time_of_day: bool,
+    pub time_of_day_hours: f32,
     pub sun_azimuth_deg: f32,
     pub sun_elevation_deg: f32,
     pub exposure_min: f32,
@@ -195,9 +221,12 @@ pub struct AtmosphereTweaks {
 
 impl Default for AtmosphereTweaks {
     fn default() -> Self {
+        let (azimuth, elevation) = sun_angles_from_time_of_day(10.0);
         Self {
-            sun_azimuth_deg: 132.0,
-            sun_elevation_deg: 48.0,
+            drive_sun_from_time_of_day: false,
+            time_of_day_hours: 10.0,
+            sun_azimuth_deg: azimuth,
+            sun_elevation_deg: elevation,
             exposure_min: 0.4,
             exposure_max: 1.6,
             zenith_color: [0.25, 0.45, 0.75],
@@ -213,6 +242,9 @@ impl Default for AtmosphereTweaks {
 /// Camera overrides (Phase 10+).
 #[derive(Resource, Clone, Debug)]
 pub struct CameraTweaks {
+    /// Collision-less free camera for world inspection.
+    pub fly_cam: bool,
+    pub fly_cam_speed_mps: f32,
     pub orbit_distance: f32,
     pub collision_inward_sharpness: f32,
     pub collision_outward_sharpness: f32,
@@ -223,6 +255,8 @@ pub struct CameraTweaks {
 impl Default for CameraTweaks {
     fn default() -> Self {
         Self {
+            fly_cam: false,
+            fly_cam_speed_mps: 28.0,
             orbit_distance: 8.0,
             collision_inward_sharpness: 18.0,
             collision_outward_sharpness: 6.0,

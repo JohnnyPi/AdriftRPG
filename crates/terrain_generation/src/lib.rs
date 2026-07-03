@@ -31,16 +31,17 @@ pub use field_stack::{build_coast_mask, ridge_field, valley_field, FieldStackPar
 pub use hydrology::{HydrologyBackend, RiverHydrology, StubHydrology};
 pub use island_atlas::{BiomeWeights, IslandAtlas};
 pub use island_gen::{
-    build_island_atlas, colorize_preview, colorize_preview_with_heights, colorize_runtime_preview,
-    min_peak_elevation_m, sample_atlas_surface, BeachParams, CaveParams, CoastParams,
-    ErosionParams, HydrologyParams, IslandGenParams, IslandShapeParams, PREVIEW_PIXEL_SPACING_M,
+    build_island_atlas, clamp_preview_output_side, colorize_preview, colorize_preview_with_heights,
+    colorize_runtime_preview, min_peak_elevation_m, preview_grid_for_atlas, sample_atlas_surface,
+    BeachParams, CaveParams, CoastParams, ErosionParams, HydrologyParams, IslandGenParams,
+    IslandShapeParams, PREVIEW_OUTPUT_MAX, PREVIEW_OUTPUT_MIN, PREVIEW_PIXEL_SPACING_M,
     SurfaceNoiseParams, ValidationReport, VolcanoParams,
 };
 pub use resolution::{GenerationResolution, ResolutionError};
 pub use noise::ValueNoise;
 pub use recipe::{
     coastal_inland_factor, default_vertical_slice_recipe, distance_to_river_m, distance_to_water_m,
-    CombineOp, RecipeDensitySource, RecipeOp, RiverCarveContext, TerrainRecipe,
+    CombineOp, RecipeDensitySource, RecipeOp, RiverCarveContext, TerrainRecipe, WorldVolumeBounds,
 };
 pub use river::{
     distance_to_river_centerline, generate_river_spline, river_carve_offset, river_channel_at,
@@ -60,7 +61,8 @@ pub use water_body::{
 };
 pub use world_setup::{
     append_generated_island_caves, build_atlas_density_source, compile_terrain_recipe,
-    island_params_from_compiled, validate_island_world_budget,
+    effective_ocean_extent_m, island_params_from_compiled, validate_island_world_budget,
+    DERIVED_OCEAN_PADDING_M,
 };
 
 pub trait DensitySource: Send + Sync {

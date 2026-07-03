@@ -6,6 +6,7 @@ use crate::player::Player;
 use crate::state::AppState;
 use crate::terrain::TerrainPipelineState;
 use crate::ui::LightingTweaks;
+use super::lighting_state::SyncEnvironmentLightingSet;
 use terrain_generation::RecipeDensitySource;
 
 #[derive(Component)]
@@ -22,8 +23,8 @@ impl Plugin for LightingPlugin {
             Update,
             (
                 apply_lighting_hot_reload,
-                apply_cave_atmosphere,
                 update_sky_visibility,
+                apply_cave_atmosphere.after(SyncEnvironmentLightingSet),
             )
                 .run_if(in_state(AppState::Running)),
         );
@@ -89,11 +90,8 @@ fn apply_cave_atmosphere(
     player: Query<(&Transform, &super::lighting_state::SkyVisibility), With<Player>>,
     mut zones: Query<(&Transform, &mut PointLight), With<CaveAmbientZone>>,
     mut ambient: ResMut<GlobalAmbientLight>,
-    registry: Res<ConfigRegistryResource>,
+    lighting_state: Res<super::lighting_state::EnvironmentLightingState>,
 ) {
-    let Ok(lighting) = registry.0.active_lighting() else {
-        return;
-    };
     let Ok((player_tf, sky_vis)) = player.single() else {
         return;
     };
@@ -112,12 +110,12 @@ fn apply_cave_atmosphere(
         };
     }
 
-    let base = lighting.ambient_brightness * sky_factor;
+    let base = lighting_state.effective_ambient_brightness * sky_factor;
     ambient.brightness = base * (1.0 - cave_factor * 0.55);
     ambient.color = Color::srgb(
-        lighting.ambient_color[0] * (1.0 - cave_factor * 0.3),
-        lighting.ambient_color[1] * (1.0 - cave_factor * 0.2),
-        lighting.ambient_color[2] * (1.0 - cave_factor * 0.1) + cave_factor * 0.15,
+        lighting_state.ambient_color[0] * (1.0 - cave_factor * 0.3),
+        lighting_state.ambient_color[1] * (1.0 - cave_factor * 0.2),
+        lighting_state.ambient_color[2] * (1.0 - cave_factor * 0.1) + cave_factor * 0.15,
     );
 }
 

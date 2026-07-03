@@ -182,7 +182,9 @@ fn draw_options_panel(
                 OptionsTab::Water => {
                     draw_water_tab(ui, &mut water, &mut river, &mut water_physics)
                 }
-                OptionsTab::Debug => draw_debug_tab(ui, &mut camera, &mut ecology),
+                OptionsTab::Debug => {
+                    draw_debug_tab(ui, &mut camera, &mut atmosphere, &mut ecology)
+                }
             }
 
             ui.separator();
@@ -226,8 +228,7 @@ fn draw_atmosphere_tab(
 
     ui.separator();
     ui.heading("Sun & sky");
-    atmosphere.use_overrides = ui.checkbox(&mut atmosphere.use_overrides, "Override YAML").changed()
-        || atmosphere.use_overrides;
+    ui.checkbox(&mut atmosphere.use_overrides, "Override YAML");
     ui.add_enabled(
         atmosphere.use_overrides,
         egui::Slider::new(&mut atmosphere.sun_azimuth_deg, 0.0..=360.0).text("azimuth"),
@@ -258,10 +259,7 @@ fn draw_world_tab(ui: &mut egui::Ui, world: &mut WorldTweaks, terrain: &mut Terr
 
     ui.separator();
     ui.heading("Terrain fields");
-    terrain.use_overrides = ui
-        .checkbox(&mut terrain.use_overrides, "Override field amplitudes")
-        .changed()
-        || terrain.use_overrides;
+    ui.checkbox(&mut terrain.use_overrides, "Override field amplitudes");
     ui.add_enabled(
         terrain.use_overrides,
         egui::Slider::new(&mut terrain.ridge_amplitude, 0.0..=2.0).text("ridge"),
@@ -290,10 +288,7 @@ fn draw_movement_tab(
         }
     }
 
-    movement.use_overrides = ui
-        .checkbox(&mut movement.use_overrides, "Override movement")
-        .changed()
-        || movement.use_overrides;
+    ui.checkbox(&mut movement.use_overrides, "Override movement");
 
     ui.add_enabled(
         movement.use_overrides,
@@ -326,10 +321,7 @@ fn draw_movement_tab(
 }
 
 fn draw_physics_tab(ui: &mut egui::Ui, physics: &mut PhysicsTweaks) {
-    physics.use_overrides = ui
-        .checkbox(&mut physics.use_overrides, "Override physics")
-        .changed()
-        || physics.use_overrides;
+    ui.checkbox(&mut physics.use_overrides, "Override physics");
     ui.add_enabled(
         physics.use_overrides,
         egui::Slider::new(&mut physics.gravity, 5.0..=30.0).text("gravity"),
@@ -355,10 +347,7 @@ fn draw_water_tab(
     river: &mut RiverTweaks,
     water_physics: &mut WaterPhysicsTweaks,
 ) {
-    water.use_overrides = ui
-        .checkbox(&mut water.use_overrides, "Override water bodies")
-        .changed()
-        || water.use_overrides;
+    ui.checkbox(&mut water.use_overrides, "Override water bodies");
     ui.add_enabled(
         water.use_overrides,
         egui::Slider::new(&mut water.sea_level_m, -2.0..=2.0).text("sea level"),
@@ -386,13 +375,43 @@ fn draw_water_tab(
 fn draw_debug_tab(
     ui: &mut egui::Ui,
     camera: &mut CameraTweaks,
+    atmosphere: &mut AtmosphereTweaks,
     ecology: &mut EcologyTweaks,
 ) {
-    ui.heading("Camera");
-    camera.use_overrides = ui
-        .checkbox(&mut camera.use_overrides, "Override camera")
-        .changed()
-        || camera.use_overrides;
+    ui.heading("Time of day");
+    ui.checkbox(
+        &mut atmosphere.drive_sun_from_time_of_day,
+        "Drive sun & sky from clock",
+    );
+    ui.add_enabled(
+        atmosphere.drive_sun_from_time_of_day,
+        egui::Slider::new(&mut atmosphere.time_of_day_hours, 0.0..=24.0)
+            .text("hours (0=midnight, 12=noon)"),
+    );
+    if atmosphere.drive_sun_from_time_of_day {
+        let (azimuth, elevation) =
+            super::tweaks::sun_angles_from_time_of_day(atmosphere.time_of_day_hours);
+        atmosphere.sun_azimuth_deg = azimuth;
+        atmosphere.sun_elevation_deg = elevation;
+    }
+    ui.label(format!(
+        "Sun azimuth {:.0}°, elevation {:.0}°",
+        atmosphere.sun_azimuth_deg, atmosphere.sun_elevation_deg
+    ));
+    ui.label("Also try Atmosphere tab for Mie haze and fog while testing.");
+
+    ui.separator();
+    ui.heading("Fly camera");
+    ui.checkbox(&mut camera.fly_cam, "Fly cam (no collision)");
+    ui.add_enabled(
+        camera.fly_cam,
+        egui::Slider::new(&mut camera.fly_cam_speed_mps, 4.0..=80.0).text("speed (m/s)"),
+    );
+    ui.label("WASD move · Space/Ctrl up/down · Shift sprint · hold LMB to look");
+
+    ui.separator();
+    ui.heading("Orbit camera");
+    ui.checkbox(&mut camera.use_overrides, "Override camera");
     ui.add_enabled(
         camera.use_overrides,
         egui::Slider::new(&mut camera.orbit_distance, 3.0..=20.0).text("orbit distance"),
