@@ -24,6 +24,9 @@ pub struct SkyPresentationConfig {
     pub clouds_direction_deg: f32,
     pub clouds_altitude: f32,
     pub stars_enabled: bool,
+    pub stars_density: f32,
+    pub cloud_base_height_m: f32,
+    pub cloud_shell_radius_m: f32,
 }
 
 impl Default for SkyPresentationConfig {
@@ -39,6 +42,9 @@ impl Default for SkyPresentationConfig {
             clouds_direction_deg: 45.0,
             clouds_altitude: 0.22,
             stars_enabled: false,
+            stars_density: 0.55,
+            cloud_base_height_m: 500.0,
+            cloud_shell_radius_m: 2800.0,
         }
     }
 }
@@ -63,6 +69,9 @@ pub fn apply_sky_profile(
     config.clouds_direction_deg = sky.clouds_direction_deg;
     config.clouds_altitude = sky.clouds_altitude;
     config.stars_enabled = sky.stars_enabled;
+    config.stars_density = sky.stars_density;
+    config.cloud_base_height_m = sky.cloud_base_height_m;
+    config.cloud_shell_radius_m = sky.cloud_shell_radius_m;
 
     atmosphere.zenith_color = sky.zenith_color;
     atmosphere.horizon_color = sky.horizon_color;
@@ -95,9 +104,10 @@ mod tests {
             clouds_speed: 0.03,
             clouds_direction_deg: 55.0,
             clouds_altitude: 0.32,
+            cloud_base_height_m: 500.0,
+            cloud_shell_radius_m: 2800.0,
             night_zenith_color: [0.0, 0.0, 0.1],
             night_horizon_color: [0.1, 0.1, 0.2],
-            shader: "shaders/sky.wgsl".into(),
         };
         let mut config = SkyPresentationConfig::default();
         let mut atmosphere = crate::ui::AtmosphereTweaks::default();

@@ -17,8 +17,6 @@ use crate::data::{ConfigRegistryResource, UserSetupPrefs};
 use crate::state::AppState;
 
 /// Base height scale for YAML `clouds_altitude` (0–1) → world meters.
-const CLOUD_BASE_HEIGHT_M: f32 = 500.0;
-const CLOUD_SHELL_RADIUS_M: f32 = 2800.0;
 
 #[derive(ShaderType, Clone, Copy, Debug)]
 pub struct CloudParams {
@@ -93,8 +91,8 @@ impl Plugin for CloudPlugin {
     }
 }
 
-pub fn cloud_shell_world_y(sea_level_m: f32, clouds_altitude: f32) -> f32 {
-    sea_level_m + CLOUD_BASE_HEIGHT_M * clouds_altitude.clamp(0.05, 1.0)
+pub fn cloud_shell_world_y(sea_level_m: f32, clouds_altitude: f32, base_height_m: f32) -> f32 {
+    sea_level_m + base_height_m * clouds_altitude.clamp(0.05, 1.0)
 }
 
 fn spawn_cloud_layer(
@@ -118,11 +116,11 @@ fn spawn_cloud_layer(
     }
 
     let sea_level = sea_level_for_prefs(&registry, &prefs);
-    let shell_y = cloud_shell_world_y(sea_level, sky.clouds_altitude);
+    let shell_y = cloud_shell_world_y(sea_level, sky.clouds_altitude, sky.cloud_base_height_m);
     let material = materials.add(cloud_material_from_state(&sky, &celestial, shell_y, 0.0));
 
     let mesh = meshes.add(
-        Sphere::new(CLOUD_SHELL_RADIUS_M)
+        Sphere::new(sky.cloud_shell_radius_m)
             .mesh()
             .kind(SphereKind::Uv {
                 sectors: 48,
@@ -185,7 +183,7 @@ fn follow_cloud_layer(
         return;
     };
     let sea_level = sea_level_for_prefs(&registry, &prefs);
-    let shell_y = cloud_shell_world_y(sea_level, sky.clouds_altitude);
+    let shell_y = cloud_shell_world_y(sea_level, sky.clouds_altitude, sky.cloud_base_height_m);
     for mut transform in &mut clouds {
         transform.translation = Vec3::new(camera_tf.translation.x, shell_y, camera_tf.translation.z);
     }
@@ -201,7 +199,7 @@ fn update_cloud_material(
     clouds: Query<&MeshMaterial3d<CloudMaterial>, With<CloudLayer>>,
 ) {
     let sea_level = sea_level_for_prefs(&registry, &prefs);
-    let shell_y = cloud_shell_world_y(sea_level, sky.clouds_altitude);
+    let shell_y = cloud_shell_world_y(sea_level, sky.clouds_altitude, sky.cloud_base_height_m);
     let elapsed = time.elapsed_secs();
 
     for mat_handle in clouds.iter() {
@@ -237,7 +235,7 @@ fn cloud_material_from_state(
             sun_dir: Vec4::new(sun.x, sun.y, sun.z, 0.0),
             sun_color: Vec4::new(sun_c[0], sun_c[1], sun_c[2], 1.0),
             horizon_color: Vec4::new(horizon[0], horizon[1], horizon[2], 1.0),
-            shell: Vec4::new(shell_y, CLOUD_SHELL_RADIUS_M, 0.0, 0.0),
+            shell: Vec4::new(shell_y, sky.cloud_shell_radius_m, 0.0, 0.0),
         },
     }
 }
@@ -248,8 +246,8 @@ mod tests {
 
     #[test]
     fn cloud_shell_scales_with_altitude() {
-        let low = cloud_shell_world_y(2.0, 0.2);
-        let high = cloud_shell_world_y(2.0, 0.8);
+        let low = cloud_shell_world_y(2.0, 0.2, 500.0);
+        let high = cloud_shell_world_y(2.0, 0.8, 500.0);
         assert!(high > low);
     }
 }

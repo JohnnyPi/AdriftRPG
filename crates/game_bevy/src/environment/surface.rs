@@ -628,6 +628,7 @@ mod tests {
             .build_mesh(&ChunkMeshingInput {
                 samples: &samples,
                 chunk_cells: CHUNK_CELLS,
+                cell_stride: 1,
                 surface_resolver: Some(&resolver),
             })
             .expect("mesh");

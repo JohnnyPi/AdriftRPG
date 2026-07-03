@@ -39,7 +39,9 @@ pub struct FogStack {
     pub height: Option<HeightFogLayer>,
     pub local_volumes: Vec<LocalFogVolume>,
     pub underwater_density: f32,
+    pub underwater_color: [f32; 3],
     pub cave_density: f32,
+    pub cave_color: [f32; 3],
     pub transition_alpha: f32,
     pub ocean_extent_m: f32,
 }
@@ -51,7 +53,9 @@ impl Default for FogStack {
             height: None,
             local_volumes: Vec::new(),
             underwater_density: 0.15,
+            underwater_color: [0.05, 0.25, 0.35],
             cave_density: 0.12,
+            cave_color: [0.2, 0.22, 0.28],
             transition_alpha: 1.0,
             ocean_extent_m: 288.0,
         }
@@ -165,14 +169,30 @@ fn apply_fog_stack(
 
     if transition.current_underwater > 0.0 {
         let u = (transition.current_underwater / stack.underwater_density.max(0.01)).clamp(0.0, 1.0);
-        extinction = lerp_color(extinction, [0.05, 0.25, 0.35], u);
-        inscattering = lerp_color(inscattering, [0.08, 0.32, 0.42], u);
+        extinction = lerp_color(extinction, stack.underwater_color, u);
+        inscattering = lerp_color(
+            inscattering,
+            [
+                stack.underwater_color[0] + 0.03,
+                stack.underwater_color[1] + 0.07,
+                stack.underwater_color[2] + 0.07,
+            ],
+            u,
+        );
         end *= 1.0 - u * 0.6;
     }
     if transition.current_cave > 0.0 {
         let c = (transition.current_cave / stack.cave_density.max(0.01)).clamp(0.0, 1.0);
-        extinction = lerp_color(extinction, [0.2, 0.22, 0.28], c);
-        inscattering = lerp_color(inscattering, [0.24, 0.26, 0.32], c);
+        extinction = lerp_color(extinction, stack.cave_color, c);
+        inscattering = lerp_color(
+            inscattering,
+            [
+                stack.cave_color[0] + 0.04,
+                stack.cave_color[1] + 0.04,
+                stack.cave_color[2] + 0.04,
+            ],
+            c,
+        );
         start *= 1.0 - c * 0.4;
     }
 

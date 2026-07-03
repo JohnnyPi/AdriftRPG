@@ -527,6 +527,21 @@ fn validate_world(world: &WorldDefinition, ids: &[StableId], report: &mut Valida
     if let Some(ref catalog_id) = world.material_catalog {
         require_reference(catalog_id, "world material_catalog", ids, report);
     }
+
+    if let Some(ref vegetation_id) = world.vegetation {
+        require_reference(vegetation_id, "world vegetation", ids, report);
+    }
+
+    if let Some(ref weather_id) = world.weather {
+        require_reference(weather_id, "world weather", ids, report);
+    }
+
+    require_reference(
+        &world.chunks.lod.materials.render_profile,
+        "world render_profile",
+        ids,
+        report,
+    );
 }
 
 fn validate_performance(perf: &PerformanceDefinition, report: &mut ValidationReport) {

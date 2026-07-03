@@ -43,7 +43,10 @@ use crate::terrain::residency::{
     within_render_radius,
 };
 use crate::terrain::{ChunkState, TerrainChunkEntity, TerrainChunkMaterial, TerrainChunkPalette, TerrainEditStore, TerrainRevision};
+use crate::interest::WorldSimulationLodProvider;
+use crate::lod::{mesh_cell_stride, terrain_lod_with_hysteresis, LodPolicy, LodRuntimeState};
 use crate::ui::{TerrainTweaks, WorldTweaks};
+use game_data::TerrainColliderLodDefinition;
 use physics_bridge::terrain_layers;
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
@@ -96,6 +99,7 @@ impl Plugin for TerrainPlugin {
                     poll_mesh_jobs,
                     upload_chunk_meshes,
                     attach_pending_colliders,
+                    sync_chunk_lod_tiers,
                 )
                     .chain()
                     .run_if(in_state(AppState::Running)),
@@ -144,6 +148,10 @@ pub struct TerrainPipelineState {
 }
 
 impl TerrainPipelineState {
+    pub fn has_density_cached(&self, coord: ChunkCoord) -> bool {
+        self.density_cache.contains_key(&coord)
+    }
+
     /// Clears pending work and returns chunk entities that should be
     /// despawned. All records are dropped; they re-materialize lazily at the
     /// new revision as the scheduler touches them.
@@ -211,6 +219,9 @@ pub struct ChunkRecord {
     pub revision: u64,
     pub entity: Option<Entity>,
     pub failed_at: Option<Instant>,
+    pub lod_tier: u8,
+    pub mesh_resolution_scale: f32,
+    pub collider_lod: TerrainColliderLodDefinition,
 }
 
 struct CachedDensity {
@@ -250,6 +261,7 @@ struct MeshPromoteJob {
     column_cache: ChunkColumnCache,
     edit_snapshot: Arc<TerrainEditStore>,
     needs_collider: bool,
+    cell_stride: u32,
 }
 
 struct UploadItem {
@@ -681,6 +693,7 @@ fn dispatch_density_jobs(
     registry: Res<ConfigRegistryResource>,
     revision: Res<TerrainRevision>,
     runtime: Res<TerrainWorldRuntime>,
+    policy: Res<LodPolicy>,
     world_tweaks: Res<WorldTweaks>,
     edit_store: Res<TerrainEditStore>,
     mut pipeline: ResMut<TerrainPipelineState>,
@@ -710,6 +723,9 @@ fn dispatch_density_jobs(
             revision: revision_value,
             entity: None,
             failed_at: None,
+            lod_tier: 0,
+            mesh_resolution_scale: 1.0,
+            collider_lod: TerrainColliderLodDefinition::Full,
         });
         if record.state != ChunkState::Unrequested {
             return false;
@@ -738,7 +754,7 @@ fn dispatch_density_jobs(
         for cy in (center.y - r).max(min_b[1])..=(center.y + r).min(max_b[1]) {
             for cz in (center.z - r).max(min_b[2])..=(center.z + r).min(max_b[2]) {
                 let coord = ChunkCoord::new(cx, cy, cz);
-                if !within_density_radius(center, coord, &world_tweaks) {
+                if !WorldSimulationLodProvider::should_simulate_chunk(center, coord, &policy) {
                     continue;
                 }
                 if let Some(existing) = pipeline.chunks.get(&coord) {
@@ -837,6 +853,8 @@ fn promote_density_ready_to_mesh(
     world_tweaks: Res<WorldTweaks>,
     prefs: Res<UserSetupPrefs>,
     biomes: Res<BiomeCatalog>,
+    policy: Res<LodPolicy>,
+    mut lod_runtime: ResMut<LodRuntimeState>,
     mut pipeline: ResMut<TerrainPipelineState>,
     mut metrics: ResMut<TerrainPipelineMetrics>,
 ) {
@@ -855,9 +873,6 @@ fn promote_density_ready_to_mesh(
     let center = runtime.interest_center;
     let revision_value = revision.value;
     let cell_size_m = runtime.cell_size_m;
-    let build_collider = |coord: ChunkCoord| {
-        within_physics_radius(center, coord, &world_tweaks)
-    };
 
     let mut candidates: Vec<(i32, ChunkCoord)> = pipeline
         .chunks
@@ -897,36 +912,52 @@ fn promote_density_ready_to_mesh(
     let biome_catalog = biomes.clone();
 
     for (_d, coord) in candidates.into_iter().take(slots) {
-        let job = {
-            let Some(cached) = pipeline.density_cache.get(&coord) else {
-                continue;
-            };
+        let (lod_tier, mesh_scale, collider_lod) =
+            terrain_lod_with_hysteresis(&policy, &mut lod_runtime, center, coord);
+        let needs_collider = within_physics_radius(center, coord, &world_tweaks)
+            && collider_lod != TerrainColliderLodDefinition::None;
+        let cell_stride = mesh_cell_stride(mesh_scale);
+
+        let cached_job = pipeline.density_cache.get(&coord).and_then(|cached| {
             if cached.revision != revision_value {
-                continue;
+                return None;
             }
-            let Some(chunk) = pipeline.chunks.get(&coord) else {
-                continue;
-            };
-            if chunk.state != ChunkState::DensityReady {
-                continue;
-            }
-            MeshPromoteJob {
-                coord,
-                samples: cached.samples.clone(),
-                column_cache: cached.column_cache.clone(),
-                edit_snapshot: Arc::clone(&cached.edit_snapshot),
-                needs_collider: build_collider(coord),
-            }
+            Some((
+                cached.samples.clone(),
+                cached.column_cache.clone(),
+                Arc::clone(&cached.edit_snapshot),
+            ))
+        });
+        let Some((samples, column_cache, edit_snapshot)) = cached_job else {
+            continue;
         };
-        if let Some(chunk) = pipeline.chunks.get_mut(&job.coord) {
-            chunk.state = ChunkState::Meshing;
+        let Some(chunk) = pipeline.chunks.get_mut(&coord) else {
+            continue;
+        };
+        if chunk.state != ChunkState::DensityReady {
+            continue;
         }
+        chunk.lod_tier = lod_tier;
+        chunk.mesh_resolution_scale = mesh_scale;
+        chunk.collider_lod = collider_lod;
+        chunk.state = ChunkState::Meshing;
+
+        let job = MeshPromoteJob {
+            coord,
+            samples,
+            column_cache,
+            edit_snapshot,
+            needs_collider,
+            cell_stride,
+        };
+
         let src = Arc::clone(&source);
         let (ox, oy, oz) = voxel_core::TerrainChunk::new(job.coord).sample_origin();
         let mesh_started = Instant::now();
         let palette_job = palette.clone();
         let surface_rules_job = surface_rules.clone();
         let biome_catalog_job = biome_catalog.clone();
+        let cell_stride = job.cell_stride;
         let mesh_task = AsyncComputeTaskPool::get().spawn(async move {
             let resolver = ChunkSurfaceResolver::from_compiled(
                 Arc::unwrap_or_clone(src),
@@ -944,6 +975,7 @@ fn promote_density_ready_to_mesh(
             let input = ChunkMeshingInput {
                 samples: &job.samples,
                 chunk_cells: CHUNK_CELLS,
+                cell_stride,
                 surface_resolver: Some(&resolver),
             };
             let mesh_data = mesher.build_mesh(&input)?;
@@ -1171,6 +1203,49 @@ fn reset_transient_chunk_states(
     }
 }
 
+fn sync_chunk_lod_tiers(
+    policy: Res<LodPolicy>,
+    mut lod_runtime: ResMut<LodRuntimeState>,
+    runtime: Res<TerrainWorldRuntime>,
+    mut pipeline: ResMut<TerrainPipelineState>,
+    mut commands: Commands,
+) {
+    if pipeline.frozen {
+        return;
+    }
+    let center = runtime.interest_center;
+    let mut remesh = Vec::new();
+    let mut strip_colliders = Vec::new();
+
+    for (coord, chunk) in &pipeline.chunks {
+        if chunk.state != ChunkState::Ready {
+            continue;
+        }
+        let (target_tier, target_scale, collider_lod) =
+            terrain_lod_with_hysteresis(&policy, &mut lod_runtime, center, *coord);
+        let tier_changed = chunk.lod_tier != target_tier
+            || (chunk.mesh_resolution_scale - target_scale).abs() > 0.01;
+        if !tier_changed {
+            continue;
+        }
+        if collider_lod == TerrainColliderLodDefinition::None {
+            if let Some(entity) = chunk.entity {
+                strip_colliders.push(entity);
+            }
+        }
+        remesh.push(*coord);
+    }
+
+    for entity in strip_colliders {
+        commands.entity(entity).remove::<Collider>();
+    }
+    for coord in remesh {
+        if let Some(chunk) = pipeline.chunks.get_mut(&coord) {
+            chunk.state = ChunkState::DensityReady;
+        }
+    }
+}
+
 fn build_chunk_collider(mesh_data: &TerrainMeshData, cell_size_m: f32) -> Option<Collider> {
     if mesh_data.positions.is_empty() || mesh_data.indices.is_empty() {
         return None;
@@ -1300,6 +1375,9 @@ mod pipeline_tests {
                 revision: 1,
                 entity,
                 failed_at: None,
+                lod_tier: 0,
+                mesh_resolution_scale: 1.0,
+                collider_lod: game_data::TerrainColliderLodDefinition::Full,
             },
         );
         chunks
@@ -1324,6 +1402,7 @@ mod pipeline_tests {
             .build_mesh(&ChunkMeshingInput {
                 samples: &samples,
                 chunk_cells: voxel_core::CHUNK_CELLS,
+                cell_stride: 1,
                 surface_resolver: None,
             })
             .expect("mesh");

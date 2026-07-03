@@ -59,6 +59,27 @@ struct OceanTile {
 const OCEAN_TILE_SIZE_M: f32 = 256.0;
 const OCEAN_TILE_RADIUS: i32 = 1;
 
+#[derive(Resource, Clone, Debug)]
+struct OceanLayout {
+    tile_size_m: f32,
+    tile_radius: i32,
+    surface_z_offset_m: f32,
+    foam_strength: f32,
+    wave_count: u32,
+}
+
+impl Default for OceanLayout {
+    fn default() -> Self {
+        Self {
+            tile_size_m: OCEAN_TILE_SIZE_M,
+            tile_radius: OCEAN_TILE_RADIUS,
+            surface_z_offset_m: 0.02,
+            foam_strength: 0.65,
+            wave_count: 4,
+        }
+    }
+}
+
 #[derive(Resource, Default)]
 struct OceanTileGrid {
     snap_x: i32,
@@ -92,6 +113,7 @@ impl Plugin for WaterPlugin {
         app.add_plugins(MaterialPlugin::<WaterMaterial>::default())
             .init_resource::<InlandWaterSync>()
             .init_resource::<OceanTileGrid>()
+            .init_resource::<OceanLayout>()
             .add_systems(OnEnter(AppState::Running), spawn_water_bodies.after(TerrainWorldInitSet))
             .add_systems(
                 Update,
@@ -119,6 +141,7 @@ fn spawn_water_bodies(
     mut materials: ResMut<Assets<WaterMaterial>>,
     mut inland_sync: ResMut<InlandWaterSync>,
     mut ocean_grid: ResMut<OceanTileGrid>,
+    mut ocean_layout: ResMut<OceanLayout>,
 ) {
     let world_id = requested_world_id(&prefs);
     let world = registry
@@ -126,6 +149,27 @@ fn spawn_water_bodies(
         .effective_world(Some(&world_id))
         .expect("world");
     let water_def = registry.0.water.get(&world.water).expect("water");
+    let wave_count = match registry
+        .0
+        .active_performance()
+        .map(|p| p.water_quality.as_str())
+        .unwrap_or("high")
+    {
+        "low" => 2,
+        "medium" => 3,
+        _ => 4,
+    };
+    *ocean_layout = OceanLayout {
+        tile_size_m: water_def.ocean_tile_size_m,
+        tile_radius: water_def.ocean_tile_radius,
+        surface_z_offset_m: water_def.surface_z_offset_m,
+        foam_strength: if water_def.foam_enabled {
+            water_def.foam_strength
+        } else {
+            0.0
+        },
+        wave_count,
+    };
     let sea_level = if tweaks.use_overrides {
         tweaks.sea_level_m
     } else {
@@ -138,9 +182,12 @@ fn spawn_water_bodies(
         registry.0.water_body_material(&shared::StableId::new("waterbody.sea")),
         sea_level,
         &tweaks,
+        &ocean_layout,
     );
-    let tile_mesh = meshes.add(Plane3d::default().mesh().size(OCEAN_TILE_SIZE_M, OCEAN_TILE_SIZE_M));
-    let (snap_x, snap_z) = ocean_snap_indices(&runtime);
+    let tile_mesh = meshes.add(
+        Plane3d::default().mesh().size(ocean_layout.tile_size_m, ocean_layout.tile_size_m),
+    );
+    let (snap_x, snap_z) = ocean_snap_indices(&runtime, &ocean_layout);
     spawn_ocean_tile_grid(
         &mut commands,
         snap_x,
@@ -148,6 +195,7 @@ fn spawn_water_bodies(
         sea_level,
         tile_mesh,
         sea_mat.clone(),
+        &ocean_layout,
     );
     ocean_grid.snap_x = snap_x;
     ocean_grid.snap_z = snap_z;
@@ -169,6 +217,7 @@ fn spawn_water_bodies(
                 registry.0.water_body_material(&shared::StableId::new("waterbody.river")),
                 sea_level,
                 &tweaks,
+                &ocean_layout,
             );
             commands.spawn((
                 RiverWaterSurface,
@@ -187,6 +236,7 @@ fn spawn_water_bodies(
         &tweaks,
         &mut meshes,
         &mut materials,
+        &ocean_layout,
         &HashSet::new(),
     );
     inland_sync.hydrology_epoch = features.hydrology_epoch;
@@ -202,6 +252,7 @@ fn sync_inland_lakes_on_hydrology_change(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<WaterMaterial>>,
     mut inland_sync: ResMut<InlandWaterSync>,
+    ocean_layout: Res<OceanLayout>,
     lakes: Query<(Entity, &LakeWaterSurface)>,
 ) {
     let current_ids: HashSet<u32> = features.water_bodies.values().map(|body| body.id.0).collect();
@@ -234,6 +285,7 @@ fn sync_inland_lakes_on_hydrology_change(
         &tweaks,
         &mut meshes,
         &mut materials,
+        &ocean_layout,
         &existing_ids,
     );
     inland_sync.hydrology_epoch = features.hydrology_epoch;
@@ -275,6 +327,7 @@ fn spawn_inland_lake_surfaces(
     tweaks: &WaterTweaks,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<WaterMaterial>,
+    layout: &OceanLayout,
     existing_ids: &HashSet<u32>,
 ) {
     for body in features.water_bodies.values() {
@@ -309,6 +362,7 @@ fn spawn_inland_lake_surfaces(
             registry.0.water_body_material(&material_key),
             *elevation,
             tweaks,
+            layout,
         );
         commands.spawn((
             LakeWaterSurface {
@@ -316,18 +370,18 @@ fn spawn_inland_lake_surfaces(
             },
             Mesh3d(meshes.add(Plane3d::default().mesh().size(diameter, diameter))),
             MeshMaterial3d(lake_mat),
-            Transform::from_xyz(center_xz[0], *elevation + 0.02, center_xz[1]),
+            Transform::from_xyz(center_xz[0], *elevation + layout.surface_z_offset_m, center_xz[1]),
         ));
     }
 }
 
-fn ocean_snap_indices(runtime: &TerrainWorldRuntime) -> (i32, i32) {
+fn ocean_snap_indices(runtime: &TerrainWorldRuntime, layout: &OceanLayout) -> (i32, i32) {
     let center = runtime.interest_center;
     let chunk_m = runtime.cell_size_m * voxel_core::CHUNK_CELLS as f32;
     let world_x = center.x as f32 * chunk_m + chunk_m * 0.5;
     let world_z = center.z as f32 * chunk_m + chunk_m * 0.5;
-    let snap_x = (world_x / OCEAN_TILE_SIZE_M).floor() as i32;
-    let snap_z = (world_z / OCEAN_TILE_SIZE_M).floor() as i32;
+    let snap_x = (world_x / layout.tile_size_m).floor() as i32;
+    let snap_z = (world_z / layout.tile_size_m).floor() as i32;
     (snap_x, snap_z)
 }
 
@@ -338,13 +392,14 @@ fn spawn_ocean_tile_grid(
     sea_level: f32,
     tile_mesh: Handle<Mesh>,
     sea_mat: Handle<WaterMaterial>,
+    layout: &OceanLayout,
 ) {
-    for dz in -OCEAN_TILE_RADIUS..=OCEAN_TILE_RADIUS {
-        for dx in -OCEAN_TILE_RADIUS..=OCEAN_TILE_RADIUS {
+    for dz in -layout.tile_radius..=layout.tile_radius {
+        for dx in -layout.tile_radius..=layout.tile_radius {
             let grid_x = snap_x + dx;
             let grid_z = snap_z + dz;
-            let x = grid_x as f32 * OCEAN_TILE_SIZE_M + OCEAN_TILE_SIZE_M * 0.5;
-            let z = grid_z as f32 * OCEAN_TILE_SIZE_M + OCEAN_TILE_SIZE_M * 0.5;
+            let x = grid_x as f32 * layout.tile_size_m + layout.tile_size_m * 0.5;
+            let z = grid_z as f32 * layout.tile_size_m + layout.tile_size_m * 0.5;
             commands.spawn((
                 WaterSurface,
                 OceanSurface,
@@ -354,7 +409,7 @@ fn spawn_ocean_tile_grid(
                 },
                 Mesh3d(tile_mesh.clone()),
                 MeshMaterial3d(sea_mat.clone()),
-                Transform::from_xyz(x, sea_level + 0.02, z),
+                Transform::from_xyz(x, sea_level + layout.surface_z_offset_m, z),
             ));
         }
     }
@@ -366,6 +421,7 @@ fn sync_ocean_tiles(
     tweaks: Res<WaterTweaks>,
     registry: Res<ConfigRegistryResource>,
     prefs: Res<UserSetupPrefs>,
+    ocean_layout: Res<OceanLayout>,
     mut ocean_grid: ResMut<OceanTileGrid>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<WaterMaterial>>,
@@ -389,11 +445,11 @@ fn sync_ocean_tiles(
     if (sea_level - ocean_grid.sea_level).abs() > 0.001 {
         ocean_grid.sea_level = sea_level;
         for mut transform in &mut transforms {
-            transform.translation.y = sea_level + 0.02;
+            transform.translation.y = sea_level + ocean_layout.surface_z_offset_m;
         }
     }
 
-    let (snap_x, snap_z) = ocean_snap_indices(&runtime);
+    let (snap_x, snap_z) = ocean_snap_indices(&runtime, &ocean_layout);
     if snap_x == ocean_grid.snap_x && snap_z == ocean_grid.snap_z {
         return;
     }
@@ -410,8 +466,11 @@ fn sync_ocean_tiles(
         registry.0.water_body_material(&shared::StableId::new("waterbody.sea")),
         sea_level,
         &tweaks,
+        &ocean_layout,
     );
-    let tile_mesh = meshes.add(Plane3d::default().mesh().size(OCEAN_TILE_SIZE_M, OCEAN_TILE_SIZE_M));
+    let tile_mesh = meshes.add(
+        Plane3d::default().mesh().size(ocean_layout.tile_size_m, ocean_layout.tile_size_m),
+    );
     spawn_ocean_tile_grid(
         &mut commands,
         snap_x,
@@ -419,6 +478,7 @@ fn sync_ocean_tiles(
         sea_level,
         tile_mesh,
         sea_mat,
+        &ocean_layout,
     );
 }
 
@@ -463,6 +523,7 @@ fn make_water_material(
     body_material: Option<&game_data::CompiledWaterBodyMaterial>,
     elevation: f32,
     tweaks: &WaterTweaks,
+    layout: &OceanLayout,
 ) -> Handle<WaterMaterial> {
     let mut shallow = body_material
         .map(|m| m.shallow_color)
@@ -493,7 +554,7 @@ fn make_water_material(
                 wave_amplitude * 0.6,
                 transparency,
             ),
-            animation: Vec4::ZERO,
+            animation: Vec4::new(0.0, layout.foam_strength, layout.wave_count as f32, 0.0),
         },
     })
 }
@@ -561,7 +622,9 @@ fn animate_water(
 ) {
     for mat_handle in &mut water {
         if let Some(mut mat) = materials.get_mut(&mat_handle.0) {
-            mat.params.animation.x = time.elapsed_secs();
+            let foam = mat.params.animation.y;
+            let waves = mat.params.animation.z;
+            mat.params.animation = Vec4::new(time.elapsed_secs(), foam, waves, 0.0);
         }
     }
 }

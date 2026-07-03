@@ -21,6 +21,7 @@ fn integration_generate_and_mesh_all_chunks() {
         let input = ChunkMeshingInput {
             samples: &samples,
             chunk_cells: CHUNK_CELLS,
+            cell_stride: 1,
             surface_resolver: None,
         };
         let mesh = mesher.build_mesh(&input).expect("mesh");
@@ -40,6 +41,7 @@ fn cave_region_produces_hollow_mesh() {
         .build_mesh(&ChunkMeshingInput {
             samples: &samples,
             chunk_cells: CHUNK_CELLS,
+            cell_stride: 1,
             surface_resolver: None,
         })
         .expect("mesh");
@@ -56,6 +58,7 @@ fn overhang_region_produces_geometry() {
         .build_mesh(&ChunkMeshingInput {
             samples: &samples,
             chunk_cells: CHUNK_CELLS,
+            cell_stride: 1,
             surface_resolver: None,
         })
         .expect("mesh");
@@ -74,6 +77,7 @@ fn neighbor_chunk_boundary_vertices_align() {
         .build_mesh(&ChunkMeshingInput {
             samples: &left_samples,
             chunk_cells: CHUNK_CELLS,
+            cell_stride: 1,
             surface_resolver: None,
         })
         .expect("left");
@@ -81,6 +85,7 @@ fn neighbor_chunk_boundary_vertices_align() {
         .build_mesh(&ChunkMeshingInput {
             samples: &right_samples,
             chunk_cells: CHUNK_CELLS,
+            cell_stride: 1,
             surface_resolver: None,
         })
         .expect("right");
@@ -151,6 +156,7 @@ fn assert_chunk_x_seam(
         .build_mesh(&ChunkMeshingInput {
             samples: &left_samples,
             chunk_cells: CHUNK_CELLS,
+            cell_stride: 1,
             surface_resolver: None,
         })
         .expect("left mesh");
@@ -158,6 +164,7 @@ fn assert_chunk_x_seam(
         .build_mesh(&ChunkMeshingInput {
             samples: &right_samples,
             chunk_cells: CHUNK_CELLS,
+            cell_stride: 1,
             surface_resolver: None,
         })
         .expect("right mesh");

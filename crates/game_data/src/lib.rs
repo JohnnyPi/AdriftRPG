@@ -19,6 +19,9 @@ pub use compile::{
     CompiledRoute, CompiledRoutes, CompiledSetupGroup, CompiledSetupParameter,
     CompiledSetupPreviewMode, CompiledSetupSchema, CompiledSky, CompiledStructure, CompiledStructurePart, CompiledTerrain, CompiledTerrainMaterials, CompiledSurfaceRules,
     CompiledVegetation, CompiledWater, CompiledWaterBodyMaterial, CompiledHydrologyBody, CompiledWorld,
+    CompiledChunkResidency, CompiledWorldLod, CompiledTerrainLodTier, CompiledMaterialLod,
+    CompiledContentLod, CompiledDistantLod, CompiledChunkStaging, CompiledRenderProfile,
+    CompiledRenderDistanceLodTier, CompiledWeatherProfile,
 };
 pub use definitions::*;
 pub use hash::registry_hash;

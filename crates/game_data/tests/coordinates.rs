@@ -1,5 +1,8 @@
 // crates/game_data/tests/coordinates.rs
-use game_data::{validate_definitions, CompiledWorld, RawDefinition, WorldChunksDefinition, WorldDefinition, WorldVoxelDefinition};
+use game_data::{
+    validate_definitions, CompiledChunkResidency, CompiledChunkStaging, CompiledWorld,
+    CompiledWorldLod, RawDefinition, WorldChunksDefinition, WorldDefinition, WorldVoxelDefinition,
+};
 use shared::{DataError, DefinitionHeader, StableId};
 
 #[test]
@@ -26,6 +29,11 @@ fn recipe_to_world_subtracts_coord_offset() {
         island_atlas_baked: None,
         hydrology_bodies: Vec::new(),
         material_catalog: None,
+        vegetation: None,
+        weather: None,
+        residency: CompiledChunkResidency::default(),
+        lod: CompiledWorldLod::default(),
+        staging: CompiledChunkStaging::default(),
     };
 
     let recipe = [140.0, 50.0, 132.0];
@@ -47,6 +55,9 @@ fn rejects_non_unit_cell_size() {
         chunks: WorldChunksDefinition {
             cells: [16, 16, 16],
             world_extent: [6, 3, 6],
+            residency: Default::default(),
+            lod: Default::default(),
+            staging: Default::default(),
         },
         terrain: StableId::new("terrain.test"),
         biomes: StableId::new("biomes.test"),
@@ -64,6 +75,8 @@ fn rejects_non_unit_cell_size() {
         island_atlas_baked: None,
         hydrology_bodies: Vec::new(),
         material_catalog: None,
+        vegetation: None,
+        weather: None,
     })]);
 
     assert!(!report.is_ok());

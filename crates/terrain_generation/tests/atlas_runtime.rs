@@ -120,6 +120,7 @@ fn testbed_spawn_chunk_has_mesh() {
         .build_mesh(&ChunkMeshingInput {
             samples: &samples,
             chunk_cells: CHUNK_CELLS,
+            cell_stride: 1,
             surface_resolver: None,
         })
         .expect("mesh");
@@ -147,6 +148,7 @@ fn testbed_meshes_surface_chunks() {
             .build_mesh(&ChunkMeshingInput {
                 samples: &samples,
                 chunk_cells: CHUNK_CELLS,
+            cell_stride: 1,
                 surface_resolver: None,
             })
             .expect("mesh");
@@ -184,6 +186,7 @@ fn testbed_world_edge_columns_mesh_seabed() {
         .build_mesh(&ChunkMeshingInput {
             samples: &samples,
             chunk_cells: CHUNK_CELLS,
+            cell_stride: 1,
             surface_resolver: None,
         })
         .expect("mesh");
@@ -251,6 +254,7 @@ fn golden_mesh_vertex_count_band() {
             .build_mesh(&ChunkMeshingInput {
                 samples: &samples,
                 chunk_cells: CHUNK_CELLS,
+            cell_stride: 1,
                 surface_resolver: None,
             })
             .expect("mesh")

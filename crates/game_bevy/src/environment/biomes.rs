@@ -46,6 +46,14 @@ impl BiomeCatalog {
             .map(|r| r.material_id)
             .unwrap_or_else(|| fallback_material_id(kind))
     }
+
+    pub fn vegetation_profile_for(&self, kind: BiomeKind) -> Option<StableId> {
+        let rule_id = biome_id_str(kind);
+        self.rules
+            .iter()
+            .find(|r| r.id == rule_id)
+            .and_then(|r| r.vegetation_profile_id.clone())
+    }
 }
 
 pub fn classify_biome(
@@ -354,11 +362,22 @@ mod tests {
     use terrain_generation::default_vertical_slice_recipe;
 
     /// Recipe-space scan window shared by the island variety tests: covers
-    /// the testbed island coast-to-summit (center [128,128], support radius
-    /// ~112 m -> world coords -88..+88 after the [128,0,128] offset).
+    /// the testbed island coast-to-summit (center at recipe coord_offset, support
+    /// radius ~112 m on the default testbed footprint).
     const SCAN_RECIPE_MIN: usize = 40;
     const SCAN_RECIPE_MAX: usize = 216;
     const SCAN_STEP: usize = 8;
+
+    fn recipe_scan_world_xz(
+        rx: usize,
+        rz: usize,
+        coord_offset: [f32; 3],
+    ) -> (f32, f32) {
+        (
+            rx as f32 - coord_offset[0],
+            rz as f32 - coord_offset[2],
+        )
+    }
 
     fn test_source() -> RecipeDensitySource {
         RecipeDensitySource::new(default_vertical_slice_recipe(42, 2.0))
@@ -527,8 +546,7 @@ mod tests {
         let mut kinds = BTreeSet::new();
         for rx in (SCAN_RECIPE_MIN..=SCAN_RECIPE_MAX).step_by(SCAN_STEP) {
             for rz in (SCAN_RECIPE_MIN..=SCAN_RECIPE_MAX).step_by(SCAN_STEP) {
-                let wx = rx as f32 - world.coord_offset[0];
-                let wz = rz as f32 - world.coord_offset[2];
+                let (wx, wz) = recipe_scan_world_xz(rx, rz, world.coord_offset);
                 let y = source.terrain_surface_height_at(wx, wz);
                 if y <= source.recipe().sea_level + 0.5 {
                     continue;
@@ -595,10 +613,10 @@ mod tests {
         );
 
         let mut kinds = BTreeSet::new();
+        let offset = source.recipe().coord_offset;
         for rx in (SCAN_RECIPE_MIN..=SCAN_RECIPE_MAX).step_by(SCAN_STEP) {
             for rz in (SCAN_RECIPE_MIN..=SCAN_RECIPE_MAX).step_by(SCAN_STEP) {
-                let wx = rx as f32 - 128.0;
-                let wz = rz as f32 - 128.0;
+                let (wx, wz) = recipe_scan_world_xz(rx, rz, offset);
                 let y = source.terrain_surface_height_at(wx, wz);
                 if y <= source.recipe().sea_level + 0.5 {
                     continue;

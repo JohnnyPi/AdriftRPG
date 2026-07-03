@@ -1,23 +1,33 @@
 // crates/game_bevy/src/vegetation/mod.rs
+mod grass;
+
 use bevy::prelude::*;
 use terrain_generation::RecipeDensitySource;
+use voxel_core::ChunkCoord;
 
-use crate::data::ConfigRegistryResource;
+use crate::data::{ConfigRegistryResource, UserSetupPrefs};
 use crate::environment::biomes::{classify_biome, BiomeKind};
 use crate::environment::BiomeCatalog;
+use crate::lod::LodPolicy;
 use crate::physics::NeedsGroundSnap;
 use crate::player::Player;
 use crate::state::AppState;
 use crate::terrain::{
+    residency::chunk_chebyshev_distance,
     world_position_in_decoration_radius, world_position_in_high_detail_radius, ChunkState,
     TerrainPipelineState, TerrainWorldRuntime,
 };
 use crate::ui::{EcologyTweaks, WorldTweaks};
+use crate::world::requested_world_id;
 use game_data::VegetationRuleDefinition;
 use voxel_core::CHUNK_CELLS;
 
+pub use grass::GrassPlugin;
+
 #[derive(Component)]
-pub struct VegetationInstance;
+pub struct VegetationInstance {
+    pub chunk: ChunkCoord,
+}
 
 #[derive(Component)]
 pub struct PropInstance;
@@ -26,15 +36,31 @@ pub struct VegetationPlugin;
 
 impl Plugin for VegetationPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            Update,
-            (
-                respawn_ecology_on_density_change,
-                spawn_environment_when_ready,
-            )
-                .chain()
-                .run_if(in_state(AppState::Running)),
-        );
+        app.add_plugins(GrassPlugin)
+            .add_systems(
+                Update,
+                (
+                    despawn_vegetation_outside_residency,
+                    respawn_ecology_on_density_change,
+                    spawn_environment_when_ready,
+                )
+                    .chain()
+                    .run_if(in_state(AppState::Running)),
+            );
+    }
+}
+
+fn despawn_vegetation_outside_residency(
+    mut commands: Commands,
+    runtime: Res<TerrainWorldRuntime>,
+    world_tweaks: Res<WorldTweaks>,
+    vegetation: Query<(Entity, &VegetationInstance)>,
+) {
+    let center = runtime.interest_center;
+    for (entity, instance) in &vegetation {
+        if chunk_chebyshev_distance(center, instance.chunk) > world_tweaks.decoration_radius {
+            commands.entity(entity).despawn();
+        }
     }
 }
 
@@ -70,6 +96,8 @@ fn respawn_ecology_on_density_change(
 fn spawn_environment_when_ready(
     mut commands: Commands,
     registry: Res<ConfigRegistryResource>,
+    prefs: Res<UserSetupPrefs>,
+    policy: Res<LodPolicy>,
     pipeline: Res<TerrainPipelineState>,
     biomes: Res<BiomeCatalog>,
     ecology: Res<EcologyTweaks>,
@@ -101,10 +129,12 @@ fn spawn_environment_when_ready(
     spawn_vegetation_and_props(
         &mut commands,
         &registry,
+        &prefs,
         &source,
         &biomes,
         ecology.vegetation_density,
         &world_tweaks,
+        &policy,
         runtime.interest_center,
         player_tf.translation,
         &mut meshes,
@@ -183,111 +213,177 @@ fn build_mesh_library(
 fn spawn_vegetation_and_props(
     commands: &mut Commands,
     registry: &ConfigRegistryResource,
+    prefs: &UserSetupPrefs,
     source: &RecipeDensitySource,
     biomes: &BiomeCatalog,
     ecology_density: f32,
     world_tweaks: &WorldTweaks,
+    policy: &LodPolicy,
     interest_center: voxel_core::ChunkCoord,
     player_position: Vec3,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
 ) {
+    let world_id = requested_world_id(prefs);
     let vegetation = registry
         .0
-        .vegetation
-        .get(&shared::StableId::new("vegetation.vertical_slice"))
+        .effective_world(Some(&world_id))
+        .ok()
+        .and_then(|world| registry.0.effective_vegetation(world))
+        .or_else(|| {
+            registry
+                .0
+                .vegetation
+                .get(&shared::StableId::new("vegetation.vertical_slice"))
+        })
         .or_else(|| registry.0.vegetation.values().next());
     let perf = registry.0.active_performance().expect("performance");
     let density_mult = perf.vegetation_density_multiplier * ecology_density;
-    let max_dist = perf.vegetation_maximum_distance_m;
+    let max_dist = policy.content.vegetation_max_distance_m.min(perf.vegetation_maximum_distance_m);
     let seed = source.recipe().seed;
     let lib = build_mesh_library(meshes, materials);
 
-    let rules = vegetation.map(|v| v.rules.as_slice()).unwrap_or(&[]);
+    let default_rules = vegetation.map(|v| v.rules.as_slice()).unwrap_or(&[]);
     let mut rng_state = seed;
     let mut occupied: Vec<(f32, f32)> = Vec::new();
 
-    let decoration_m = world_tweaks.decoration_radius as f32 * CHUNK_CELLS as f32;
+    let decoration = world_tweaks.decoration_radius;
+    for dz in -decoration..=decoration {
+        for dy in -decoration..=decoration {
+            for dx in -decoration..=decoration {
+                let chunk_coord =
+                    ChunkCoord::new(interest_center.x + dx, interest_center.y + dy, interest_center.z + dz);
+                let chunk_dist = chunk_chebyshev_distance(interest_center, chunk_coord);
+                if chunk_dist > decoration {
+                    continue;
+                }
+                let veg_lod = vegetation_lod_tier(chunk_dist, world_tweaks);
+                if veg_lod >= 3 {
+                    continue;
+                }
+                let chunk_origin_x = chunk_coord.x as f32 * CHUNK_CELLS as f32;
+                let chunk_origin_z = chunk_coord.z as f32 * CHUNK_CELLS as f32;
+                for sx in (0..CHUNK_CELLS).step_by(2) {
+                    for sz in (0..CHUNK_CELLS).step_by(2) {
+                        let wx = chunk_origin_x + sx as f32;
+                        let wz = chunk_origin_z + sz as f32;
+                        if !world_position_in_decoration_radius(
+                            interest_center,
+                            Vec3::new(wx, 0.0, wz),
+                            world_tweaks,
+                        ) {
+                            continue;
+                        }
+                        let dist_from_player =
+                            Vec2::new(wx - player_position.x, wz - player_position.z).length();
+                        if dist_from_player > decoration as f32 * CHUNK_CELLS as f32 {
+                            continue;
+                        }
+                        let detail_scale = if world_position_in_high_detail_radius(
+                            interest_center,
+                            Vec3::new(wx, 0.0, wz),
+                            world_tweaks,
+                        ) {
+                            1.0
+                        } else {
+                            0.55
+                        };
+                        if dist_from_player > max_dist {
+                            continue;
+                        }
+                        rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                        let surface_y = source.surface_height_at(wx, wz);
+                        let density = source.density_at(wx, surface_y, wz);
+                        if density > 0.0 {
+                            continue;
+                        }
+                        let biome = classify_biome(biomes, source, wx, surface_y, wz, density);
+                        let slope = estimate_slope_deg(source, wx, surface_y, wz);
+                        let biome_rules = biomes
+                            .vegetation_profile_for(biome)
+                            .and_then(|id| registry.0.vegetation.get(&id))
+                            .map(|v| v.rules.as_slice())
+                            .unwrap_or(default_rules);
 
-    for x in (-48..48).step_by(2) {
-        for z in (-48..48).step_by(2) {
-            let wx = x as f32;
-            let wz = z as f32;
-            if !world_position_in_decoration_radius(interest_center, Vec3::new(wx, 0.0, wz), world_tweaks) {
-                continue;
-            }
-            let dist_from_player = Vec2::new(wx - player_position.x, wz - player_position.z).length();
-            if dist_from_player > decoration_m {
-                continue;
-            }
-            let detail_scale = if world_position_in_high_detail_radius(
-                interest_center,
-                Vec3::new(wx, 0.0, wz),
-                world_tweaks,
-            ) {
-                1.0
-            } else {
-                0.55
-            };
-            if (wx * wx + wz * wz).sqrt() > max_dist {
-                continue;
-            }
-            rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
-            let surface_y = source.surface_height_at(wx, wz);
-            let density = source.density_at(wx, surface_y, wz);
-            if density > 0.0 {
-                continue;
-            }
-            let biome = classify_biome(biomes, source, wx, surface_y, wz, density);
-            let slope = estimate_slope_deg(source, wx, surface_y, wz);
+                        for rule in biome_rules {
+                            if !rule_matches_biome(rule, biome) {
+                                continue;
+                            }
+                            if slope > rule.slope_max_deg {
+                                continue;
+                            }
+                            if !spacing_allows(wx, wz, rule.spacing_m, &occupied) {
+                                continue;
+                            }
+                            let roll = (rng_state % 1000) as f32 / 1000.0;
+                            if roll > density_mult * rule.density * detail_scale {
+                                continue;
+                            }
+                            let (mesh, mat, y_off, base_scale, rot_y) =
+                                prototype_for_rule(&lib, &rule.category);
+                            let mesh = vegetation_lod_mesh(veg_lod, &lib, mesh);
+                            let scale = vegetation_lod_scale(veg_lod, base_scale);
+                            occupied.push((wx, wz));
+                            commands.spawn((
+                                VegetationInstance { chunk: chunk_coord },
+                                Mesh3d(mesh),
+                                MeshMaterial3d(mat),
+                                Transform::from_xyz(wx, surface_y + y_off, wz)
+                                    .with_rotation(Quat::from_rotation_y(rot_y))
+                                    .with_scale(scale),
+                            ));
+                            break;
+                        }
 
-            for rule in rules {
-                if !rule_matches_biome(rule, biome) {
-                    continue;
+                        if biome == BiomeKind::Beach && (rng_state % 17) == 0 {
+                            let rot = (rng_state % 360) as f32 * 0.05;
+                            commands.spawn((
+                                PropInstance,
+                                Mesh3d(lib.driftwood.clone()),
+                                MeshMaterial3d(lib.driftwood_mat.clone()),
+                                Transform::from_xyz(wx, surface_y + 0.06, wz)
+                                    .with_rotation(Quat::from_rotation_y(rot)),
+                            ));
+                        }
+                        if biome == BiomeKind::Cave && surface_y < 2.0 && (rng_state % 11) == 0 {
+                            commands.spawn((
+                                PropInstance,
+                                Mesh3d(lib.cave_stone.clone()),
+                                MeshMaterial3d(lib.cave_stone_mat.clone()),
+                                Transform::from_xyz(wx, surface_y + 0.2, wz),
+                            ));
+                        }
+                    }
                 }
-                if slope > rule.slope_max_deg {
-                    continue;
-                }
-                if !spacing_allows(wx, wz, rule.spacing_m, &occupied) {
-                    continue;
-                }
-                let roll = (rng_state % 1000) as f32 / 1000.0;
-                if roll > density_mult * rule.density * detail_scale {
-                    continue;
-                }
-                let (mesh, mat, y_off, scale, rot_y) = prototype_for_rule(&lib, &rule.category);
-                occupied.push((wx, wz));
-                commands.spawn((
-                    VegetationInstance,
-                    Mesh3d(mesh),
-                    MeshMaterial3d(mat),
-                    Transform::from_xyz(wx, surface_y + y_off, wz)
-                        .with_rotation(Quat::from_rotation_y(rot_y))
-                        .with_scale(scale),
-                ));
-                break;
-            }
-
-            // Props: driftwood on beach, cave stones near cave entrance
-            if biome == BiomeKind::Beach && (rng_state % 17) == 0 {
-                let rot = (rng_state % 360) as f32 * 0.05;
-                commands.spawn((
-                    PropInstance,
-                    Mesh3d(lib.driftwood.clone()),
-                    MeshMaterial3d(lib.driftwood_mat.clone()),
-                    Transform::from_xyz(wx, surface_y + 0.06, wz)
-                        .with_rotation(Quat::from_rotation_y(rot)),
-                ));
-            }
-            if biome == BiomeKind::Cave && surface_y < 2.0 && (rng_state % 11) == 0 {
-                commands.spawn((
-                    PropInstance,
-                    Mesh3d(lib.cave_stone.clone()),
-                    MeshMaterial3d(lib.cave_stone_mat.clone()),
-                    Transform::from_xyz(wx, surface_y + 0.2, wz),
-                ));
             }
         }
+    }
+}
+
+fn vegetation_lod_tier(chunk_dist: i32, tweaks: &WorldTweaks) -> u8 {
+    if chunk_dist <= tweaks.high_detail_radius {
+        0
+    } else if chunk_dist <= tweaks.decoration_radius {
+        1
+    } else {
+        3
+    }
+}
+
+fn vegetation_lod_mesh(lod: u8, lib: &MeshLibrary, mesh: Handle<Mesh>) -> Handle<Mesh> {
+    if lod >= 2 {
+        lib.grass.clone()
+    } else {
+        mesh
+    }
+}
+
+fn vegetation_lod_scale(lod: u8, base: Vec3) -> Vec3 {
+    match lod {
+        0 => base,
+        1 => base * 0.7,
+        2 => Vec3::new(base.x.max(0.5) * 1.5, 0.06, base.z.max(0.5) * 1.5),
+        _ => base,
     }
 }
 

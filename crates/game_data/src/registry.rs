@@ -10,6 +10,7 @@ use crate::compile::{
     CompiledOptions, CompiledPerformance, CompiledPhysics, CompiledPlayer,
     CompiledRoutes, CompiledSetupSchema, CompiledSky, CompiledStructure, CompiledTerrain, CompiledTerrainMaterials, CompiledSurfaceRules, CompiledVegetation,
     CompiledWater, CompiledWaterBodyMaterial, CompiledHydrologyBody, CompiledWorld,
+    CompiledRenderProfile, CompiledWeatherProfile,
 };
 use crate::definitions::RawDefinition;
 use crate::surface_registry::{
@@ -49,6 +50,8 @@ pub struct ConfigRegistry {
     pub setup_schemas: BTreeMap<StableId, CompiledSetupSchema>,
     pub surface_registries: BTreeMap<StableId, CompiledSurfaceRegistry>,
     pub material_dependencies: BTreeMap<StableId, MaterialDependencyIndex>,
+    pub render_profiles: BTreeMap<StableId, CompiledRenderProfile>,
+    pub weather_profiles: BTreeMap<StableId, CompiledWeatherProfile>,
     #[serde(skip)]
     pub hash: String,
 }
@@ -83,6 +86,8 @@ impl ConfigRegistry {
         let mut structures = BTreeMap::new();
         let mut island_gen = BTreeMap::new();
         let mut setup_schemas = BTreeMap::new();
+        let mut render_profiles = BTreeMap::new();
+        let mut weather_profiles = BTreeMap::new();
         let mut app: Option<CompiledApp> = None;
 
         for definition in &definitions {
@@ -165,6 +170,12 @@ impl ConfigRegistry {
                 RawDefinition::SetupSchema(def) => {
                     setup_schemas.insert(def.header.id.clone(), def.into());
                 }
+                RawDefinition::RenderProfile(def) => {
+                    render_profiles.insert(def.header.id.clone(), def.into());
+                }
+                RawDefinition::WeatherProfile(def) => {
+                    weather_profiles.insert(def.header.id.clone(), def.into());
+                }
                 RawDefinition::River(_) => {}
                 RawDefinition::TextureRecipe(_)
                 | RawDefinition::SurfaceMaterial(_)
@@ -243,6 +254,8 @@ impl ConfigRegistry {
             setup_schemas,
             surface_registries,
             material_dependencies,
+            render_profiles,
+            weather_profiles,
             hash: String::new(),
         };
         registry.hash = registry_hash(&registry);
@@ -424,6 +437,25 @@ impl ConfigRegistry {
             context: "active water".to_string(),
         })
     }
+
+    pub fn effective_render_profile(&self, world: &CompiledWorld) -> Option<&CompiledRenderProfile> {
+        self.render_profiles
+            .get(&world.lod.materials.render_profile)
+    }
+
+    pub fn effective_vegetation(&self, world: &CompiledWorld) -> Option<&CompiledVegetation> {
+        world
+            .vegetation
+            .as_ref()
+            .and_then(|id| self.vegetation.get(id))
+    }
+
+    pub fn effective_weather(&self, world: &CompiledWorld) -> Option<&CompiledWeatherProfile> {
+        world
+            .weather
+            .as_ref()
+            .and_then(|id| self.weather_profiles.get(id))
+    }
 }
 
 fn resolve_app_references(
@@ -498,7 +530,7 @@ mod tests {
         let fog = registry.active_fog().expect("fog");
         assert!(fog.distance_end_m > fog.distance_start_m);
         let sky = registry.active_sky().expect("sky");
-        assert!(sky.shader.contains("sky.wgsl"));
+        assert!(sky.stars_enabled || sky.clouds_enabled || sky.mie_strength > 0.0);
         assert!(sky.night_zenith_color[2] > sky.night_zenith_color[0]);
         assert!(atmo.moon_enabled);
         assert!(atmo.moon_angular_radius > 0.0);

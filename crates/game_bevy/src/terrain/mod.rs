@@ -7,7 +7,7 @@ mod material;
 mod metrics;
 mod pipeline;
 mod recipe;
-mod residency;
+pub mod residency;
 
 pub use editing::TerrainEditingPlugin;
 pub use features::{
@@ -43,8 +43,8 @@ pub use pipeline::{
     TerrainRegenPending, TerrainSpawnPoint, TerrainWorldInitSet,
 };
 pub use residency::{
-    chunk_world_center, draw_residency_rings, spawn_terrain_collider_ready, spawn_terrain_uploaded,
-    world_position_in_decoration_radius, world_position_in_high_detail_radius,
+    chunk_world_center, draw_residency_rings, spawn_terrain_collider_ready,
+    spawn_terrain_uploaded, world_position_in_decoration_radius, world_position_in_high_detail_radius,
     ChunkResidencyPlugin, TerrainWorldRuntime,
 };
 

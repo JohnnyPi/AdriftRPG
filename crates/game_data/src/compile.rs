@@ -101,6 +101,11 @@ pub struct CompiledWater {
     pub transparency: f32,
     pub wave_speed: f32,
     pub wave_amplitude: f32,
+    pub ocean_tile_size_m: f32,
+    pub ocean_tile_radius: i32,
+    pub surface_z_offset_m: f32,
+    pub foam_enabled: bool,
+    pub foam_strength: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -126,6 +131,207 @@ pub struct CompiledWorld {
     pub island_atlas_baked: Option<String>,
     pub hydrology_bodies: Vec<StableId>,
     pub material_catalog: Option<StableId>,
+    pub vegetation: Option<StableId>,
+    pub weather: Option<StableId>,
+    pub residency: CompiledChunkResidency,
+    pub lod: CompiledWorldLod,
+    pub staging: CompiledChunkStaging,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct CompiledChunkResidency {
+    pub density_radius: i32,
+    pub render_radius: i32,
+    pub physics_radius: i32,
+    pub decoration_radius: i32,
+    pub high_detail_radius: i32,
+}
+
+impl From<&ChunkResidencyDefinition> for CompiledChunkResidency {
+    fn from(def: &ChunkResidencyDefinition) -> Self {
+        Self {
+            density_radius: def.density_radius,
+            render_radius: def.render_radius,
+            physics_radius: def.physics_radius,
+            decoration_radius: def.decoration_radius,
+            high_detail_radius: def.high_detail_radius,
+        }
+    }
+}
+
+impl Default for CompiledChunkResidency {
+    fn default() -> Self {
+        Self::from(&ChunkResidencyDefinition::default())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct CompiledWorldLod {
+    pub terrain: Vec<CompiledTerrainLodTier>,
+    pub materials: CompiledMaterialLod,
+    pub content: CompiledContentLod,
+    pub distant: CompiledDistantLod,
+}
+
+impl From<&WorldLodDefinition> for CompiledWorldLod {
+    fn from(def: &WorldLodDefinition) -> Self {
+        Self {
+            terrain: def.terrain.iter().map(CompiledTerrainLodTier::from).collect(),
+            materials: CompiledMaterialLod::from(&def.materials),
+            content: CompiledContentLod::from(&def.content),
+            distant: CompiledDistantLod::from(&def.distant),
+        }
+    }
+}
+
+impl Default for CompiledWorldLod {
+    fn default() -> Self {
+        Self::from(&WorldLodDefinition::default())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct CompiledTerrainLodTier {
+    pub max_distance_chunks: i32,
+    pub mesh_resolution_scale: f32,
+    pub collider: TerrainColliderLodDefinition,
+}
+
+impl From<&TerrainLodTierDefinition> for CompiledTerrainLodTier {
+    fn from(def: &TerrainLodTierDefinition) -> Self {
+        Self {
+            max_distance_chunks: def.max_distance_chunks,
+            mesh_resolution_scale: def.mesh_resolution_scale,
+            collider: def.collider,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct CompiledMaterialLod {
+    pub render_profile: StableId,
+}
+
+impl From<&MaterialLodDefinition> for CompiledMaterialLod {
+    fn from(def: &MaterialLodDefinition) -> Self {
+        Self {
+            render_profile: def.render_profile.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct CompiledContentLod {
+    pub vegetation_max_distance_m: f32,
+    pub grass_lod: [f32; 3],
+}
+
+impl From<&ContentLodDefinition> for CompiledContentLod {
+    fn from(def: &ContentLodDefinition) -> Self {
+        Self {
+            vegetation_max_distance_m: def.vegetation_max_distance_m,
+            grass_lod: def.grass_lod,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct CompiledDistantLod {
+    pub horizon_skirt: bool,
+    pub impostor_start_m: f32,
+}
+
+impl From<&DistantLodDefinition> for CompiledDistantLod {
+    fn from(def: &DistantLodDefinition) -> Self {
+        Self {
+            horizon_skirt: def.horizon_skirt,
+            impostor_start_m: def.impostor_start_m,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct CompiledChunkStaging {
+    pub prefetch_chunks_ahead: i32,
+    pub preload_atlas: bool,
+    pub preload_material_arrays: bool,
+}
+
+impl From<&ChunkStagingDefinition> for CompiledChunkStaging {
+    fn from(def: &ChunkStagingDefinition) -> Self {
+        Self {
+            prefetch_chunks_ahead: def.prefetch_chunks_ahead,
+            preload_atlas: def.preload_atlas,
+            preload_material_arrays: def.preload_material_arrays,
+        }
+    }
+}
+
+impl Default for CompiledChunkStaging {
+    fn default() -> Self {
+        Self::from(&ChunkStagingDefinition::default())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct CompiledRenderProfile {
+    pub id: StableId,
+    pub active_layers: u32,
+    pub projection: String,
+    pub projection_axes: u32,
+    pub normal_mapping: bool,
+    pub height_blending: bool,
+    pub macro_variation: bool,
+    pub distance_lod: Vec<CompiledRenderDistanceLodTier>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct CompiledRenderDistanceLodTier {
+    pub maximum_distance_m: f32,
+    pub active_layers: u32,
+    pub projection_axes: u32,
+}
+
+impl From<&RenderProfileDefinition> for CompiledRenderProfile {
+    fn from(def: &RenderProfileDefinition) -> Self {
+        Self {
+            id: def.header.id.clone(),
+            active_layers: def.active_layers,
+            projection: def.projection.clone(),
+            projection_axes: def.projection_axes,
+            normal_mapping: def.normal_mapping,
+            height_blending: def.height_blending,
+            macro_variation: def.macro_variation,
+            distance_lod: def
+                .distance_lod
+                .iter()
+                .map(|t| CompiledRenderDistanceLodTier {
+                    maximum_distance_m: t.maximum_distance_m,
+                    active_layers: t.active_layers,
+                    projection_axes: t.projection_axes,
+                })
+                .collect(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct CompiledWeatherProfile {
+    pub id: StableId,
+    pub cloud_cover: f32,
+    pub fog_density_scale: f32,
+    pub cycle_minutes: f32,
+}
+
+impl From<&WeatherProfileDefinition> for CompiledWeatherProfile {
+    fn from(def: &WeatherProfileDefinition) -> Self {
+        Self {
+            id: def.header.id.clone(),
+            cloud_cover: def.cloud_cover,
+            fog_density_scale: def.fog_density_scale,
+            cycle_minutes: def.cycle_minutes,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -289,6 +495,11 @@ impl From<&WaterDefinition> for CompiledWater {
             transparency: def.transparency,
             wave_speed: def.wave_speed,
             wave_amplitude: def.wave_amplitude,
+            ocean_tile_size_m: def.ocean_tile_size_m,
+            ocean_tile_radius: def.ocean_tile_radius,
+            surface_z_offset_m: def.surface_z_offset_m,
+            foam_enabled: def.foam_enabled,
+            foam_strength: def.foam_strength,
         }
     }
 }
@@ -334,6 +545,11 @@ impl CompiledWorld {
             island_atlas_baked: def.island_atlas_baked.clone(),
             hydrology_bodies: def.hydrology_bodies.clone(),
             material_catalog: def.material_catalog.clone(),
+            vegetation: def.vegetation.clone(),
+            weather: def.weather.clone(),
+            residency: CompiledChunkResidency::from(&def.chunks.residency),
+            lod: CompiledWorldLod::from(&def.chunks.lod),
+            staging: CompiledChunkStaging::from(&def.chunks.staging),
         })
     }
 
@@ -754,9 +970,10 @@ pub struct CompiledSky {
     pub clouds_speed: f32,
     pub clouds_direction_deg: f32,
     pub clouds_altitude: f32,
+    pub cloud_base_height_m: f32,
+    pub cloud_shell_radius_m: f32,
     pub night_zenith_color: [f32; 3],
     pub night_horizon_color: [f32; 3],
-    pub shader: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -876,9 +1093,10 @@ impl From<&SkyDefinition> for CompiledSky {
             clouds_speed: def.clouds_speed,
             clouds_direction_deg: def.clouds_direction_deg,
             clouds_altitude: def.clouds_altitude,
+            cloud_base_height_m: def.cloud_base_height_m,
+            cloud_shell_radius_m: def.cloud_shell_radius_m,
             night_zenith_color: def.night_zenith_color,
             night_horizon_color: def.night_horizon_color,
-            shader: def.shader.clone(),
         }
     }
 }

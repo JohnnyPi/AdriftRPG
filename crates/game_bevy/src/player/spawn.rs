@@ -67,12 +67,13 @@ pub fn spawn_player(
             .spawn((
                 CameraFollowTarget,
                 Transform::from_translation(focus_offset_from_center),
+                Visibility::default(),
             ))
             .with_children(|follow| {
                 follow
-                    .spawn((CameraRig, Transform::IDENTITY))
+                    .spawn((CameraRig, Transform::IDENTITY, Visibility::default()))
                     .with_children(|rig| {
-                        rig.spawn((CameraPivot, Transform::IDENTITY));
+                        rig.spawn((CameraPivot, Transform::IDENTITY, Visibility::default()));
                     });
             })
             .id();

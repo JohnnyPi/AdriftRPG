@@ -134,7 +134,9 @@ fn init_presentation_from_registry(
             color: fog.height_color,
         });
         fog_stack.underwater_density = fog.underwater_density;
+        fog_stack.underwater_color = fog.underwater_color;
         fog_stack.cave_density = fog.cave_density;
+        fog_stack.cave_color = fog.cave_color;
 
         let mut volumes: Vec<LocalFogVolume> = fog
             .local_volumes

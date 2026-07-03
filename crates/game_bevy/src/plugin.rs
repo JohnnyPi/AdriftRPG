@@ -9,8 +9,9 @@ use crate::debug_tools::DebugToolsPlugin;
 use crate::environment::{
     AtmosphereScenePlugin, BiomePlugin, CelestialPlugin, CloudPlugin, EnvironmentAudioStubPlugin,
     EnvironmentConfigPlugin, EnvironmentLightingPlugin, FogPlugin, LightingPlugin,
-    VolumetricScatterPlugin,
+    SimulationTimePlugin, StarfieldPlugin, WeatherPlugin,
 };
+use crate::environment::volumetric_scatter::VolumetricScatterPlugin;
 use crate::physics::GamePhysicsPlugin;
 use crate::performance::PerformanceValidationPlugin;
 use crate::player::{CharacterMotorPlugin, PlayerPlugin};
@@ -75,6 +76,11 @@ pub fn configure_vertical_slice_app(app: &mut App, window_title: &str) {
         ChunkResidencyPlugin,
     ))
     .add_plugins((
+        crate::lod::LodPolicyPlugin,
+        crate::staging::StagingPlugin,
+        crate::interest::ChunkInterestPlugin,
+    ))
+    .add_plugins((
         LightingPlugin,
         EnvironmentConfigPlugin,
         EnvironmentLightingPlugin,
@@ -83,6 +89,11 @@ pub fn configure_vertical_slice_app(app: &mut App, window_title: &str) {
         VolumetricScatterPlugin,
         CloudPlugin,
         FogPlugin,
+        StarfieldPlugin,
+        SimulationTimePlugin,
+        WeatherPlugin,
+    ))
+    .add_plugins((
         EnvironmentAudioStubPlugin,
         WaterPlugin,
         VegetationPlugin,

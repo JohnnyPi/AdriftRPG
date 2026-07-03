@@ -143,6 +143,7 @@ fn island_testbed_has_peak_and_chunk_coverage() {
             .build_mesh(&terrain_meshing::ChunkMeshingInput {
                 samples: &samples,
                 chunk_cells: voxel_core::CHUNK_CELLS,
+                cell_stride: 1,
                 surface_resolver: None,
             })
             .expect("mesh");

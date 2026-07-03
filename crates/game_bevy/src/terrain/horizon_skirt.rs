@@ -17,6 +17,7 @@ use crate::terrain::{
     insert_terrain_material_attributes, TerrainChunkPalette, TerrainEditStore,
     TerrainMaterialHandle, TerrainPipelineState, TerrainRegenPending, TerrainWorldRuntime,
 };
+use crate::lod::LodPolicy;
 use crate::ui::WorldTweaks;
 use crate::world::requested_world_id;
 use terrain_material_bevy::{TerrainPbrMaterial, TerrainProceduralMaterialState};
@@ -99,6 +100,7 @@ fn spawn_horizon_skirt_once(
     biomes: Res<BiomeCatalog>,
     edit_store: Res<TerrainEditStore>,
     world_tweaks: Res<WorldTweaks>,
+    policy: Res<LodPolicy>,
     terrain_state: Res<TerrainProceduralMaterialState>,
     material_handle: Res<TerrainMaterialHandle>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -109,6 +111,16 @@ fn spawn_horizon_skirt_once(
     // blocks the sky pass — the old inverted sky sphere avoided this via negative scale
     // on an inner surface; Bevy atmosphere needs unobstructed depth instead.
     if planet_atmosphere.is_some() {
+        if spawned.0 {
+            for entity in skirts.iter() {
+                commands.entity(entity).despawn();
+            }
+            spawned.0 = false;
+        }
+        return;
+    }
+
+    if !policy.distant.horizon_skirt {
         if spawned.0 {
             for entity in skirts.iter() {
                 commands.entity(entity).despawn();
@@ -149,7 +161,9 @@ fn spawn_horizon_skirt_once(
     let center_wz = center.z as f32 * chunk_m + chunk_m * 0.5;
     let origin_x = (center_wx / cell_size_m).floor() as i32;
     let origin_z = (center_wz / cell_size_m).floor() as i32;
-    let radius_m = world_tweaks.render_radius as f32 * chunk_m + chunk_m * 0.5;
+    let impostor_chunks = (policy.distant.impostor_start_m / chunk_m).ceil() as i32;
+    let skirt_radius_chunks = impostor_chunks.max(world_tweaks.render_radius);
+    let radius_m = skirt_radius_chunks as f32 * chunk_m + chunk_m * 0.5;
     let cache_side = (radius_m / cell_size_m).ceil() as usize + 6;
     let column_cache = ChunkColumnCache::build(&source, origin_x - 1, origin_z - 1, cache_side);
     let resolver = ChunkSurfaceResolver::from_compiled(
@@ -164,7 +178,6 @@ fn spawn_horizon_skirt_once(
         compiled_surface,
         biomes.clone(),
     );
-
     let (mesh, palette) = build_skirt_mesh(
         &source,
         &resolver,
@@ -173,7 +186,7 @@ fn spawn_horizon_skirt_once(
         cell_size_m,
         origin_x,
         origin_z,
-        world_tweaks.render_radius,
+        skirt_radius_chunks,
     );
     let skirt_material = materials
         .get(&material_handle.0)

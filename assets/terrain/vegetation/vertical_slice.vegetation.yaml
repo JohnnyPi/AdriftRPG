@@ -1,0 +1,30 @@
+﻿schema_version: 1
+id: vegetation.vertical_slice
+
+description: Default vertical-slice vegetation rules for island testbeds.
+
+rules:
+  - category: tree
+    mesh: placeholder
+    biomes: [forest, grassland, scrub]
+    density: 0.18
+    slope_max_deg: 35.0
+    spacing_m: 4.0
+  - category: shrub
+    mesh: placeholder
+    biomes: [scrub, coastal_scrub, rocky_upland]
+    density: 0.22
+    slope_max_deg: 40.0
+    spacing_m: 2.5
+  - category: grass
+    mesh: placeholder
+    biomes: [grassland, beach, wetland, riverbank]
+    density: 0.35
+    slope_max_deg: 30.0
+    spacing_m: 1.5
+  - category: rock
+    mesh: placeholder
+    biomes: [rocky_upland, mountain_alpine]
+    density: 0.12
+    slope_max_deg: 55.0
+    spacing_m: 3.0

@@ -14,4 +14,3 @@ clouds_direction_deg: 45.0
 clouds_altitude: 0.22
 night_zenith_color: [0.02, 0.04, 0.14]
 night_horizon_color: [0.06, 0.08, 0.16]
-shader: shaders/sky.wgsl

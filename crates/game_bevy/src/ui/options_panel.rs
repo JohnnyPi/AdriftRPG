@@ -5,6 +5,7 @@ use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 use crate::data::ConfigRegistryResource;
 use crate::environment::celestial::CelestialState;
 use crate::environment::lighting_state::EnvironmentLightingState;
+use crate::environment::SimulationTime;
 use crate::state::AppState;
 
 use super::tweaks::{
@@ -39,8 +40,6 @@ pub enum OptionsTab {
 }
 
 const STUB_FEATURES: &[(&str, &str)] = &[
-    ("weather", "Weather simulation"),
-    ("day_night", "Day / night cycle"),
     ("networking", "Multiplayer"),
     ("save_load", "Save / load"),
     ("archipelago", "Archipelago streaming"),
@@ -185,7 +184,7 @@ fn draw_options_panel(
     mut camera: ResMut<CameraTweaks>,
     mut water_physics: ResMut<WaterPhysicsTweaks>,
     mut ecology: ResMut<EcologyTweaks>,
-    registry: Res<ConfigRegistryResource>,
+    mut sim_time: ResMut<SimulationTime>,
     celestial: Option<Res<CelestialState>>,
     lighting_state: Option<Res<EnvironmentLightingState>>,
 ) {
@@ -214,7 +213,7 @@ fn draw_options_panel(
             match panel.tab {
                 OptionsTab::Atmosphere => draw_atmosphere_tab(ui, &mut lighting, &mut atmosphere),
                 OptionsTab::World => draw_world_tab(ui, &mut world, &mut terrain),
-                OptionsTab::Movement => draw_movement_tab(ui, &mut movement, &registry),
+                OptionsTab::Movement => draw_movement_tab(ui, &mut movement),
                 OptionsTab::Physics => draw_physics_tab(ui, &mut physics),
                 OptionsTab::Water => {
                     draw_water_tab(ui, &mut water, &mut river, &mut water_physics)
@@ -224,6 +223,7 @@ fn draw_options_panel(
                     &mut camera,
                     &mut atmosphere,
                     &mut ecology,
+                    &mut sim_time,
                     celestial.as_deref(),
                     lighting_state.as_deref(),
                 ),
@@ -310,23 +310,7 @@ fn draw_world_tab(ui: &mut egui::Ui, world: &mut WorldTweaks, terrain: &mut Terr
     ui.checkbox(&mut terrain.show_masks, "Show terrain masks");
 }
 
-fn draw_movement_tab(
-    ui: &mut egui::Ui,
-    movement: &mut MovementTweaks,
-    registry: &ConfigRegistryResource,
-) {
-    if let Ok(player) = registry.0.active_player() {
-        if !movement.use_overrides {
-            movement.walk_speed = player.walk_speed_mps;
-            movement.run_speed = player.run_speed_mps;
-            movement.acceleration = player.acceleration_mps2;
-            movement.deceleration = player.deceleration_mps2;
-            movement.max_slope_deg = player.maximum_walkable_slope_deg;
-            movement.jump_buffer_s = player.jump_buffer_s;
-            movement.coyote_time_s = player.coyote_time_s;
-        }
-    }
-
+fn draw_movement_tab(ui: &mut egui::Ui, movement: &mut MovementTweaks) {
     ui.checkbox(&mut movement.use_overrides, "Override movement");
 
     ui.add_enabled(
@@ -422,9 +406,24 @@ fn draw_debug_tab(
     camera: &mut CameraTweaks,
     atmosphere: &mut AtmosphereTweaks,
     ecology: &mut EcologyTweaks,
+    sim_time: &mut SimulationTime,
     celestial: Option<&CelestialState>,
     lighting_state: Option<&EnvironmentLightingState>,
 ) {
+    ui.heading("Day / night cycle");
+    ui.checkbox(&mut sim_time.auto_advance, "Auto-advance time");
+    ui.add(
+        egui::Slider::new(&mut sim_time.day_length_minutes, 1.0..=120.0)
+            .text("real minutes per full day"),
+    );
+    ui.add(egui::Slider::new(&mut sim_time.time_scale, 0.0..=8.0).text("time scale"));
+    if !sim_time.auto_advance {
+        ui.add(
+            egui::Slider::new(&mut sim_time.time_of_day_hours, 0.0..=24.0).text("manual hours"),
+        );
+        atmosphere.time_of_day_hours = sim_time.time_of_day_hours;
+    }
+
     ui.heading("Time of day");
     ui.checkbox(
         &mut atmosphere.drive_sun_from_time_of_day,

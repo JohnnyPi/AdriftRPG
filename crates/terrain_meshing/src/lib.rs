@@ -27,6 +27,8 @@ pub struct TerrainMeshData {
 pub struct ChunkMeshingInput<'a> {
     pub samples: &'a [TerrainSample],
     pub chunk_cells: usize,
+    /// When > 1, skip cells during mesh extraction for distance LOD.
+    pub cell_stride: u32,
     /// When set, per-vertex material blends come from the surface classifier.
     pub surface_resolver: Option<&'a dyn SurfaceMeshResolver>,
 }
@@ -36,6 +38,7 @@ impl std::fmt::Debug for ChunkMeshingInput<'_> {
         f.debug_struct("ChunkMeshingInput")
             .field("samples", &self.samples.len())
             .field("chunk_cells", &self.chunk_cells)
+            .field("cell_stride", &self.cell_stride)
             .field("surface_resolver", &self.surface_resolver.is_some())
             .finish()
     }

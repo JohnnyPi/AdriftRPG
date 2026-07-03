@@ -43,6 +43,7 @@ fn spawn_hud(mut commands: Commands) {
                 row_gap: Val::Px(4.0),
                 ..default()
             },
+            Visibility::default(),
         ))
         .with_children(|parent| {
             parent.spawn((HudSpeedText, Text::new("Speed: 0.0 m/s")));

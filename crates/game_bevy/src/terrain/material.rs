@@ -15,10 +15,13 @@ use terrain_material_bevy::{
 
 use crate::data::ConfigRegistryResource;
 use crate::data::UserSetupPrefs;
+use crate::lod::{render_lod_tier_for_distance, LodPolicy};
 use crate::state::AppState;
+use crate::terrain::TerrainWorldRuntime;
 use crate::terrain::{TerrainChunkEntity, TerrainChunkPalette};
 use crate::ui::TerrainMaterialTweaks;
 use crate::world::requested_world_id;
+use crate::camera::MainGameCamera;
 
 pub use terrain_material_bevy::TerrainPbrMaterial;
 
@@ -71,6 +74,7 @@ impl Plugin for TerrainMaterialPlugin {
             (
                 sync_world_terrain_material_recipes,
                 sync_terrain_material_handle,
+                sync_render_distance_lod,
                 sync_terrain_material_tweaks,
                 refresh_chunk_terrain_materials,
             )
@@ -121,6 +125,40 @@ fn init_terrain_material_handle(
     mut commands: Commands,
 ) {
     commands.insert_resource(TerrainMaterialHandle(state.material.clone()));
+}
+
+fn sync_render_distance_lod(
+    policy: Res<LodPolicy>,
+    runtime: Res<TerrainWorldRuntime>,
+    camera: Query<&Transform, With<MainGameCamera>>,
+    handle: Res<TerrainMaterialHandle>,
+    state: Res<TerrainProceduralMaterialState>,
+    mut materials: ResMut<Assets<TerrainPbrMaterial>>,
+) {
+    if !state.ready {
+        return;
+    }
+    let Ok(cam) = camera.single() else {
+        return;
+    };
+    let interest = Vec3::new(
+        runtime.interest_center.x as f32 * 16.0,
+        cam.translation.y,
+        runtime.interest_center.z as f32 * 16.0,
+    );
+    let distance = cam.translation.distance(interest);
+    let Some(tier) = render_lod_tier_for_distance(&policy, distance) else {
+        return;
+    };
+    let Some(mut mat) = materials.get_mut(&handle.0) else {
+        return;
+    };
+    mat.settings.layer_count = tier.active_layers.min(mat.settings.layer_count.max(1));
+    mat.settings.triplanar_sharpness = match tier.projection_axes {
+        1 => 8.0,
+        2 => 6.0,
+        _ => 4.0,
+    };
 }
 
 fn sync_terrain_material_tweaks(

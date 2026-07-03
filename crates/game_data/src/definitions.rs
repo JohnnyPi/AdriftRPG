@@ -203,6 +203,29 @@ pub struct WaterDefinition {
     pub transparency: f32,
     pub wave_speed: f32,
     pub wave_amplitude: f32,
+    #[serde(default = "default_ocean_tile_size_m")]
+    pub ocean_tile_size_m: f32,
+    #[serde(default = "default_ocean_tile_radius")]
+    pub ocean_tile_radius: i32,
+    #[serde(default = "default_surface_z_offset")]
+    pub surface_z_offset_m: f32,
+    #[serde(default)]
+    pub foam_enabled: bool,
+    #[serde(default = "default_foam_strength")]
+    pub foam_strength: f32,
+}
+
+fn default_ocean_tile_size_m() -> f32 {
+    256.0
+}
+fn default_ocean_tile_radius() -> i32 {
+    1
+}
+fn default_surface_z_offset() -> f32 {
+    0.02
+}
+fn default_foam_strength() -> f32 {
+    0.65
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -244,6 +267,12 @@ pub struct WorldDefinition {
     /// Optional material catalog (`catalogs.*`) bundling textures, surfaces, overlays.
     #[serde(default)]
     pub material_catalog: Option<StableId>,
+    /// Vegetation rules profile (`vegetation.*`).
+    #[serde(default)]
+    pub vegetation: Option<StableId>,
+    /// Visual weather preset (`weather.*`).
+    #[serde(default)]
+    pub weather: Option<StableId>,
 }
 
 impl WorldDefinition {
@@ -291,6 +320,275 @@ pub struct WorldVoxelDefinition {
 pub struct WorldChunksDefinition {
     pub cells: [u32; 3],
     pub world_extent: [u32; 3],
+    #[serde(default)]
+    pub residency: ChunkResidencyDefinition,
+    #[serde(default)]
+    pub lod: WorldLodDefinition,
+    #[serde(default)]
+    pub staging: ChunkStagingDefinition,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ChunkResidencyDefinition {
+    #[serde(default = "default_density_radius")]
+    pub density_radius: i32,
+    #[serde(default = "default_render_radius")]
+    pub render_radius: i32,
+    #[serde(default = "default_physics_radius")]
+    pub physics_radius: i32,
+    #[serde(default = "default_decoration_radius")]
+    pub decoration_radius: i32,
+    #[serde(default = "default_high_detail_radius")]
+    pub high_detail_radius: i32,
+}
+
+fn default_density_radius() -> i32 {
+    10
+}
+fn default_render_radius() -> i32 {
+    7
+}
+fn default_physics_radius() -> i32 {
+    5
+}
+fn default_decoration_radius() -> i32 {
+    5
+}
+fn default_high_detail_radius() -> i32 {
+    4
+}
+
+impl Default for ChunkResidencyDefinition {
+    fn default() -> Self {
+        Self {
+            density_radius: default_density_radius(),
+            render_radius: default_render_radius(),
+            physics_radius: default_physics_radius(),
+            decoration_radius: default_decoration_radius(),
+            high_detail_radius: default_high_detail_radius(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct WorldLodDefinition {
+    #[serde(default = "default_terrain_lod_tiers")]
+    pub terrain: Vec<TerrainLodTierDefinition>,
+    #[serde(default)]
+    pub materials: MaterialLodDefinition,
+    #[serde(default)]
+    pub content: ContentLodDefinition,
+    #[serde(default)]
+    pub distant: DistantLodDefinition,
+}
+
+fn default_terrain_lod_tiers() -> Vec<TerrainLodTierDefinition> {
+    vec![
+        TerrainLodTierDefinition {
+            max_distance_chunks: 3,
+            mesh_resolution_scale: 1.0,
+            collider: TerrainColliderLodDefinition::Full,
+        },
+        TerrainLodTierDefinition {
+            max_distance_chunks: 5,
+            mesh_resolution_scale: 0.5,
+            collider: TerrainColliderLodDefinition::Simplified,
+        },
+        TerrainLodTierDefinition {
+            max_distance_chunks: 7,
+            mesh_resolution_scale: 0.25,
+            collider: TerrainColliderLodDefinition::None,
+        },
+    ]
+}
+
+impl Default for WorldLodDefinition {
+    fn default() -> Self {
+        Self {
+            terrain: default_terrain_lod_tiers(),
+            materials: MaterialLodDefinition::default(),
+            content: ContentLodDefinition::default(),
+            distant: DistantLodDefinition::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct TerrainLodTierDefinition {
+    pub max_distance_chunks: i32,
+    pub mesh_resolution_scale: f32,
+    #[serde(default)]
+    pub collider: TerrainColliderLodDefinition,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TerrainColliderLodDefinition {
+    #[default]
+    Full,
+    Simplified,
+    None,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct MaterialLodDefinition {
+    #[serde(default = "default_render_profile_id")]
+    pub render_profile: StableId,
+}
+
+fn default_render_profile_id() -> StableId {
+    StableId::new("render.terrain_high")
+}
+
+impl Default for MaterialLodDefinition {
+    fn default() -> Self {
+        Self {
+            render_profile: default_render_profile_id(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ContentLodDefinition {
+    #[serde(default = "default_vegetation_max_dist")]
+    pub vegetation_max_distance_m: f32,
+    #[serde(default = "default_grass_lod")]
+    pub grass_lod: [f32; 3],
+}
+
+fn default_vegetation_max_dist() -> f32 {
+    80.0
+}
+fn default_grass_lod() -> [f32; 3] {
+    [25.0, 70.0, 140.0]
+}
+
+impl Default for ContentLodDefinition {
+    fn default() -> Self {
+        Self {
+            vegetation_max_distance_m: default_vegetation_max_dist(),
+            grass_lod: default_grass_lod(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct DistantLodDefinition {
+    #[serde(default = "default_true")]
+    pub horizon_skirt: bool,
+    #[serde(default = "default_impostor_start_m")]
+    pub impostor_start_m: f32,
+}
+
+fn default_true() -> bool {
+    true
+}
+fn default_impostor_start_m() -> f32 {
+    400.0
+}
+
+impl Default for DistantLodDefinition {
+    fn default() -> Self {
+        Self {
+            horizon_skirt: true,
+            impostor_start_m: default_impostor_start_m(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ChunkStagingDefinition {
+    #[serde(default = "default_prefetch_chunks")]
+    pub prefetch_chunks_ahead: i32,
+    #[serde(default = "default_true")]
+    pub preload_atlas: bool,
+    #[serde(default = "default_true")]
+    pub preload_material_arrays: bool,
+}
+
+fn default_prefetch_chunks() -> i32 {
+    2
+}
+
+impl Default for ChunkStagingDefinition {
+    fn default() -> Self {
+        Self {
+            prefetch_chunks_ahead: default_prefetch_chunks(),
+            preload_atlas: true,
+            preload_material_arrays: true,
+        }
+    }
+}
+
+/// Terrain material render profile with distance-based shader LOD tiers.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct RenderProfileDefinition {
+    #[serde(flatten)]
+    pub header: DefinitionHeader,
+    #[serde(default = "default_active_layers")]
+    pub active_layers: u32,
+    #[serde(default = "default_projection")]
+    pub projection: String,
+    #[serde(default = "default_projection_axes")]
+    pub projection_axes: u32,
+    #[serde(default = "default_true")]
+    pub normal_mapping: bool,
+    #[serde(default = "default_true")]
+    pub height_blending: bool,
+    #[serde(default = "default_true")]
+    pub macro_variation: bool,
+    #[serde(default)]
+    pub distance_lod: Vec<RenderDistanceLodTierDefinition>,
+}
+
+fn default_active_layers() -> u32 {
+    4
+}
+fn default_projection() -> String {
+    "triplanar".to_string()
+}
+fn default_projection_axes() -> u32 {
+    3
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct RenderDistanceLodTierDefinition {
+    pub maximum_distance_m: f32,
+    pub active_layers: u32,
+    pub projection_axes: u32,
+}
+
+/// Visual weather preset (coverage + fog modulation, not full hydrology).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct WeatherProfileDefinition {
+    #[serde(flatten)]
+    pub header: DefinitionHeader,
+    #[serde(default = "default_cloud_cover")]
+    pub cloud_cover: f32,
+    #[serde(default = "default_fog_density_scale")]
+    pub fog_density_scale: f32,
+    #[serde(default = "default_weather_cycle_minutes")]
+    pub cycle_minutes: f32,
+}
+
+fn default_cloud_cover() -> f32 {
+    0.5
+}
+fn default_fog_density_scale() -> f32 {
+    1.0
+}
+fn default_weather_cycle_minutes() -> f32 {
+    20.0
 }
 
 /// Terrain generation recipe (YAML-driven procedural shapes).
@@ -1316,11 +1614,14 @@ pub struct SkyDefinition {
     pub clouds_direction_deg: f32,
     #[serde(default = "default_clouds_altitude")]
     pub clouds_altitude: f32,
+    #[serde(default = "default_cloud_base_height_m")]
+    pub cloud_base_height_m: f32,
+    #[serde(default = "default_cloud_shell_radius_m")]
+    pub cloud_shell_radius_m: f32,
     #[serde(default = "default_night_zenith")]
     pub night_zenith_color: [f32; 3],
     #[serde(default = "default_night_horizon")]
     pub night_horizon_color: [f32; 3],
-    pub shader: String,
 }
 
 fn default_stars_density() -> f32 {
@@ -1341,6 +1642,14 @@ fn default_clouds_direction_deg() -> f32 {
 
 fn default_clouds_altitude() -> f32 {
     0.22
+}
+
+fn default_cloud_base_height_m() -> f32 {
+    500.0
+}
+
+fn default_cloud_shell_radius_m() -> f32 {
+    2800.0
 }
 
 fn default_night_zenith() -> [f32; 3] {
@@ -1497,6 +1806,8 @@ pub enum RawDefinition {
     SurfaceMaterial(SurfaceMaterialDefinition),
     MaterialCatalog(MaterialCatalogDefinition),
     Overlay(OverlayDefinition),
+    RenderProfile(RenderProfileDefinition),
+    WeatherProfile(WeatherProfileDefinition),
 }
 
 impl RawDefinition {
@@ -1533,6 +1844,8 @@ impl RawDefinition {
             Self::SurfaceMaterial(def) => &def.header.id,
             Self::MaterialCatalog(def) => &def.header.id,
             Self::Overlay(def) => &def.header.id,
+            Self::RenderProfile(def) => &def.header.id,
+            Self::WeatherProfile(def) => &def.header.id,
         }
     }
 
@@ -1569,6 +1882,8 @@ impl RawDefinition {
             Self::SurfaceMaterial(def) => def.header.validate(),
             Self::MaterialCatalog(def) => def.header.validate(),
             Self::Overlay(def) => def.header.validate(),
+            Self::RenderProfile(def) => def.header.validate(),
+            Self::WeatherProfile(def) => def.header.validate(),
         }
     }
 }

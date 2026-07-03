@@ -139,7 +139,9 @@ pub struct StubLightPropagation;
 
 impl LightPropagationBackend for StubLightPropagation {}
 
-/// Simulation time stub for day/night cycle.
+/// Extension-point traits for future lighting backends.
+/// Live day/night uses `environment::simulation_time::SimulationTime`.
+/// Fog is owned by `environment::fog::FogStack` (see `fog.yaml`).
 #[allow(dead_code)]
 pub trait SimulationTime: Send + Sync {
     fn hours(&self) -> f32 {

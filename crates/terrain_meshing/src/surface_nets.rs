@@ -41,9 +41,12 @@ fn build_surface_nets(input: &ChunkMeshingInput<'_>) -> Result<TerrainMeshData, 
     let halo = cells + 2;
     let mut cell_verts = vec![None; halo * halo * halo];
 
-    for z in -1..cells as i32 {
-        for y in -1..cells as i32 {
-            for x in -1..cells as i32 {
+    let stride = input.cell_stride.max(1) as i32;
+    let step = stride as usize;
+
+    for z in (-1..cells as i32).step_by(step) {
+        for y in (-1..cells as i32).step_by(step) {
+            for x in (-1..cells as i32).step_by(step) {
                 let corners = corner_densities(input, x, y, z, padded);
                 if !cell_has_surface(&corners) {
                     continue;

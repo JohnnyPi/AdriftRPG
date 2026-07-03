@@ -300,6 +300,9 @@ fn rejects_non_standard_chunk_cells() {
         chunks: WorldChunksDefinition {
             cells: [32, 16, 16],
             world_extent: [6, 3, 6],
+            residency: Default::default(),
+            lod: Default::default(),
+            staging: Default::default(),
         },
         terrain: StableId::new("terrain.test"),
         biomes: StableId::new("biomes.test"),
@@ -317,6 +320,8 @@ fn rejects_non_standard_chunk_cells() {
         island_atlas_baked: None,
         hydrology_bodies: Vec::new(),
         material_catalog: None,
+        vegetation: None,
+        weather: None,
     })]);
 }
 

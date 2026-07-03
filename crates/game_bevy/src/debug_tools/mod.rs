@@ -27,6 +27,8 @@ use crate::terrain::{
 use terrain_material_bevy::TerrainPbrMaterial;
 use crate::terrain::draw_residency_rings;
 use crate::terrain::chunk_world_center;
+use crate::lod::LodPolicy;
+use crate::staging::{AssetStagingQueue, StagingGate};
 use crate::world::{effective_world_from_prefs, semantic_tag_color, WorldSemanticRegistry, WorldSemanticTag};
 use crate::environment::fog::FogStack;
 use crate::ui::{EcologyTweaks, RiverTweaks, TerrainTweaks, WorldTweaks};
@@ -56,16 +58,25 @@ pub struct DebugOverlayState {
     pub debug_panel: bool,
     pub biome_debug_view: BiomeDebugView,
     pub show_fog_contributors: bool,
+    pub show_lod_tiers: bool,
+    pub show_staging_queue: bool,
 }
 
 #[derive(Component)]
 struct DebugPanelText;
+
+#[derive(Resource, Default, Clone)]
+struct DebugPanelLodStagingText {
+    lod_line: String,
+    staging_line: String,
+}
 
 pub struct DebugToolsPlugin;
 
 impl Plugin for DebugToolsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<DebugOverlayState>()
+            .init_resource::<DebugPanelLodStagingText>()
             .add_plugins(WireframePlugin::default())
             .add_systems(OnEnter(AppState::Running), init_debug_bindings)
             .add_systems(Update, handle_debug_keys.run_if(in_state(AppState::Running)))
@@ -82,8 +93,40 @@ impl Plugin for DebugToolsPlugin {
             .add_systems(Update, draw_island_atlas_fields.run_if(in_state(AppState::Running)))
             .add_systems(Update, draw_fog_contributors.run_if(in_state(AppState::Running)))
             .add_systems(Update, draw_semantic_landmarks.run_if(in_state(AppState::Running)))
-            .add_systems(Update, update_debug_panel.run_if(in_state(AppState::Running)));
+            .add_systems(Update, draw_lod_tier_overlay.run_if(in_state(AppState::Running)))
+            .add_systems(
+                Update,
+                (
+                    sync_debug_panel_lod_staging,
+                    update_debug_panel,
+                )
+                    .chain()
+                    .run_if(in_state(AppState::Running)),
+            );
     }
+}
+
+fn sync_debug_panel_lod_staging(
+    debug: Res<DebugOverlayState>,
+    policy: Res<LodPolicy>,
+    staging: Res<AssetStagingQueue>,
+    gate: Res<StagingGate>,
+    mut lines: ResMut<DebugPanelLodStagingText>,
+) {
+    lines.lod_line = if debug.show_lod_tiers {
+        format!("LOD profile: {}\n", policy.render_profile_id.as_str())
+    } else {
+        String::new()
+    };
+    lines.staging_line = if debug.show_staging_queue {
+        format!(
+            "Staging: pending={} gate={}\n",
+            staging.pending_count(),
+            if gate.spawn_allowed { "open" } else { "closed" }
+        )
+    } else {
+        String::new()
+    };
 }
 
 fn handle_debug_keys(
@@ -174,6 +217,13 @@ fn handle_debug_keys(
     }
     if keyboard.just_pressed(bindings.freeze_pipeline) {
         pipeline.frozen = !pipeline.frozen;
+    }
+    if keyboard.just_pressed(KeyCode::F7)
+        && (keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight))
+    {
+        debug.show_staging_queue = !debug.show_staging_queue;
+    } else if keyboard.just_pressed(KeyCode::F7) {
+        debug.show_lod_tiers = !debug.show_lod_tiers;
     }
 }
 
@@ -396,6 +446,7 @@ fn update_debug_panel(
     debug: Res<DebugOverlayState>,
     pipeline: Res<TerrainPipelineState>,
     metrics: Res<TerrainPipelineMetrics>,
+    lod_staging: Res<DebugPanelLodStagingText>,
     seed_override: Res<WorldSeedOverride>,
     pending: Res<TerrainRegenPending>,
     registry: Res<ConfigRegistryResource>,
@@ -443,10 +494,14 @@ fn update_debug_panel(
     } else {
         String::new()
     };
+    let staging_line = &lod_staging.staging_line;
+    let lod_line = &lod_staging.lod_line;
     let body = format!(
         "Debug Panel\n\
          Seed: {} (override)\n\
          {regen_line}\n\
+         {staging_line}\
+         {lod_line}\
          Chunks ready: {ready}/{}\n\
          Pipeline budget: {}\n\
          Queues  D:{:?} M:{:?} U:{:?} C:{:?}\n\
@@ -455,7 +510,7 @@ fn update_debug_panel(
          Biome view: {:?} (Shift+F4 cycle)\n\
          {landmark_lines}\
          FPS: {fps:.0}\n\
-         N=normals  F8=regen  F9=next seed",
+         N=normals  F7=LOD tiers  Shift+F7=staging  F8=regen  F9=next seed",
         seed_override.seed,
         pipeline.chunks.len(),
         if budget_ok { "PASS" } else { "REVIEW" },
@@ -507,6 +562,32 @@ fn toggle_wireframe(
         for entity in chunks.iter() {
             commands.entity(entity).insert(Wireframe);
         }
+    }
+}
+
+fn draw_lod_tier_overlay(
+    debug: Res<DebugOverlayState>,
+    pipeline: Res<TerrainPipelineState>,
+    mut gizmos: Gizmos,
+) {
+    if !debug.show_lod_tiers {
+        return;
+    }
+    for chunk in pipeline.chunks.values() {
+        if chunk.entity.is_none() {
+            continue;
+        }
+        let center = chunk_world_center(chunk.coord);
+        let color = match chunk.lod_tier {
+            0 => Color::srgba(0.2, 1.0, 0.3, 0.35),
+            1 => Color::srgba(1.0, 0.85, 0.2, 0.35),
+            2 => Color::srgba(1.0, 0.35, 0.2, 0.35),
+            _ => Color::srgba(0.5, 0.5, 0.5, 0.25),
+        };
+        gizmos.cube(
+            Transform::from_translation(center + Vec3::Y * 8.0).with_scale(Vec3::splat(14.0)),
+            color,
+        );
     }
 }
 

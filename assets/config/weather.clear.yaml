@@ -1,0 +1,6 @@
+﻿schema_version: 1
+id: weather.clear
+
+cloud_cover: 0.45
+fog_density_scale: 1.0
+cycle_minutes: 20.0

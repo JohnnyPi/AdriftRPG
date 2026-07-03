@@ -7,7 +7,7 @@
 //   deep_color:    rgb = deep tint
 //   wave:          x = surface elevation (m), y = wave_speed,
 //                  z = wave_amplitude, w = transparency
-//   animation:     x = elapsed time (s), driven by animate_water
+//   animation:     x = elapsed time (s), y = foam_strength, z = wave_count tier
 //
 // This is intentionally self-contained (no depth prepass required): apparent
 // depth is approximated from the view angle, so the plane reads shallow near
@@ -45,7 +45,9 @@ fn wave_field(p: vec2<f32>, t: f32, speed: f32, amplitude: f32) -> vec3<f32> {
     let amps  = array<f32, 4>(0.50, 0.28, 0.15, 0.07);
     let speeds = array<f32, 4>(1.00, 1.35, 1.80, 2.40);
 
-    for (var i = 0; i < 4; i = i + 1) {
+    let wave_count = max(u32(params.animation.z), 1u);
+
+    for (var i = 0u; i < wave_count; i = i + 1u) {
         let d = dirs[i];
         let f = freqs[i];
         let a = amps[i] * amplitude;
@@ -96,6 +98,11 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // More opaque when looking across the surface or at deep color; the
     // authored transparency sets the floor seen when looking straight down.
     let alpha = clamp(mix(transparency, 1.0, max(fresnel, depth_factor * 0.35)), 0.0, 1.0);
+
+    // Shoreline foam driven by shallow depth proxy and YAML foam_strength (animation.y).
+    let foam_noise = fract(sin(dot(world_pos.xz, vec2<f32>(12.9898, 78.233))) * 43758.5453);
+    let foam = pow(1.0 - depth_factor, 2.5) * params.animation.y * foam_noise;
+    water_rgb = mix(water_rgb, vec3<f32>(0.95, 0.98, 1.0), foam * 0.55);
 
     return vec4<f32>(water_rgb, alpha);
 }

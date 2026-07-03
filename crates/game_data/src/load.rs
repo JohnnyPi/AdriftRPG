@@ -150,6 +150,10 @@ fn parse_yaml_file(path: &Path, text: &str) -> DataResult<RawDefinition> {
         RawDefinition::MaterialCatalog(deserialize_value(path, value)?)
     } else if id.starts_with("overlays.") {
         RawDefinition::Overlay(deserialize_value(path, value)?)
+    } else if id.starts_with("render.") {
+        RawDefinition::RenderProfile(deserialize_value(path, value)?)
+    } else if id.starts_with("weather.") {
+        RawDefinition::WeatherProfile(deserialize_value(path, value)?)
     } else {
         return Err(DataError::Parse {
             path: path.display().to_string(),
@@ -180,7 +184,6 @@ fn should_skip_config_file(path: &Path) -> bool {
         let s = component.as_os_str();
         s == "procedural"
             || s == "baked"
-            || s == "render_profiles"
             || s.to_string_lossy().ends_with(".atlas")
     })
 }

@@ -8,9 +8,39 @@ voxel:
 
 chunks:
   cells: [16, 16, 16]
-  # Centered: X/Z span [-1600, +1600); Y spans [-416, +416).
-  # Sized for a ~2500 m island with runtime procedural atlas generation.
   world_extent: [200, 52, 200]
+  residency:
+    density_radius: 10
+    render_radius: 7
+    physics_radius: 5
+    decoration_radius: 5
+    high_detail_radius: 4
+  lod:
+    terrain:
+      - max_distance_chunks: 3
+        mesh_resolution_scale: 1.0
+        collider: full
+      - max_distance_chunks: 5
+        mesh_resolution_scale: 0.5
+        collider: simplified
+      - max_distance_chunks: 7
+        mesh_resolution_scale: 0.25
+        collider: none
+    materials:
+      render_profile: render.terrain_high
+    content:
+      vegetation_max_distance_m: 120
+      grass_lod: [25, 70, 140]
+    distant:
+      horizon_skirt: true
+      impostor_start_m: 600
+  staging:
+    prefetch_chunks_ahead: 2
+    preload_atlas: true
+    preload_material_arrays: true
+
+vegetation: vegetation.vertical_slice
+weather: weather.clear
 
 terrain: terrain.island_large
 island_gen: island_gen.island_large

@@ -13,6 +13,7 @@ fn mesh_topology_hash(source: &RecipeDensitySource, coord: ChunkCoord) -> u64 {
         .build_mesh(&ChunkMeshingInput {
             samples: &samples,
             chunk_cells: CHUNK_CELLS,
+            cell_stride: 1,
             surface_resolver: None,
         })
         .expect("mesh");
