@@ -32,7 +32,11 @@ use crate::player::{
 };
 use crate::state::AppState;
 use crate::terrain::spawn_terrain_uploaded;
-use crate::terrain::{spawn_terrain_collider_ready, TerrainFeatureRegistry, TerrainPipelineState};
+use crate::terrain::{
+    effective_runtime_sea_level_m, spawn_terrain_collider_ready, TerrainFeatureRegistry,
+    TerrainPipelineState,
+};
+use crate::ui::WaterTweaks;
 use crate::ui::MovementTweaks;
 use crate::ui::CameraTweaks;
 use crate::world::effective_world_from_prefs;
@@ -47,7 +51,9 @@ pub struct AwaitingSpawnTerrain {
 }
 
 const GROUND_SNAP_MAX_ATTEMPTS: u8 = 120;
-const GROUND_SNAP_PROBE_M: f32 = 12.0;
+const GROUND_SNAP_PROBE_M: f32 = 16.0;
+/// One-time placement snap window beyond continuous `ground_snap_m`.
+const INITIAL_GROUND_PLACEMENT_MAX_M: f32 = 0.5;
 
 #[derive(Component, Default, Debug)]
 pub struct PlayerMoveIntent {
@@ -68,8 +74,8 @@ impl Plugin for GamePhysicsPlugin {
                     snap_players_to_ground,
                     gather_player_movement,
                     detect_player_water,
+                    apply_water_sink_and_swim,
                     apply_character_movement,
-                    props::inherit_platform_velocity,
                     water_physics::apply_shallow_water_movement,
                 )
                     .chain()
@@ -207,7 +213,7 @@ fn place_capsule_on_physics_ground(
     let start_y = transform.translation.y;
     transform.translation.y += probe_height;
     let filter = terrain_ground_filter(entity);
-    let cast_distance = probe_height + 2.0;
+    let cast_distance = probe_height + INITIAL_GROUND_PLACEMENT_MAX_M + 2.0;
     if let Some(hit) = CharacterCollisionQuery::ground_cast(
         spatial,
         collider,
@@ -216,8 +222,11 @@ fn place_capsule_on_physics_ground(
         cast_distance,
         &filter,
     ) {
-        transform.translation.y -= hit.distance - GROUND_CONTACT_SKIN;
-        return true;
+        let gap = hit.distance - GROUND_CONTACT_SKIN;
+        if gap <= INITIAL_GROUND_PLACEMENT_MAX_M + player.ground_snap_m {
+            transform.translation.y -= gap;
+            return true;
+        }
     }
     transform.translation.y = start_y;
     false
@@ -445,9 +454,28 @@ fn apply_character_movement(
     );
 }
 
-const SHALLOW_WATER_DEPTH_M: f32 = 1.5;
-const SWIM_UP_SPEED_MPS: f32 = 3.2;
-const WATER_SINK_GRAVITY_SCALE: f32 = 0.35;
+fn physics_floor_center_y(
+    spatial: &SpatialQuery,
+    entity: Entity,
+    collider: &Collider,
+    transform: &Transform,
+    player: &CompiledPlayer,
+) -> Option<f32> {
+    let probe_height = GROUND_SNAP_PROBE_M.max(player.step_height_m + player.ground_snap_m + 3.0);
+    let elevated_y = transform.translation.y + probe_height;
+    let mut probe_pos = transform.translation;
+    probe_pos.y = elevated_y;
+    let filter = terrain_ground_filter(entity);
+    CharacterCollisionQuery::ground_cast(
+        spatial,
+        collider,
+        probe_pos,
+        transform.rotation,
+        probe_height + 2.0,
+        &filter,
+    )
+    .map(|hit| elevated_y - hit.distance + GROUND_CONTACT_SKIN)
+}
 
 fn capsule_bottom_offset(player: &CompiledPlayer) -> f32 {
     player.capsule_half_height_m + player.capsule_radius_m
@@ -456,19 +484,19 @@ fn capsule_bottom_offset(player: &CompiledPlayer) -> f32 {
 fn detect_player_water(
     registry: Res<ConfigRegistryResource>,
     prefs: Res<UserSetupPrefs>,
+    water_tweaks: Res<WaterTweaks>,
+    water_physics: Res<crate::ui::WaterPhysicsTweaks>,
     features: Res<TerrainFeatureRegistry>,
     mut players: Query<(&Transform, &mut PlayerMovementState), With<Player>>,
 ) {
-    let Ok(world) = effective_world_from_prefs(&registry.0, &prefs) else {
-        return;
-    };
-    let Some(water) = registry.0.water.get(&world.water) else {
+    let Ok(_world) = effective_world_from_prefs(&registry.0, &prefs) else {
         return;
     };
     let Ok(player) = registry.0.active_player() else {
         return;
     };
-    let sea = water.sea_level_m;
+    let sea = effective_runtime_sea_level_m(&registry, &prefs, &water_tweaks);
+    let shallow_depth = water_physics.shallow_depth_m;
     let feet_offset = capsule_bottom_offset(&player);
 
     for (transform, mut movement) in &mut players {
@@ -491,26 +519,19 @@ fn detect_player_water(
         movement.submerged_depth = feet_depth.max(center_depth);
         movement.in_water = feet_y < sea + 0.05 || movement.submerged_depth > 0.05;
         movement.in_shallow_water = movement.in_water
-            && (feet_y > sea - SHALLOW_WATER_DEPTH_M || movement.submerged_depth < SHALLOW_WATER_DEPTH_M);
+            && (feet_y > sea - shallow_depth || movement.submerged_depth < shallow_depth);
     }
 }
 
-fn apply_player_water_physics(
-    time: Res<Time<Fixed>>,
+fn apply_water_sink_and_swim(
     registry: Res<ConfigRegistryResource>,
     prefs: Res<UserSetupPrefs>,
-    pipeline: Res<TerrainPipelineState>,
+    water_tweaks: Res<WaterTweaks>,
     tweaks: Res<crate::ui::WaterPhysicsTweaks>,
     intent: Query<&PlayerMoveIntent, With<Player>>,
-    mut players: Query<
-        (&mut Transform, &mut LinearVelocity, &mut PlayerMovementState),
-        With<Player>,
-    >,
+    mut players: Query<(&mut LinearVelocity, &PlayerMovementState), With<Player>>,
 ) {
-    let Ok(world) = effective_world_from_prefs(&registry.0, &prefs) else {
-        return;
-    };
-    let Some(water) = registry.0.water.get(&world.water) else {
+    let Ok(_world) = effective_world_from_prefs(&registry.0, &prefs) else {
         return;
     };
     let Ok(player) = registry.0.active_player() else {
@@ -519,50 +540,80 @@ fn apply_player_water_physics(
     let Ok(intent) = intent.single() else {
         return;
     };
-    let sea = water.sea_level_m;
-    let feet_offset = capsule_bottom_offset(&player);
-    let dt = time.delta_secs();
+    let sea = effective_runtime_sea_level_m(&registry, &prefs, &water_tweaks);
     let gravity = player.gravity_mps2;
 
-    for (mut transform, mut velocity, mut movement) in &mut players {
+    for (mut velocity, movement) in &mut players {
         if !movement.in_water {
             continue;
         }
 
-        let center_y = transform.translation.y;
-        let feet_y = center_y - feet_offset;
-        let depth = movement.submerged_depth;
-        let wading_depth = (sea - feet_y).max(0.0);
-        let deep_water = depth > tweaks.shallow_depth_m || wading_depth > tweaks.shallow_depth_m;
-
         if intent.jump_held {
-            velocity.y = velocity.y.max(SWIM_UP_SPEED_MPS);
-        } else if deep_water {
-            velocity.y += gravity * depth.min(1.2) * tweaks.buoyancy_strength * 0.08;
+            velocity.y = velocity.y.max(tweaks.swim_up_speed_mps);
+            continue;
+        }
+
+        let deep_water = movement.submerged_depth > tweaks.shallow_depth_m;
+        if deep_water {
+            continue;
+        }
+
+        if tweaks.buoyancy_surface_only {
+            let wading = (sea - (movement.submerged_depth)).max(0.0);
+            if wading > 0.05 && wading <= tweaks.shallow_depth_m {
+                velocity.y += gravity * wading.min(1.0) * tweaks.buoyancy_strength * 0.04;
+            }
+        } else if movement.submerged_depth > 0.05 {
+            velocity.y += gravity * movement.submerged_depth.min(1.2) * tweaks.buoyancy_strength * 0.08;
             if velocity.y < 0.0 {
                 velocity.y *= 0.98;
             }
-        } else if wading_depth > 0.05 {
-            velocity.y += gravity * wading_depth.min(1.0) * tweaks.buoyancy_strength * 0.04;
-            if velocity.y < 0.0 {
-                velocity.y *= 0.99;
-            }
-        } else if center_y < sea + 0.15 && velocity.y < 0.0 {
-            velocity.y += gravity * (1.0 - WATER_SINK_GRAVITY_SCALE) * dt;
+        }
+    }
+}
+
+fn apply_player_water_physics(
+    spatial: SpatialQuery,
+    registry: Res<ConfigRegistryResource>,
+    prefs: Res<UserSetupPrefs>,
+    water_tweaks: Res<WaterTweaks>,
+    tweaks: Res<crate::ui::WaterPhysicsTweaks>,
+    mut players: Query<
+        (
+            Entity,
+            &mut Transform,
+            &mut LinearVelocity,
+            &mut PlayerMovementState,
+            &Collider,
+        ),
+        With<Player>,
+    >,
+) {
+    let Ok(_world) = effective_world_from_prefs(&registry.0, &prefs) else {
+        return;
+    };
+    let Ok(player) = registry.0.active_player() else {
+        return;
+    };
+    let sea = effective_runtime_sea_level_m(&registry, &prefs, &water_tweaks);
+    let feet_offset = capsule_bottom_offset(&player);
+
+    for (entity, mut transform, mut velocity, mut movement, collider) in &mut players {
+        if !movement.in_water {
+            continue;
         }
 
-        if let Some(source) = pipeline.density_source.as_ref() {
-            let floor = source.terrain_surface_height_at(
-                transform.translation.x,
-                transform.translation.z,
-            );
-            let min_center_y = floor + feet_offset + terrain_generation::SPAWN_FLOOR_EPSILON_M;
-            if !deep_water && transform.translation.y < min_center_y {
-                transform.translation.y = min_center_y;
-                if velocity.y < 0.0 {
-                    velocity.y = 0.0;
-                }
-            } else if deep_water && feet_y < floor + 0.05 {
+        let feet_y = transform.translation.y - feet_offset;
+        let deep_water = movement.submerged_depth > tweaks.shallow_depth_m;
+
+        if let Some(min_center_y) = physics_floor_center_y(
+            &spatial,
+            entity,
+            collider,
+            &transform,
+            player,
+        ) {
+            if transform.translation.y < min_center_y {
                 transform.translation.y = min_center_y;
                 if velocity.y < 0.0 {
                     velocity.y = 0.0;
@@ -571,9 +622,9 @@ fn apply_player_water_physics(
         }
 
         movement.in_shallow_water = !deep_water
-            && feet_y > sea - SHALLOW_WATER_DEPTH_M
+            && feet_y > sea - tweaks.shallow_depth_m
             && feet_y < sea + 0.25
-            && movement.submerged_depth < SHALLOW_WATER_DEPTH_M;
+            && movement.submerged_depth < tweaks.shallow_depth_m;
     }
 }
 

@@ -33,7 +33,9 @@ pub fn update_camera_focus(
         return;
     };
 
-    let config = registry.0.active_camera().expect("camera config");
+    let Some(config) = registry.0.active_camera().ok() else {
+        return;
+    };
     let dt = clamp_visual_delta(time.delta_secs());
     let alpha = fixed_time.overstep_fraction();
 

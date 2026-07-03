@@ -103,7 +103,11 @@ pub fn count_outdoor_void_columns(
         while z <= z_max {
             let rx = x + recipe.coord_offset[0];
             let rz = z + recipe.coord_offset[2];
-            let surface = coastal_surface_height(recipe, rx, rz);
+            let surface = if let Some(atlas) = source.atlas() {
+                atlas.surface_height_at(x, z)
+            } else {
+                coastal_surface_height(recipe, rx, rz)
+            };
             if surface < recipe.sea_level {
                 z += step;
                 continue;

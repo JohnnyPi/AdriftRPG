@@ -1,0 +1,443 @@
+**Bevy can generate and render good procedural grass, but Bevy 0.19 does not currently include a dedicated first-party grass or foliage system.** The practical approach is to build grass from Bevy’s mesh, material, shader, instancing, compute-shader and asset APIs. The official custom-instancing example is the closest foundational reference. ([Bevy][1])
+
+## Best approach for your terrain engine
+
+For your volumetric terrain, I recommend a **chunked GPU-instanced grass system**:
+
+```text
+Terrain surface mesh
+    ↓
+Generate candidate grass positions per terrain chunk
+    ↓
+Reject unsuitable positions
+    ↓
+Store accepted instances in a GPU buffer
+    ↓
+Render one simple blade/cluster mesh many times
+    ↓
+Bend and animate blades in a vertex shader
+```
+
+Each instance would contain something like:
+
+```rust
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct GrassInstance {
+    pub position: [f32; 3],
+    pub surface_normal: [f32; 3],
+    pub rotation: f32,
+    pub scale: [f32; 2],
+    pub species: u32,
+    pub variation: f32,
+}
+```
+
+One terrain chunk might own one `GrassPatch`, containing thousands of instances but only one or a handful of draw calls.
+
+## Three viable implementation levels
+
+### 1. Generated cluster meshes
+
+This is the easiest initial implementation.
+
+Generate a mesh containing hundreds or thousands of grass blades for each terrain chunk:
+
+```text
+One chunk
+→ one grass mesh
+→ many blade quads combined into that mesh
+```
+
+Advantages:
+
+* Straightforward Bevy mesh creation.
+* Easy chunk culling.
+* Minimal custom render-pipeline work.
+* Good enough for an initial vertical slice.
+
+Disadvantages:
+
+* Updating individual blades requires changing the chunk mesh.
+* Wind must be encoded through vertex attributes.
+* Large patches can consume considerable vertex memory.
+
+This is where I would begin.
+
+### 2. Automatic or custom GPU instancing
+
+Bevy has an official automatic-instancing example and a lower-level custom shader-instancing example. The documentation recommends trying built-in instancing before implementing the lower-level custom route. ([Bevy][2])
+
+This renders one blade or grass-cluster mesh repeatedly using different instance transforms and attributes:
+
+```text
+Blade mesh: 6–20 vertices
+Instance count: 10,000+
+Draw calls: very small
+```
+
+This is likely the best medium-term choice for your project.
+
+Use each instance to vary:
+
+* Position.
+* Rotation.
+* Height.
+* Width.
+* Color.
+* Wind phase.
+* Species.
+* Bend amount.
+* Lod selection.
+
+### 3. Compute-driven grass
+
+The highest-performance version uses a compute shader to:
+
+* Generate or filter blade positions.
+* Cull grass against the camera.
+* Apply distance LOD.
+* Reject occluded or off-screen patches.
+* Populate an indirect draw buffer.
+* Potentially respond to interaction fields.
+
+Bevy exposes compute-shader and low-level rendering examples, but this requires substantially more custom render-world code than an ordinary material shader. The official repository includes compute-mesh and custom-instancing examples that can serve as implementation references. ([CoCalc][3])
+
+I would reserve this for a later optimization phase.
+
+---
+
+## Grass placement on voxel terrain
+
+Because your terrain is generated from signed density rather than a conventional heightmap, generate grass from the **extracted surface**, not by scanning downward through voxel columns.
+
+For each candidate horizontal location:
+
+1. Locate the terrain surface.
+2. Obtain its interpolated position and normal.
+3. Read the terrain’s biome and material weights.
+4. Evaluate grass suitability.
+5. Apply deterministic spacing.
+6. Add a grass instance.
+
+```rust
+pub struct GrassSuitabilityInput {
+    pub position: Vec3,
+    pub normal: Vec3,
+    pub biome_weights: [f32; 4],
+    pub material_weights: [f32; 4],
+    pub moisture: f32,
+    pub soil_depth: f32,
+    pub sunlight: f32,
+    pub disturbance: f32,
+}
+```
+
+A simple suitability score could be:
+
+```rust
+fn grass_suitability(input: &GrassSuitabilityInput) -> f32 {
+    let slope = 1.0 - input.normal.y.clamp(0.0, 1.0);
+    let slope_factor = 1.0 - smoothstep(0.25, 0.75, slope);
+
+    let soil_factor = smoothstep(0.05, 0.5, input.soil_depth);
+    let moisture_factor = moisture_curve(input.moisture);
+    let disturbance_factor = 1.0 - input.disturbance;
+
+    slope_factor
+        * soil_factor
+        * moisture_factor
+        * disturbance_factor
+}
+```
+
+That naturally prevents grass from appearing on:
+
+* Vertical cliffs.
+* Cave ceilings.
+* Exposed basalt.
+* Beaches below the vegetation line.
+* Roads.
+* Building floors.
+* Deep water.
+* Recently disturbed terrain.
+
+---
+
+## Deterministic distribution
+
+Do not use uniform random placement. It creates clumps, gaps and visible chunk boundaries.
+
+Use one of:
+
+* Blue-noise sampling.
+* Poisson-disk sampling.
+* Jittered grids.
+* Hash-based candidate points with neighborhood rejection.
+
+For your streaming world, a hash-based jittered grid is probably the easiest deterministic option:
+
+```rust
+fn grass_candidate(
+    world_cell: IVec2,
+    world_seed: u64,
+) -> Vec2 {
+    let hash = stable_hash((world_seed, world_cell.x, world_cell.y));
+
+    let jitter_x = hash_to_unit_float(hash);
+    let jitter_z = hash_to_unit_float(hash.rotate_left(21));
+
+    world_cell.as_vec2() + Vec2::new(jitter_x, jitter_z)
+}
+```
+
+Because placement depends on absolute world coordinates, adjacent chunks produce seamless results.
+
+---
+
+## Grass blade geometry
+
+Do not render every blade as a detailed modeled object.
+
+Useful levels are:
+
+### Near grass
+
+Use a curved ribbon of approximately 3–5 vertical segments:
+
+```text
+base
+middle-low
+middle
+middle-high
+tip
+```
+
+This lets the vertex shader bend the blade naturally.
+
+### Medium grass
+
+Use:
+
+* One quad.
+* Two crossed quads.
+* A small three-blade cluster.
+
+### Distant grass
+
+Replace geometry with:
+
+* Terrain albedo variation.
+* Terrain normal-map detail.
+* A low canopy or fuzz shell.
+* Sparse billboard patches.
+
+Grass should disappear into the terrain material gradually rather than visibly popping out.
+
+---
+
+## Wind shader
+
+Wind belongs in the vertex shader. Community Bevy grass experiments likewise recommend shader-side bending rather than modifying thousands of blade meshes on the CPU. ([Reddit][4])
+
+A blade needs a normalized height value:
+
+```text
+0.0 at root
+1.0 at tip
+```
+
+Then apply increasing displacement toward the tip:
+
+```wgsl
+let root_weight = vertex_height * vertex_height;
+
+let phase =
+    dot(world_position.xz, vec2<f32>(0.07, 0.09))
+    + time * wind_speed
+    + instance.wind_phase;
+
+let wind = sin(phase) * wind_strength;
+
+world_position.x += wind * root_weight;
+world_position.z += wind * 0.35 * root_weight;
+```
+
+Add two frequencies:
+
+```text
+Low frequency:
+large field-wide gusts
+
+High frequency:
+small blade flutter
+```
+
+Also vary gust intensity using a world-space noise texture so the entire grass field does not sway identically.
+
+---
+
+## Terrain alignment
+
+Grass blades should normally grow upward relative to gravity, not straight out from the terrain normal.
+
+Use the terrain normal primarily to:
+
+* Position the root.
+* Slightly tilt the blade.
+* Reject excessive slopes.
+* Orient low ground-cover clusters.
+
+For ordinary tall grass:
+
+```text
+70–90% world-up orientation
+10–30% surface-normal influence
+```
+
+Otherwise grass on a hillside looks pasted perpendicular to the slope.
+
+---
+
+## Interaction
+
+Do not update each blade when the player walks through it.
+
+Use a small global or per-region interaction buffer:
+
+```rust
+pub struct GrassInteractor {
+    pub position: Vec3,
+    pub radius: f32,
+    pub strength: f32,
+}
+```
+
+Upload the nearest 8–32 interactors to the shader:
+
+* Player.
+* Large NPCs.
+* Animals.
+* Vehicles.
+* Explosion centers.
+
+The vertex shader calculates bend away from those points.
+
+For persistent flattening, store a low-resolution disturbance texture or field per terrain region:
+
+```text
+Undisturbed = 0
+Flattened = 1
+```
+
+This field can decay over time and can also suppress future placement around:
+
+* Paths.
+* Camps.
+* Construction.
+* Frequently traveled routes.
+
+---
+
+## Chunk and LOD organization
+
+I recommend:
+
+```rust
+#[derive(Component)]
+pub struct GrassPatch {
+    pub terrain_chunk: ChunkCoord,
+    pub species_set: GrassSpeciesSetId,
+    pub instance_count: u32,
+    pub lod: GrassLod,
+}
+```
+
+Suggested ranges for your RTX 3070 target:
+
+| Range    | Representation                    |
+| -------- | --------------------------------- |
+| 0–25 m   | Segmented blades or rich clusters |
+| 25–70 m  | Simple instanced quads/clusters   |
+| 70–140 m | Sparse low-detail clusters        |
+| Beyond   | Terrain shader detail only        |
+
+These are starting points, not guaranteed budgets. Actual density should be determined through GPU profiling.
+
+Cull at patch level first. Later, use GPU-side instance culling if patch overdraw becomes expensive.
+
+---
+
+## Materials and transparency
+
+Grass transparency can be expensive because alpha blending creates sorting and overdraw problems.
+
+Prefer:
+
+* Alpha masking/cutout.
+* Alpha-to-coverage when multisampling is enabled.
+* Opaque procedural blade geometry for stylized grass.
+* Minimal overlapping cards.
+
+For dense tropical grass, actual thin geometry often behaves better than heavily layered transparent cards.
+
+Use two-sided rendering carefully. Rendering both sides is usually necessary for grass cards, but it doubles relevant fragment work. Alternatively, create blade geometry with controlled facing and normals.
+
+---
+
+## Existing Bevy grass crates
+
+There is a `bevy_procedural_grass` crate that generates grass positions over meshes and advertises GPU instancing, distance/frustum culling and LOD, but its published release targets **Bevy 0.12**, so it should be treated as an architectural reference rather than directly adopted for Bevy 0.19. ([Crates.io][5])
+
+I did not find a mature, widely adopted, turnkey grass plugin already updated for Bevy 0.19. Bevy’s ecosystem currently provides the rendering building blocks rather than a definitive production grass solution. The official Bevy assets directory is the main registry for community plugins, but compatibility should be verified per crate. ([Bevy][6])
+
+## Recommendation for your engine
+
+Build this in stages:
+
+```text
+Phase 1
+CPU-generated grass-cluster mesh per terrain chunk
+
+Phase 2
+Vertex-shader wind and biome-controlled density
+
+Phase 3
+Automatic instancing with one entity per grass patch
+
+Phase 4
+Distance LOD and patch-level frustum culling
+
+Phase 5
+Interaction bending and persistent disturbance maps
+
+Phase 6
+Compute-generated positions, GPU culling and indirect rendering
+```
+
+The ideal final architecture is:
+
+```text
+World atlas and terrain surface
+        ↓
+CPU creates deterministic ecological candidate set
+        ↓
+GPU instance buffer stores visible grass
+        ↓
+Vertex shader handles wind and interaction
+        ↓
+Chunk/patch LOD controls density
+        ↓
+Terrain material replaces geometry at long range
+```
+
+That will integrate cleanly with your biome fields, voxel terrain edits, streamed chunks and future vegetation simulation without making grass part of the authoritative voxel representation.
+
+I can monitor Bevy 0.19-compatible foliage crates and notify you when a credible grass plugin or major update appears.
+
+[1]: https://bevy.org/news/bevy-0-19/?utm_source=chatgpt.com "Bevy 0.19"
+[2]: https://bevy.org/examples-webgpu/shaders/automatic-instancing/?utm_source=chatgpt.com "Instancing"
+[3]: https://cocalc.com/github/bevyengine/bevy/tree/main/assets/shaders?utm_source=chatgpt.com "CoCalc -- shaders"
+[4]: https://www.reddit.com/r/bevy/comments/1jiwcus?utm_source=chatgpt.com "Bend the grass blades according to given random Bezier curves"
+[5]: https://crates.io/crates/bevy_procedural_grass?utm_source=chatgpt.com "bevy_procedural_grass - crates.io: Rust Package Registry"
+[6]: https://bevy.org/assets/?utm_source=chatgpt.com "Bevy Assets"

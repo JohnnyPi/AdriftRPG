@@ -1,7 +1,6 @@
 // crates/game_data/src/validate.rs
 use shared::{DataError, DataResult, StableId};
 
-use crate::compile::CompiledWorld;
 use crate::definitions::*;
 
 #[derive(Debug, Default)]
@@ -226,6 +225,159 @@ fn validate_cross_definition_links(definitions: &[RawDefinition], report: &mut V
             }
         }
     }
+
+    let water_levels: std::collections::BTreeMap<StableId, f32> = definitions
+        .iter()
+        .filter_map(|def| match def {
+            RawDefinition::Water(water) => Some((water.header.id.clone(), water.sea_level_m)),
+            _ => None,
+        })
+        .collect();
+    let island_levels: std::collections::BTreeMap<StableId, f32> = definitions
+        .iter()
+        .filter_map(|def| match def {
+            RawDefinition::IslandGeneration(island) => {
+                Some((island.header.id.clone(), island.island.sea_level_m))
+            }
+            _ => None,
+        })
+        .collect();
+    let island_defs: std::collections::BTreeMap<StableId, &IslandGenerationDefinition> =
+        definitions
+            .iter()
+            .filter_map(|def| match def {
+                RawDefinition::IslandGeneration(island) => {
+                    Some((island.header.id.clone(), island))
+                }
+                _ => None,
+            })
+            .collect();
+
+    for definition in definitions {
+        let RawDefinition::World(world) = definition else {
+            continue;
+        };
+        let context = format!("world `{}`", world.header.id);
+        let Some(ref island_id) = world.island_gen else {
+            continue;
+        };
+        let Some(island_sea) = island_levels.get(island_id) else {
+            continue;
+        };
+        let Some(water_sea) = water_levels.get(&world.water) else {
+            continue;
+        };
+        if (island_sea - water_sea).abs() > 0.01 {
+            report.push(DataError::InvalidValue {
+                context: context.clone(),
+                message: format!(
+                    "island_gen `{island_id}` sea_level_m {island_sea:.2} must match water `{}` sea_level_m {water_sea:.2}",
+                    world.water
+                ),
+            });
+        }
+        if let Some(island) = island_defs.get(island_id) {
+            if let Some(ref resolution) = island.resolution {
+                validate_generation_resolution(
+                    resolution,
+                    world.effective_ocean_extent_m(),
+                    &format!("island generation `{island_id}` (world `{}`)", world.header.id),
+                    report,
+                );
+            }
+        }
+    }
+
+    let water_body_ids: std::collections::BTreeSet<StableId> = definitions
+        .iter()
+        .filter_map(|def| match def {
+            RawDefinition::WaterBodyMaterial(body) => Some(body.header.id.clone()),
+            _ => None,
+        })
+        .collect();
+
+    for definition in definitions {
+        let RawDefinition::World(world) = definition else {
+            continue;
+        };
+        let context = format!("world `{}`", world.header.id);
+        for hydrology_id in &world.hydrology_bodies {
+            let suffix = hydrology_id
+                .as_str()
+                .strip_prefix("hydrology.")
+                .unwrap_or(hydrology_id.as_str());
+            let waterbody_id = StableId::new(&format!("waterbody.{suffix}"));
+            if !water_body_ids.contains(&waterbody_id) {
+                report.push(DataError::InvalidValue {
+                    context: context.clone(),
+                    message: format!(
+                        "hydrology_bodies entry `{hydrology_id}` requires render material `{waterbody_id}`"
+                    ),
+                });
+            }
+        }
+    }
+
+    let mut player_gravity = None;
+    let mut physics_gravity = None;
+    for definition in definitions {
+        match definition {
+            RawDefinition::Player(player) => player_gravity = Some(player.gravity_mps2),
+            RawDefinition::Physics(physics) => physics_gravity = Some(physics.gravity_mps2),
+            _ => {}
+        }
+    }
+    if let (Some(player_g), Some(physics_g)) = (player_gravity, physics_gravity) {
+        if (player_g - physics_g).abs() > f32::EPSILON {
+            report.push(DataError::InvalidValue {
+                context: "physics vs player gravity".to_string(),
+                message: format!(
+                    "gravity_mps2 mismatch: player={player_g:.2}, physics={physics_g:.2}"
+                ),
+            });
+        }
+    }
+
+    let mut biome_world_heights: std::collections::BTreeMap<StableId, Vec<(StableId, f32)>> =
+        std::collections::BTreeMap::new();
+    for definition in definitions {
+        let RawDefinition::World(world) = definition else {
+            continue;
+        };
+        let Some(island_id) = &world.island_gen else {
+            continue;
+        };
+        let Some(island) = island_defs.get(island_id) else {
+            continue;
+        };
+        biome_world_heights
+            .entry(world.biomes.clone())
+            .or_default()
+            .push((world.header.id.clone(), island.island.maximum_height_m));
+    }
+    for (biomes_id, worlds) in biome_world_heights {
+        if worlds.len() < 2 {
+            continue;
+        }
+        let min_h = worlds
+            .iter()
+            .map(|(_, height)| *height)
+            .fold(f32::INFINITY, f32::min);
+        let max_h = worlds
+            .iter()
+            .map(|(_, height)| *height)
+            .fold(f32::NEG_INFINITY, f32::max);
+        if min_h > 0.0 && max_h / min_h > 2.0 {
+            let world_ids: Vec<_> = worlds.iter().map(|(id, _)| id.as_str()).collect();
+            report.push(DataError::InvalidValue {
+                context: format!("biomes `{biomes_id}` shared across worlds"),
+                message: format!(
+                    "maximum_height_m spans {min_h:.0}–{max_h:.0} (>2×) across [{}]; use separate biome profiles per scale",
+                    world_ids.join(", ")
+                ),
+            });
+        }
+    }
 }
 
 fn default_surface_for_materials(materials: &StableId) -> StableId {
@@ -349,6 +501,10 @@ fn validate_world(world: &WorldDefinition, ids: &[StableId], report: &mut Valida
         require_reference(reference, "world definition", ids, report);
     }
 
+    if let Some(ref island_gen) = world.island_gen {
+        require_reference(island_gen, "world island_gen", ids, report);
+    }
+
     let surface_id = world
         .surface
         .clone()
@@ -358,26 +514,19 @@ fn validate_world(world: &WorldDefinition, ids: &[StableId], report: &mut Valida
     if let Some(ref resolution) = world.resolution {
         validate_generation_resolution(
             resolution,
-            effective_ocean_extent_for_world(world),
+            world.effective_ocean_extent_m(),
             &format!("world `{}`", world.header.id),
             report,
         );
     }
-}
 
-fn world_horizontal_extent_m(world: &WorldDefinition) -> f32 {
-    let cell_span = world.chunks.cells[0] as f32 * world.voxel.cell_size_m;
-    let x_extent = world.chunks.world_extent[0] as f32 * cell_span;
-    let z_extent = world.chunks.world_extent[2] as f32 * cell_span;
-    x_extent.max(z_extent)
-}
+    for hydrology_id in &world.hydrology_bodies {
+        require_reference(hydrology_id, "world hydrology_bodies", ids, report);
+    }
 
-fn effective_ocean_extent_for_world(world: &WorldDefinition) -> f32 {
-    let horizontal = world_horizontal_extent_m(world);
-    let authored = world
-        .ocean_extent_m
-        .unwrap_or(horizontal + CompiledWorld::DERIVED_OCEAN_PADDING_M);
-    authored.max(horizontal)
+    if let Some(ref catalog_id) = world.material_catalog {
+        require_reference(catalog_id, "world material_catalog", ids, report);
+    }
 }
 
 fn validate_performance(perf: &PerformanceDefinition, report: &mut ValidationReport) {
@@ -483,14 +632,6 @@ fn validate_island_generation(island: &IslandGenerationDefinition, report: &mut 
             context: context.clone(),
             message: "caves.chamber_count_min must be <= caves.chamber_count_max".to_string(),
         });
-    }
-    if let Some(ref resolution) = island.resolution {
-        validate_generation_resolution(
-            resolution,
-            288.0,
-            &context,
-            report,
-        );
     }
 }
 

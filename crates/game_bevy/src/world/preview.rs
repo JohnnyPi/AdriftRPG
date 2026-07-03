@@ -5,16 +5,17 @@ use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task};
 use game_data::ConfigRegistry;
 use terrain_generation::{
-    build_island_atlas, clamp_preview_output_side, colorize_runtime_preview, land_surface_height,
-    preview_grid_for_atlas, GenerationResolution, IslandAtlas,
+    clamp_preview_output_side, colorize_runtime_preview, effective_sea_level_m,
+    land_surface_height, preview_grid_for_atlas, resolve_island_atlas, GenerationResolution,
+    IslandAtlas,
 };
 use tracing::info;
 use voxel_core::{fnv1a_update, quantize_density_mm, FNV_OFFSET};
 
-use crate::data::UserSetupPrefs;
+use crate::data::{assets_root, UserSetupPrefs};
 use crate::environment::BiomeCatalog;
 use crate::environment::biomes::{biome_color, classify_biome};
-use crate::terrain::{build_density_source_from_prefs, compile_terrain_recipe, island_params_from_compiled};
+use crate::terrain::{build_density_source_from_prefs, compile_terrain_recipe};
 use crate::ui::TerrainTweaks;
 use crate::world::effective_world_from_prefs;
 
@@ -69,8 +70,14 @@ pub fn build_preview_atlas(registry: &ConfigRegistry, prefs: &UserSetupPrefs) ->
     if let Some(base) = registry.island_generation_for_world(world) {
         let merged = prefs.apply_overrides(base);
         let water = registry.water.get(&world.water).expect("water");
-        let params = island_params_from_compiled(&merged, world, prefs.seed, water.sea_level_m);
-        return build_island_atlas(&params);
+        let sea_level = effective_sea_level_m(water, Some(&merged));
+        return resolve_island_atlas(
+            &merged,
+            world,
+            prefs.seed,
+            sea_level,
+            Some(assets_root().as_path()),
+        );
     }
     fallback_recipe_preview(registry, world, prefs.seed)
 }

@@ -2,6 +2,8 @@
 use bevy::prelude::*;
 use game_data::{CompiledCamera, CompiledLighting};
 
+use crate::environment::atmosphere::atmosphere_camera_bundle;
+
 use super::{MainGameCamera, MmoCamera};
 
 pub fn spawn_game_camera(
@@ -45,6 +47,7 @@ pub fn spawn_game_camera(
             ..default()
         }),
         Transform::from_translation(spawn_focus),
+        atmosphere_camera_bundle(),
     ));
 
     if lighting.fog_enabled {

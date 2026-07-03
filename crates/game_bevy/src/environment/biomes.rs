@@ -150,18 +150,83 @@ fn rule_matches(rule: &BiomeRuleDefinition, ctx: &BiomeSampleContext) -> bool {
 
 /// Multiplier applied to triplanar albedo so biome rules tint the terrain surface.
 pub fn biome_surface_tint(catalog: &BiomeCatalog, kind: BiomeKind) -> [f32; 3] {
-    const STRENGTH: f32 = 1.0;
+    const STRENGTH: f32 = 1.35;
     let id = biome_id_str(kind);
     let (color, tint) = if let Some(rule) = catalog.rules.iter().find(|r| r.id == id) {
         (rule.color, rule.tint)
     } else {
         (fallback_biome_rgb(kind), [1.0, 1.0, 1.0])
     };
+    tint_rgb(color, tint, STRENGTH)
+}
+
+/// Blend biome tints from soft weights for smoother transitions at biome boundaries.
+pub fn biome_surface_tint_from_soft(
+    catalog: &BiomeCatalog,
+    soft: &terrain_surface::SoftBiomeWeights,
+) -> [f32; 3] {
+    let channels: [(&str, f32); 8] = [
+        ("grassland", soft.grassland),
+        ("forest", soft.forest),
+        ("scrub", soft.scrub),
+        ("coastal_scrub", soft.coastal_scrub),
+        ("wetland", soft.wetland),
+        ("beach", soft.beach),
+        ("mountain_alpine", soft.alpine),
+        ("rocky_upland", soft.rocky),
+    ];
+    let mut rgb = [0.0f32; 3];
+    let mut weight_sum = 0.0f32;
+    for (id, w) in channels {
+        if w <= 0.001 {
+            continue;
+        }
+        let kind = biome_kind_from_rule_id(id);
+        let tint = biome_surface_tint(catalog, kind);
+        rgb[0] += tint[0] * w;
+        rgb[1] += tint[1] * w;
+        rgb[2] += tint[2] * w;
+        weight_sum += w;
+    }
+    if weight_sum <= f32::EPSILON {
+        return biome_surface_tint(catalog, BiomeKind::Grassland);
+    }
     [
-        (1.0 + (color[0] * tint[0] - 1.0) * STRENGTH).clamp(0.08, 2.5),
-        (1.0 + (color[1] * tint[1] - 1.0) * STRENGTH).clamp(0.08, 2.5),
-        (1.0 + (color[2] * tint[2] - 1.0) * STRENGTH).clamp(0.08, 2.5),
+        (rgb[0] / weight_sum).clamp(0.12, 2.8),
+        (rgb[1] / weight_sum).clamp(0.12, 2.8),
+        (rgb[2] / weight_sum).clamp(0.12, 2.8),
     ]
+}
+
+fn tint_rgb(color: [f32; 3], tint: [f32; 3], strength: f32) -> [f32; 3] {
+    let target = [
+        color[0] * tint[0],
+        color[1] * tint[1],
+        color[2] * tint[2],
+    ];
+    [
+        (1.0 + (target[0] - 1.0) * strength).clamp(0.12, 2.8),
+        (1.0 + (target[1] - 1.0) * strength).clamp(0.12, 2.8),
+        (1.0 + (target[2] - 1.0) * strength).clamp(0.12, 2.8),
+    ]
+}
+
+fn biome_kind_from_rule_id(id: &str) -> BiomeKind {
+    match id {
+        "shallow_water" => BiomeKind::ShallowWater,
+        "deep_water" => BiomeKind::DeepWater,
+        "offshore_shelf" => BiomeKind::OffshoreShelf,
+        "cave" => BiomeKind::Cave,
+        "beach" => BiomeKind::Beach,
+        "wetland" => BiomeKind::Wetland,
+        "riverbank" => BiomeKind::Riverbank,
+        "mountain_alpine" => BiomeKind::Alpine,
+        "rocky_upland" => BiomeKind::RockyUpland,
+        "coastal_scrub" => BiomeKind::CoastalScrub,
+        "forest" => BiomeKind::Forest,
+        "scrub" => BiomeKind::Scrub,
+        _ => BiomeKind::Grassland,
+    }
 }
 
 pub fn biome_color(catalog: &BiomeCatalog, kind: BiomeKind) -> Color {

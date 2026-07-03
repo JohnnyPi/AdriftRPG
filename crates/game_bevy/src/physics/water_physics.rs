@@ -28,6 +28,79 @@ const SUBMERGED_TERMINAL_SINK_MPS: f32 = 2.5;
 /// strength jumps underwater without forbidding small hops off the bottom).
 const SUBMERGED_JUMP_DAMP: f32 = 0.85;
 
+const RIVER_FLOW_RADIUS_M: f32 = 6.0;
+const RIVER_CACHE_RESCAN_DISTANCE_M: f32 = 12.0;
+
+#[derive(Component, Debug, Default)]
+pub struct RiverFlowCache {
+    pub segment_hint: usize,
+    pub last_xz: Vec2,
+    pub hydrology_epoch: u32,
+}
+
+/// Nearest river segment to `(x, z)`; returns lateral distance and flow direction.
+pub fn nearest_river_segment(
+    river: &terrain_generation::RiverSpline,
+    x: f32,
+    z: f32,
+    segment_hint: usize,
+    segment_count: usize,
+    allow_full_scan: bool,
+) -> (f32, Vec2, usize) {
+    if segment_count == 0 {
+        return (f32::MAX, Vec2::ZERO, 0);
+    }
+
+    let mut best_dist = f32::MAX;
+    let mut best_dir = Vec2::ZERO;
+    let mut best_segment = segment_hint.min(segment_count - 1);
+
+    let scan_segment = |i: usize,
+                        best_dist: &mut f32,
+                        best_dir: &mut Vec2,
+                        best_segment: &mut usize| {
+        let a = &river.points[i];
+        let b = &river.points[i + 1];
+        let ax = a.position_xz[0];
+        let az = a.position_xz[1];
+        let bx = b.position_xz[0];
+        let bz = b.position_xz[1];
+        let dx = bx - ax;
+        let dz = bz - az;
+        let len2 = dx * dx + dz * dz;
+        if len2 < 1e-4 {
+            return;
+        }
+        let t = ((x - ax) * dx + (z - az) * dz) / len2;
+        let t = t.clamp(0.0, 1.0);
+        let cx = ax + dx * t;
+        let cz = az + dz * t;
+        let dist = Vec2::new(x - cx, z - cz).length();
+        if dist < *best_dist {
+            *best_dist = dist;
+            *best_dir = Vec2::new(dx, dz).normalize_or_zero();
+            *best_segment = i;
+        }
+    };
+
+    let start = segment_hint.saturating_sub(2);
+    let end = (segment_hint + 3).min(segment_count);
+    for i in start..end {
+        scan_segment(i, &mut best_dist, &mut best_dir, &mut best_segment);
+    }
+
+    if allow_full_scan && (best_dist > RIVER_FLOW_RADIUS_M || end - start < segment_count) {
+        for i in 0..segment_count {
+            if i >= start && i < end {
+                continue;
+            }
+            scan_segment(i, &mut best_dist, &mut best_dir, &mut best_segment);
+        }
+    }
+
+    (best_dist, best_dir, best_segment)
+}
+
 #[derive(Component, Default)]
 pub struct WetnessState {
     pub wetness: f32,
@@ -100,6 +173,7 @@ impl Plugin for WaterPhysicsPlugin {
 }
 
 fn apply_buoyancy(
+    registry: Res<crate::data::ConfigRegistryResource>,
     features: Res<TerrainFeatureRegistry>,
     tweaks: Res<WaterPhysicsTweaks>,
     mut bodies: Query<(&Transform, &mut LinearVelocity), With<DynamicCrate>>,
@@ -107,7 +181,11 @@ fn apply_buoyancy(
     let Some(water) = features.water_registry() else {
         return;
     };
-    let gravity = 18.0;
+    let gravity = registry
+        .0
+        .active_physics()
+        .map(|p| p.gravity_mps2)
+        .unwrap_or(18.0);
     for (tf, mut vel) in &mut bodies {
         let point = [tf.translation.x, tf.translation.y, tf.translation.z];
         if let Some(sample) = water.water_at(point) {
@@ -124,40 +202,53 @@ fn apply_buoyancy(
 fn apply_river_flow(
     features: Res<TerrainFeatureRegistry>,
     tweaks: Res<WaterPhysicsTweaks>,
-    mut bodies: Query<(&Transform, &mut LinearVelocity), With<DynamicCrate>>,
+    mut bodies: Query<
+        (&Transform, &mut LinearVelocity, &mut RiverFlowCache),
+        With<DynamicCrate>,
+    >,
 ) {
     let Some(river) = features.rivers.get(&1) else {
         return;
     };
-    for (tf, mut vel) in &mut bodies {
+    let Some(bounds) = features.river_flow_bounds else {
+        return;
+    };
+    let epoch = features.hydrology_epoch;
+    for (tf, mut vel, mut cache) in &mut bodies {
         let x = tf.translation.x;
         let z = tf.translation.z;
-        let mut best_dir = Vec2::ZERO;
-        let mut best_dist = f32::MAX;
-        for i in 0..river.points.len().saturating_sub(1) {
-            let a = &river.points[i];
-            let b = &river.points[i + 1];
-            let ax = a.position_xz[0];
-            let az = a.position_xz[1];
-            let bx = b.position_xz[0];
-            let bz = b.position_xz[1];
-            let dx = bx - ax;
-            let dz = bz - az;
-            let len2 = dx * dx + dz * dz;
-            if len2 < 1e-4 {
-                continue;
-            }
-            let t = ((x - ax) * dx + (z - az) * dz) / len2;
-            let t = t.clamp(0.0, 1.0);
-            let cx = ax + dx * t;
-            let cz = az + dz * t;
-            let dist = Vec2::new(x - cx, z - cz).length();
-            if dist < best_dist {
-                best_dist = dist;
-                best_dir = Vec2::new(dx, dz).normalize_or_zero();
-            }
+        if !bounds.contains_xz(x, z) {
+            continue;
         }
-        if best_dist < 6.0 {
+
+        let hint = bounds.clamp_segment_hint(if cache.hydrology_epoch == epoch {
+            cache.segment_hint
+        } else {
+            0
+        });
+        let last_xz = if cache.hydrology_epoch == epoch {
+            cache.last_xz
+        } else {
+            Vec2::new(x, z)
+        };
+        let needs_full_scan = cache.hydrology_epoch != epoch
+            || last_xz.distance_squared(Vec2::new(x, z))
+                > RIVER_CACHE_RESCAN_DISTANCE_M * RIVER_CACHE_RESCAN_DISTANCE_M;
+
+        let (best_dist, best_dir, best_segment) = nearest_river_segment(
+            river,
+            x,
+            z,
+            hint,
+            bounds.segment_count,
+            needs_full_scan,
+        );
+
+        cache.segment_hint = best_segment;
+        cache.last_xz = Vec2::new(x, z);
+        cache.hydrology_epoch = epoch;
+
+        if best_dist < RIVER_FLOW_RADIUS_M {
             vel.x += best_dir.x * 0.4 * tweaks.flow_multiplier;
             vel.z += best_dir.y * 0.4 * tweaks.flow_multiplier;
         }
@@ -167,11 +258,16 @@ fn apply_river_flow(
 pub(crate) fn apply_shallow_water_movement(
     features: Res<TerrainFeatureRegistry>,
     tweaks: Res<WaterPhysicsTweaks>,
+    intent: Query<&crate::physics::PlayerMoveIntent, With<Player>>,
     mut players: Query<(&Transform, &mut LinearVelocity, &mut PlayerMovementState), With<Player>>,
 ) {
     let Some(hydro) = features.hydrology.as_ref() else {
         return;
     };
+    let swim_up = intent
+        .single()
+        .map(|i| i.jump_held)
+        .unwrap_or(false);
     for (tf, mut vel, mut movement) in &mut players {
         let point = [tf.translation.x, tf.translation.y, tf.translation.z];
         let depth = hydro
@@ -179,8 +275,6 @@ pub(crate) fn apply_shallow_water_movement(
             .water_at(point)
             .map(|sample| sample.depth)
             .unwrap_or(0.0);
-        // Previously the flag was only written inside the Some(sample) branch,
-        // so leaving the water entirely left it stuck on.
         let profile = wading_profile(depth, &tweaks);
         movement.in_shallow_water = profile.in_shallow_water;
 
@@ -188,12 +282,13 @@ pub(crate) fn apply_shallow_water_movement(
             vel.x *= profile.horizontal_scale;
             vel.z *= profile.horizontal_scale;
         }
-        if profile.submerged && vel.y > 0.0 {
+        if profile.submerged && vel.y > 0.0 && !swim_up {
             vel.y *= SUBMERGED_JUMP_DAMP;
         }
         if let Some(terminal) = profile.terminal_sink_mps {
-            if vel.y < -terminal {
-                vel.y = -terminal;
+            let cap = tweaks.submerged_sink_cap_mps.min(terminal);
+            if vel.y < -cap {
+                vel.y = -cap;
             }
         }
     }
@@ -230,6 +325,22 @@ mod water_physics_tests {
         let submerged = sample.depth.min(1.0);
         let lift = 18.0 * submerged * 1.0 * 0.08;
         assert!(lift > 0.0);
+    }
+
+    #[test]
+    fn river_segment_cache_matches_brute_force() {
+        use terrain_generation::{generate_river_spline, RiverGenConfig};
+        let river = generate_river_spline(&RiverGenConfig::default(), 0.0).expect("river");
+        let mid = river.points.len() / 2;
+        let x = river.points[mid].position_xz[0];
+        let z = river.points[mid].position_xz[1];
+        let segment_count = river.points.len().saturating_sub(1);
+        let (cached_dist, _, cached_seg) =
+            nearest_river_segment(&river, x, z, mid, segment_count, false);
+        let (full_dist, _, full_seg) =
+            nearest_river_segment(&river, x, z, mid, segment_count, true);
+        assert!((cached_dist - full_dist).abs() < 1e-3);
+        assert_eq!(cached_seg, full_seg);
     }
 
     #[test]

@@ -1,0 +1,1381 @@
+# Bevy 0.19 Sky and Lighting Guide
+
+For a large outdoor terrain game, the best Bevy lighting stack is:
+
+```text
+Procedural atmosphere
++ directional sunlight
++ atmosphere-generated environment lighting
++ cascaded shadows
++ distance fog
++ selective volumetric fog
++ HDR exposure and tonemapping
++ local point/spot lights
++ optional moonlight and clouds
+```
+
+Bevy 0.19 has strong first-party support for most of this. Its procedural atmosphere can render the sky, influence sunlight color, generate image-based environment lighting, and integrate with volumetric fog. Bevy 0.19 also moved light clustering to the GPU, substantially improving scenes containing many lights. ([Bevy][1])
+
+---
+
+# 1. Recommended architecture
+
+Keep simulation time separate from rendering.
+
+```text
+Simulation clock
+    ↓
+Celestial model
+    ↓
+Sun and moon direction
+    ↓
+Atmosphere state
+    ↓
+Directional light state
+    ↓
+Environment lighting
+    ↓
+Fog, clouds and exposure
+```
+
+Use a resource such as:
+
+```rust
+#[derive(Resource, Clone)]
+pub struct CelestialState {
+    pub time_of_day: f32,
+    pub day_of_year: u16,
+    pub latitude_degrees: f32,
+
+    pub sun_direction: Vec3,
+    pub sun_elevation: f32,
+    pub sun_azimuth: f32,
+
+    pub moon_direction: Vec3,
+    pub moon_phase: f32,
+
+    pub cloud_cover: f32,
+    pub humidity: f32,
+    pub visibility_m: f32,
+}
+```
+
+The rendering systems read this resource but do not own the authoritative game clock.
+
+This lets:
+
+* NPC schedules use simulation time.
+* Farming use day length.
+* Moon phases affect nighttime.
+* Weather influence lighting.
+* Saving and multiplayer remain deterministic.
+
+---
+
+# 2. Procedural atmosphere
+
+Bevy’s procedural atmosphere is now the strongest default sky solution for an outdoor game.
+
+The official atmosphere example attaches an `Atmosphere` component to the camera and uses directional lights as atmospheric suns. The current example also demonstrates atmosphere-generated environment lighting, exposure, bloom, volumetric fog and PBR atmospheric scattering. ([Bevy][2])
+
+A minimal arrangement is conceptually:
+
+```rust
+use bevy::{
+    light::{
+        Atmosphere,
+        AtmosphereEnvironmentMapLight,
+    },
+    prelude::*,
+};
+
+fn setup(mut commands: Commands) {
+    commands.spawn((
+        Camera3d::default(),
+        Atmosphere::EARTH,
+        AtmosphereEnvironmentMapLight::default(),
+        Transform::from_xyz(0.0, 20.0, 30.0)
+            .looking_at(Vec3::ZERO, Vec3::Y),
+    ));
+
+    commands.spawn((
+        DirectionalLight {
+            shadows_enabled: true,
+            ..default()
+        },
+        Transform::from_rotation(
+            Quat::from_euler(
+                EulerRot::XYZ,
+                -0.8,
+                -0.5,
+                0.0,
+            ),
+        ),
+    ));
+}
+```
+
+Exact imports and some component construction details should follow the current Bevy 0.19 example because the atmosphere APIs have developed rapidly across recent versions.
+
+## Why use atmosphere instead of only a skybox?
+
+A procedural atmosphere can provide:
+
+* Correct sky gradients.
+* Sunrise and sunset coloration.
+* Horizon haze.
+* Sun-disc rendering.
+* Lighting consistent with the visible sky.
+* Environment lighting that changes with time of day.
+* Better integration with fog.
+
+Starting in Bevy 0.18, the procedural atmosphere also began affecting how light reaches scene objects, so sunlight naturally becomes warmer near the horizon. ([Bevy][1])
+
+For a dynamic tropical island, this is better than swapping between several static skybox textures.
+
+---
+
+# 3. Atmosphere-generated environment lighting
+
+Direct sunlight alone produces very dark unlit faces. Real outdoor scenes also receive indirect light from the sky.
+
+Bevy’s `AtmosphereEnvironmentMapLight` generates an environment map from the active atmosphere. It contributes ambient diffuse lighting and reflections and can be attached to a `Camera3d` for view-wide lighting or to a `LightProbe` for a regional effect. ([Docs.rs][3])
+
+```rust
+commands.spawn((
+    Camera3d::default(),
+    Atmosphere::EARTH,
+    AtmosphereEnvironmentMapLight {
+        intensity: 1.0,
+        size: UVec2::splat(256),
+        ..default()
+    },
+));
+```
+
+This should be your main outdoor fill-light source.
+
+## Avoid excessive global ambient light
+
+Bevy provides `GlobalAmbientLight`, which lights everything uniformly. It is useful for debugging and stylized scenes, but too much of it removes:
+
+* Terrain depth.
+* Cave darkness.
+* Contact contrast.
+* Time-of-day differences.
+* Shadow readability.
+
+Bevy inserts a low default global ambient light, and `GlobalAmbientLight::NONE` disables it. ([Docs.rs][4])
+
+For atmosphere-driven outdoor lighting:
+
+```rust
+app.insert_resource(GlobalAmbientLight::NONE);
+```
+
+Then rely on:
+
+* Atmosphere environment lighting.
+* Sunlight.
+* Local lights.
+* Light probes for interiors or special regions.
+
+A tiny fallback ambient contribution may still be useful during early development, but it should not become the primary lighting system.
+
+---
+
+# 4. Sunlight
+
+Use one `DirectionalLight` as the sun.
+
+Directional lights are appropriate because sunlight rays are effectively parallel over the size of a game world.
+
+```rust
+#[derive(Component)]
+pub struct SunLight;
+```
+
+```rust
+commands.spawn((
+    SunLight,
+    DirectionalLight {
+        illuminance: 100_000.0,
+        shadows_enabled: true,
+        ..default()
+    },
+    Transform::default(),
+));
+```
+
+The physically plausible clear-day value may be very high, but the final visual result also depends on:
+
+* Exposure.
+* Atmosphere.
+* Cloud attenuation.
+* Material albedo.
+* Tonemapping.
+* Environment-light intensity.
+
+Do not tune sunlight in isolation.
+
+## Rotate the light, do not move it
+
+A directional light’s position is largely irrelevant. Its rotation controls the light direction.
+
+```rust
+fn update_sun(
+    celestial: Res<CelestialState>,
+    mut sun: Query<&mut Transform, With<SunLight>>,
+) {
+    let Ok(mut transform) = sun.single_mut() else {
+        return;
+    };
+
+    transform.rotation =
+        Quat::from_rotation_arc(
+            Vec3::NEG_Z,
+            celestial.sun_direction.normalize(),
+        );
+}
+```
+
+Depending on the exact directional-light forward convention used in your setup, you may need `Vec3::Z` or `Vec3::NEG_Z`. Test it with a debug arrow and a simple cube.
+
+## Sun intensity curve
+
+Do not linearly fade sunlight based only on time.
+
+Use sun elevation:
+
+```rust
+fn daylight_factor(sun_elevation_radians: f32) -> f32 {
+    let normalized =
+        (sun_elevation_radians.sin() * 1.15)
+            .clamp(0.0, 1.0);
+
+    normalized.powf(0.65)
+}
+```
+
+Then apply weather:
+
+```rust
+let cloud_transmission =
+    1.0 - celestial.cloud_cover * 0.75;
+
+light.illuminance =
+    clear_sky_lux
+    * daylight_factor
+    * cloud_transmission;
+```
+
+Clouds should also affect:
+
+* Environment-light brightness.
+* Shadow contrast.
+* Sky color.
+* Fog brightness.
+* Water reflections.
+
+---
+
+# 5. Cascaded directional shadows
+
+Large outdoor scenes need cascaded shadow maps.
+
+A single high-resolution shadow map spread over an entire island would waste most of its resolution far from the player. Cascaded shadows divide the camera view into distance ranges.
+
+Bevy provides `CascadeShadowConfigBuilder`; the official atmospheric-fog example explicitly tunes the first cascade distance and maximum shadow distance to match scene scale. ([Bevy][5])
+
+```rust
+use bevy::light::CascadeShadowConfigBuilder;
+
+commands.spawn((
+    DirectionalLight {
+        shadows_enabled: true,
+        ..default()
+    },
+    CascadeShadowConfigBuilder {
+        first_cascade_far_bound: 20.0,
+        maximum_distance: 250.0,
+        ..default()
+    }
+    .build(),
+    Transform::default(),
+));
+```
+
+## Starting ranges for your terrain
+
+For a third-person outdoor game:
+
+```text
+Cascade 1:
+0–20 m
+player, grass, nearby rocks
+
+Cascade 2:
+20–60 m
+trees, enemies, nearby structures
+
+Cascade 3:
+60–140 m
+terrain and larger vegetation
+
+Cascade 4:
+140–300 m
+major terrain silhouettes
+```
+
+Exact cascade division is handled by the configuration, but these are useful conceptual targets.
+
+## Shadow strategy by object type
+
+| Object          | Shadow policy                                |
+| --------------- | -------------------------------------------- |
+| Player          | Always cast and receive nearby shadows       |
+| NPCs            | Cast near player, disable at long LOD        |
+| Major trees     | Cast within medium range                     |
+| Grass           | Usually no shadow-map casting                |
+| Shrubs          | Limited-range shadow casting                 |
+| Terrain         | Always receive; cast where appropriate       |
+| Distant terrain | No detailed shadow map                       |
+| Small clutter   | Contact shadows or ambient occlusion instead |
+
+Grass shadows are especially expensive. Use:
+
+* Material darkening.
+* SSAO.
+* Contact shadows.
+* Sparse grass casting only very close to the camera.
+
+---
+
+# 6. Contact shadows and ambient occlusion
+
+Shadow maps often miss small contact details:
+
+* Feet meeting terrain.
+* Grass bases.
+* Small stones.
+* Object corners.
+* Creases between structures and ground.
+
+Bevy has screen-space contact shadows and screen-space ambient occlusion. The official contact-shadow example uses `ContactShadows`, `ScreenSpaceAmbientOcclusion`, TAA, HDR, bloom and regular shadow maps. The contact-shadow implementation requires Bevy’s `bluenoise_texture` feature. ([Bevy][6])
+
+Use contact shadows for:
+
+* Character feet.
+* Nearby grass.
+* Fence posts.
+* Small objects.
+* Interior clutter.
+
+Do not treat them as a replacement for shadow maps. They are view-dependent and operate only on visible screen-space information.
+
+Recommended combination:
+
+```text
+Directional cascaded shadows:
+major forms
+
+SSAO:
+general small-scale creases
+
+Contact shadows:
+very short-range grounding
+```
+
+---
+
+# 7. Distance fog
+
+Distance fog is inexpensive and extremely useful in a large terrain game.
+
+Bevy’s `DistanceFog` supports:
+
+* Fog color.
+* Directional-light scattering color.
+* Directional-light scattering exponent.
+* Multiple falloff models.
+* Visibility-distance helpers.
+
+The official atmospheric-fog example attaches `DistanceFog` to the camera and uses separate extinction and inscattering colors. ([Bevy][5])
+
+```rust
+commands.spawn((
+    Camera3d::default(),
+    DistanceFog {
+        color: Color::srgb(0.55, 0.65, 0.72),
+        directional_light_color:
+            Color::srgba(1.0, 0.86, 0.68, 0.5),
+        directional_light_exponent: 24.0,
+        falloff: FogFalloff::from_visibility_colors(
+            1_500.0,
+            Color::srgb(0.50, 0.60, 0.68),
+            Color::srgb(0.72, 0.78, 0.88),
+        ),
+    },
+));
+```
+
+Use values appropriate for your world-unit scale.
+
+## Distance fog should hide LOD transitions
+
+It is not only atmospheric decoration. It can mask:
+
+* Terrain LOD changes.
+* Vegetation billboard transitions.
+* Chunk loading boundaries.
+* Horizon mesh substitutions.
+* Distant shadow cutoff.
+* Reduced water detail.
+
+## Weather presets
+
+```text
+Clear tropical day:
+long visibility
+pale blue haze
+
+Humid morning:
+moderate visibility
+bright low fog
+warm sun scattering
+
+Heavy rain:
+short visibility
+desaturated gray-blue fog
+
+Volcanic haze:
+brown-gray extinction
+orange sunlight
+
+Night:
+dark blue-gray fog
+low directional contribution
+```
+
+---
+
+# 8. Volumetric fog
+
+Volumetric fog represents actual participating media in 3D space. It can produce:
+
+* God rays.
+* Light shafts.
+* Dense localized mist.
+* Cave entrance beams.
+* Jungle canopy shafts.
+* Searchlight cones.
+* Interior dust or smoke.
+
+Bevy provides `VolumetricFog`, `FogVolume` and `VolumetricLight`; the official example demonstrates directional, point and spot-light interaction with volumetric fog. ([Bevy][7])
+
+Conceptually:
+
+```rust
+commands.spawn((
+    Camera3d::default(),
+    VolumetricFog {
+        ambient_intensity: 0.05,
+        ..default()
+    },
+));
+```
+
+Mark relevant lights:
+
+```rust
+commands.spawn((
+    DirectionalLight {
+        shadows_enabled: true,
+        ..default()
+    },
+    VolumetricLight,
+));
+```
+
+Create local fog volumes:
+
+```rust
+commands.spawn((
+    FogVolume {
+        density_factor: 0.08,
+        ..default()
+    },
+    Transform::from_xyz(0.0, 8.0, 0.0)
+        .with_scale(Vec3::new(80.0, 15.0, 80.0)),
+));
+```
+
+The exact current field names should be copied from the Bevy 0.19 volumetric-fog example.
+
+## Where to use volumetric fog
+
+Good uses:
+
+* Morning valley mist.
+* Waterfall spray.
+* Swamps.
+* Cave chambers.
+* Jungle canopy shafts.
+* Storm clouds near ground.
+* Smoke.
+* Volcanic vents.
+
+Poor use:
+
+* Filling the entire visible world with dense volumetric fog at all times.
+
+Volumetric fog is much more expensive than ordinary distance fog. Use distance fog globally and fog volumes selectively.
+
+---
+
+# 9. Fog layering
+
+A strong outdoor scene can use three fog layers simultaneously:
+
+```text
+DistanceFog
+    global depth and horizon fading
+
+Atmosphere
+    sky and long-range atmospheric scattering
+
+VolumetricFog/FogVolume
+    local 3D mist and light shafts
+```
+
+They should not all be equally strong.
+
+Recommended priority:
+
+```text
+Atmosphere:
+always active
+
+Distance fog:
+always active, weather-dependent
+
+Volumetric fog:
+only in selected regions and weather
+```
+
+---
+
+# 10. Exposure and tonemapping
+
+Outdoor lighting spans enormous brightness differences:
+
+* Midday sun.
+* Dark caves.
+* Moonlit scenes.
+* Torch-lit interiors.
+* Reflections on water.
+
+Render in HDR and use exposure plus tonemapping.
+
+The official atmosphere example imports `Exposure`, `Tonemapping`, HDR-compatible bloom and atmospheric lighting. ([Bevy][2])
+
+```rust
+commands.spawn((
+    Camera3d::default(),
+    Hdr,
+    Exposure::default(),
+    Tonemapping::TonyMcMapface,
+));
+```
+
+The exact preferred tonemapper depends on the desired art direction.
+
+## Exposure strategy
+
+You have three options.
+
+### Fixed exposure
+
+Best for:
+
+* Early development.
+* Consistent visual testing.
+* Preventing lighting systems from hiding errors.
+
+### Slowly adapted exposure
+
+Best for:
+
+* Outdoor-to-indoor transitions.
+* Entering caves.
+* Sunrise and sunset.
+* Realistic eye adaptation.
+
+### Gameplay-directed exposure
+
+Best for:
+
+* Maintaining combat readability.
+* Preventing dark scenes from becoming unusable.
+* Controlling transitions through tunnels and doors.
+
+For this project, use adaptive exposure with limits:
+
+```text
+Outdoor minimum:
+avoid over-dark shadows
+
+Night maximum:
+avoid turning night into day
+
+Adaptation speed:
+slow enough not to pulse during camera movement
+```
+
+Do not let automatic exposure compensate for incorrectly tuned sun or environment lighting.
+
+---
+
+# 11. Bloom
+
+Bloom should be subtle.
+
+Good sources:
+
+* Sun disc.
+* Fire.
+* Lamps.
+* Magical or electrical effects.
+* Bright water glints.
+* Lava.
+* Very bright clouds.
+
+Poor usage:
+
+* Making every bright surface glow.
+* Using bloom to fake exposure.
+* Allowing terrain albedo to bloom.
+
+The official atmosphere and volumetric-fog examples include Bloom as part of an HDR post-processing setup. ([Bevy][2])
+
+---
+
+# 12. Moonlight
+
+The moon should normally be another `DirectionalLight`, but much dimmer than the sun.
+
+```rust
+#[derive(Component)]
+pub struct MoonLight;
+```
+
+Moon contribution should depend on:
+
+* Moon elevation.
+* Moon phase.
+* Cloud cover.
+* Atmospheric conditions.
+* Whether the moon is above the horizon.
+
+```rust
+fn moon_strength(state: &CelestialState) -> f32 {
+    let elevation =
+        state.moon_direction.y.max(0.0);
+
+    let phase =
+        state.moon_phase.clamp(0.0, 1.0);
+
+    elevation
+        * phase.powf(0.8)
+        * (1.0 - state.cloud_cover * 0.85)
+}
+```
+
+Use a cool but not extremely saturated color.
+
+```rust
+light.color = Color::srgb(0.55, 0.65, 1.0);
+```
+
+## Shadow policy
+
+Rendering cascaded shadows for both sun and moon can be expensive.
+
+Use:
+
+```text
+Day:
+sun shadows on
+moon shadows off
+
+Night:
+sun disabled
+moon shadows on, shorter range
+
+Twilight:
+only dominant light casts shadows
+```
+
+Avoid simultaneous full-range cascaded shadows from both unless profiling proves it affordable.
+
+---
+
+# 13. Day/night cycle
+
+Represent the cycle with continuous values, not discrete state switches.
+
+```rust
+pub struct LightingCurves {
+    pub sun_intensity: Curve,
+    pub environment_intensity: Curve,
+    pub fog_density: Curve,
+    pub exposure: Curve,
+    pub moon_intensity: Curve,
+}
+```
+
+Suggested phases:
+
+```text
+Night
+Astronomical twilight
+Nautical twilight
+Civil twilight
+Sunrise
+Morning
+Midday
+Afternoon
+Sunset
+Twilight
+Night
+```
+
+Transitions should update:
+
+* Sun direction.
+* Sun intensity.
+* Atmosphere.
+* Environment-light intensity.
+* Fog color and density.
+* Moon intensity.
+* Artificial light activation.
+* Exposure limits.
+* Cloud lighting.
+* Water reflection state.
+
+Do not simply rotate the sun and leave every other system unchanged.
+
+---
+
+# 14. Celestial motion
+
+For the first implementation, a configurable authored sun arc is sufficient.
+
+```rust
+fn simple_sun_direction(time_of_day: f32) -> Vec3 {
+    let angle =
+        time_of_day * std::f32::consts::TAU
+        - std::f32::consts::FRAC_PI_2;
+
+    Vec3::new(
+        angle.cos(),
+        angle.sin(),
+        0.25,
+    )
+    .normalize()
+}
+```
+
+Later, support:
+
+* Latitude.
+* Season.
+* Axial tilt.
+* Variable day length.
+* Moon orbit.
+* Moon phase.
+* Tides.
+
+For game lighting, visually coherent motion is more important than astronomical precision unless celestial navigation is gameplay-relevant.
+
+---
+
+# 15. Clouds
+
+Bevy does not currently provide a complete first-party production cloud system comparable to its atmosphere component.
+
+There are three practical levels.
+
+## Level 1: cloud layer mesh
+
+Use one or more large dome or plane layers with:
+
+* Scrolling cloud textures.
+* Normal distortion.
+* Depth-based opacity.
+* Sun-direction coloring.
+* Weather-driven density.
+
+Best for the first vertical slice.
+
+## Level 2: raymarched 2D/3D cloud layer
+
+Use:
+
+* 3D noise.
+* Height-bounded atmospheric shell.
+* Temporal reprojection.
+* Sunlight transmittance.
+* Shadow lookup texture.
+
+Good quality, moderate complexity.
+
+## Level 3: full volumetric clouds
+
+Use:
+
+* Weather map.
+* 3D density fields.
+* Multiple scattering approximation.
+* Temporal accumulation.
+* Cloud shadows.
+* Wind advection.
+
+This is a large independent rendering feature.
+
+## Recommended starting point
+
+Use a spherical or high-altitude planar layer driven by:
+
+```text
+Cloud coverage
+Cloud type
+Wind direction
+Wind speed
+Storm intensity
+Sun angle
+```
+
+Clouds must modify lighting, not only the visible sky.
+
+At minimum:
+
+```rust
+sun_transmission =
+    1.0 - cloud_cover * cloud_opacity;
+
+environment_intensity =
+    clear_environment
+    * mix(1.0, overcast_factor, cloud_cover);
+```
+
+For believable overcast weather:
+
+* Reduce direct sun significantly.
+* Increase soft diffuse sky contribution.
+* Reduce shadow contrast.
+* Shift fog toward gray.
+* Darken water reflections.
+* Reduce bloom and specular extremes.
+
+---
+
+# 16. Cloud shadows
+
+Even a simple cloud layer becomes much more convincing if it casts moving ground shadows.
+
+Create a low-frequency cloud-shadow texture sampled in world space by the terrain material:
+
+```wgsl
+let shadow_uv =
+    world_position.xz * cloud_scale
+    + wind_offset;
+
+let cloud_shadow =
+    textureSample(
+        cloud_shadow_texture,
+        cloud_sampler,
+        shadow_uv,
+    ).r;
+
+direct_light *= mix(
+    1.0,
+    cloud_shadow_min,
+    cloud_shadow * cloud_coverage,
+);
+```
+
+Apply the same attenuation to vegetation materials.
+
+This does not have to be a literal Bevy shadow map. A shared material uniform or texture works well and is cheaper.
+
+---
+
+# 17. Local lights
+
+Bevy supports:
+
+* Point lights.
+* Spot lights.
+* Directional lights.
+* Environment lighting.
+* Light probes.
+
+Bevy 0.19 moved light clustering to the GPU and reported a major performance improvement in its many-lights benchmark. ([Bevy][8])
+
+Use point lights for:
+
+* Lamps.
+* Fires.
+* Glowing objects.
+* Small local sources.
+
+Use spot lights for:
+
+* Flashlights.
+* Searchlights.
+* Vehicle headlights.
+* Directed cave lighting.
+
+Do not place dozens of overlapping shadow-casting point lights in the same region without profiling.
+
+## Shadow tiers
+
+```text
+Tier 1:
+hero lights with shadows
+
+Tier 2:
+important local lights without shadows
+
+Tier 3:
+emissive material only
+
+Tier 4:
+baked or approximated contribution
+```
+
+A campfire can combine:
+
+* One point light.
+* An emissive flame material.
+* Particle effects.
+* A small fog volume.
+* Flickering intensity.
+* Optional short-range contact shadows.
+
+---
+
+# 18. Light probes and interior transitions
+
+Environment lighting suitable for a tropical beach is not suitable inside a cave.
+
+Use region-aware lighting:
+
+```text
+Outdoor:
+atmosphere environment map
+
+Cave entrance:
+blended outdoor probe and dark cave probe
+
+Cave interior:
+dark neutral or cave-specific environment probe
+
+Structure interior:
+room or building environment lighting
+```
+
+`AtmosphereEnvironmentMapLight` may be attached to a camera for the entire view or to a `LightProbe` for a region. ([Docs.rs][3])
+
+For your terrain engine, define volumes:
+
+```rust
+pub struct LightingRegion {
+    pub bounds: Aabb,
+    pub environment_profile: EnvironmentProfileId,
+    pub exposure_bias: f32,
+    pub fog_profile: FogProfileId,
+}
+```
+
+Transitions should blend over time or distance to avoid abrupt lighting jumps.
+
+---
+
+# 19. Cave lighting
+
+Caves should not simply use the outdoor ambient light.
+
+Use:
+
+* Reduced environment intensity.
+* Very dark global ambient.
+* Local reflected light near entrances.
+* Fog or dust volumes.
+* Point and spot lights from gameplay sources.
+* Emissive bioluminescence where appropriate.
+* Exposure adjustment with strict limits.
+
+At a cave entrance:
+
+```text
+Outdoor side:
+bright atmosphere and sky fill
+
+Interior-facing surfaces:
+much darker
+
+Entrance mist:
+volumetric shafts
+
+Player adaptation:
+gradual exposure shift
+```
+
+If the entire cave becomes clearly visible through auto-exposure, darkness loses mechanical meaning.
+
+---
+
+# 20. Water and sky lighting
+
+Water needs the same sky state as the rest of the scene.
+
+Water should receive:
+
+* Sun direction.
+* Sun radiance.
+* Atmosphere color.
+* Environment reflection.
+* Cloud cover.
+* Fog color.
+* Wind.
+* Rain state.
+
+For calm water:
+
+* Strong sky reflection.
+* Narrow sun glint.
+* Visible terrain reflection where feasible.
+
+For rough water:
+
+* Broader highlights.
+* More fragmented reflection.
+* Darker troughs.
+* Less readable planar reflection.
+
+Bevy’s atmosphere-generated environment map can provide coherent sky reflection for PBR materials. ([Docs.rs][3])
+
+Your custom water shader should share a `SkyLightingUniform` with terrain and cloud shaders.
+
+---
+
+# 21. Shared lighting uniform
+
+Centralize environmental rendering parameters.
+
+```rust
+#[derive(Clone, Copy, ShaderType)]
+pub struct SkyLightingUniform {
+    pub sun_direction: Vec3,
+    pub sun_radiance: Vec3,
+    pub moon_direction: Vec3,
+    pub moon_radiance: Vec3,
+
+    pub sky_ambient: Vec3,
+    pub fog_color: Vec3,
+    pub fog_density: f32,
+
+    pub cloud_coverage: f32,
+    pub cloud_shadow_strength: f32,
+    pub wind_direction: Vec2,
+    pub time_seconds: f32,
+}
+```
+
+Use it in:
+
+* Terrain shader.
+* Water shader.
+* Grass shader.
+* Tree shader.
+* Cloud shader.
+* Weather particles.
+* Distant-horizon shader.
+
+This prevents each material from inventing a slightly different sun direction or fog state.
+
+---
+
+# 22. Recommended plugin structure
+
+```text
+sky/
+├── mod.rs
+├── plugin.rs
+├── celestial.rs
+├── atmosphere.rs
+├── sun.rs
+├── moon.rs
+├── environment.rs
+├── exposure.rs
+├── fog.rs
+├── clouds.rs
+├── weather_lighting.rs
+├── regions.rs
+├── water_bridge.rs
+├── material_bridge.rs
+└── debug.rs
+```
+
+```rust
+pub struct SkyLightingPlugin;
+
+impl Plugin for SkyLightingPlugin {
+    fn build(&self, app: &mut App) {
+        app
+            .init_resource::<CelestialState>()
+            .init_resource::<WeatherLightingState>()
+            .add_systems(
+                Update,
+                (
+                    update_celestial_state,
+                    update_sun_light,
+                    update_moon_light,
+                    update_environment_lighting,
+                    update_fog,
+                    update_exposure,
+                    update_shared_sky_uniform,
+                )
+                    .chain(),
+            );
+    }
+}
+```
+
+Separate simulation updates from visual interpolation:
+
+```text
+Simulation:
+updates weather and celestial targets
+
+Rendering:
+smoothly interpolates light and fog values
+```
+
+---
+
+# 23. Data-driven lighting profiles
+
+Use YAML or RON profiles.
+
+```yaml
+id: weather.clear_tropical_day
+
+sun:
+  transmission: 1.0
+  color_temperature_k: 5900
+
+environment:
+  intensity: 1.0
+  saturation: 1.0
+
+fog:
+  visibility_m: 6000
+  extinction_color: [0.58, 0.68, 0.76]
+  inscattering_color: [0.78, 0.85, 0.95]
+
+clouds:
+  coverage: 0.18
+  opacity: 0.35
+  shadow_strength: 0.18
+
+exposure:
+  bias: 0.0
+```
+
+```yaml
+id: weather.tropical_storm
+
+sun:
+  transmission: 0.12
+  color_temperature_k: 6800
+
+environment:
+  intensity: 0.42
+  saturation: 0.62
+
+fog:
+  visibility_m: 650
+  extinction_color: [0.31, 0.35, 0.39]
+  inscattering_color: [0.42, 0.45, 0.49]
+
+clouds:
+  coverage: 0.96
+  opacity: 0.94
+  shadow_strength: 0.70
+
+exposure:
+  bias: -0.35
+```
+
+Blend profiles instead of switching instantly.
+
+---
+
+# 24. Suggested initial settings
+
+For a Windows RTX 3070 vertical slice:
+
+## Enable
+
+* Procedural atmosphere.
+* One sun directional light.
+* Atmosphere environment lighting.
+* Cascaded sun shadows.
+* HDR.
+* Tonemapping.
+* Distance fog.
+* Bloom at low strength.
+* SSAO.
+* TAA if compatible with your motion and foliage.
+* One simple cloud layer.
+* Local fog volumes only in showcase regions.
+
+## Delay
+
+* Full volumetric clouds.
+* Two shadow-casting celestial lights.
+* Extensive shadow-casting grass.
+* Many shadowed point lights.
+* Large-scale real-time global illumination.
+* Per-frame environment-map regeneration at high resolution.
+* Dense volumetric fog over the entire island.
+
+---
+
+# 25. Performance priorities
+
+The most expensive systems are likely to be:
+
+1. Directional shadow rendering.
+2. Dense vegetation overdraw.
+3. Volumetric fog.
+4. Volumetric clouds.
+5. Screen-space effects.
+6. Many shadowed local lights.
+7. Water reflection passes.
+
+Profile them together. Each system may run well alone but exceed the budget when combined.
+
+Suggested quality tiers:
+
+| Feature           | Low              | Medium                   | High                       |
+| ----------------- | ---------------- | ------------------------ | -------------------------- |
+| Atmosphere        | standard         | standard                 | raymarched/high quality    |
+| Sun shadows       | short range      | 3–4 cascades             | long range/high resolution |
+| Fog               | distance only    | distance + local volumes | dense volumetric           |
+| Clouds            | textured layer   | raymarched layer         | full volumetric            |
+| Contact shadows   | off              | characters only          | broad nearby use           |
+| SSAO              | low              | medium                   | high                       |
+| Water reflections | environment only | SSR                      | planar/hybrid              |
+| Local shadows     | hero only        | selected                 | broad use                  |
+
+---
+
+# 26. Implementation phases
+
+## Phase 1: basic outdoor light
+
+* One directional sun.
+* Basic atmosphere.
+* Atmosphere environment lighting.
+* Fixed exposure.
+* Global ambient disabled.
+* Shadow cascades.
+
+## Phase 2: time of day
+
+* Celestial resource.
+* Sun arc.
+* Sunrise/sunset intensity.
+* Environment-light transitions.
+* Fog-color transitions.
+* Moon directional light.
+
+## Phase 3: weather lighting
+
+* Cloud-cover attenuation.
+* Fog profiles.
+* Rain-darkened lighting.
+* Storm presets.
+* Cloud-shadow texture.
+
+## Phase 4: local atmosphere
+
+* Distance fog.
+* Swamp fog volumes.
+* Waterfall mist.
+* Cave entrance shafts.
+* Volcanic haze.
+
+## Phase 5: interiors and caves
+
+* Lighting regions.
+* Environment probes.
+* Exposure transitions.
+* Artificial lights.
+* Darkness gameplay rules.
+
+## Phase 6: advanced sky
+
+* Raymarched clouds.
+* Cloud shadows.
+* Storm fronts.
+* Lightning.
+* Stars.
+* Moon disc and phases.
+* Weather-dependent water reflection.
+
+---
+
+# Final recommendation
+
+For your project, use this initial stack:
+
+```text
+Camera
+├── Atmosphere
+├── AtmosphereEnvironmentMapLight
+├── HDR
+├── Exposure
+├── Tonemapping
+├── DistanceFog
+└── optional VolumetricFog
+
+Sun entity
+├── DirectionalLight
+├── CascadeShadowConfig
+└── VolumetricLight where needed
+
+Moon entity
+└── secondary DirectionalLight, active mainly at night
+
+World
+├── simple animated cloud layer
+├── local FogVolumes
+├── reflection-aware water
+└── biome/weather-driven lighting profiles
+```
+
+The key design decision is to let **one shared celestial and weather state drive every visual system**. The atmosphere, directional light, environment map, fog, clouds, grass, terrain and water should never calculate independent versions of daylight.
+
+[1]: https://bevy.org/news/bevy-0-18/?utm_source=chatgpt.com "Bevy 0.18"
+[2]: https://bevy.org/examples/3d-rendering/atmosphere/ "Atmosphere"
+[3]: https://docs.rs/bevy/latest/bevy/light/struct.AtmosphereEnvironmentMapLight.html "AtmosphereEnvironmentMapLight in bevy::light - Rust"
+[4]: https://docs.rs/bevy/latest/bevy/light/struct.GlobalAmbientLight.html "GlobalAmbientLight in bevy::light - Rust"
+[5]: https://bevy.org/examples/3d-rendering/atmospheric-fog/ "Atmospheric Fog"
+[6]: https://bevy.org/examples/3d-rendering/contact-shadows/ "Contact Shadows"
+[7]: https://bevy.org/examples/3d-rendering/volumetric-fog/ "Volumetric fog"
+[8]: https://bevy.org/news/bevy-0-19/ "Bevy 0.19"

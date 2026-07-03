@@ -2,16 +2,17 @@
 //! Stream-power and thermal erosion (VS3 §7).
 
 use crate::field2d::Field2D;
+use crate::island_gen::carving::compute_slope;
 use crate::island_gen::params::IslandGenParams;
 
 pub fn apply_stream_power_erosion(
     elevation: &mut Field2D<f32>,
     accumulation: &Field2D<f32>,
-    slope: &Field2D<f32>,
     island_mask: &Field2D<f32>,
     params: &IslandGenParams,
 ) {
     let er = &params.erosion;
+    let mut slope = compute_slope(elevation);
     for _ in 0..er.stream_power_iterations {
         let mut deltas = vec![0.0f32; elevation.samples.len()];
         for z in 1..elevation.height - 1 {
@@ -31,6 +32,7 @@ pub fn apply_stream_power_erosion(
                 elevation.samples[i] += delta;
             }
         }
+        slope = compute_slope(elevation);
     }
 }
 

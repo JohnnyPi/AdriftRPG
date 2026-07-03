@@ -1,0 +1,170 @@
+schema_version: 1
+world_id: world.island_testbed
+seed: 48129
+sea_level_m: 2.0
+voxel_amplitude_m: 0.3
+origin:
+- -144.0
+- -144.0
+resolution:
+  world_control_m: 0.0
+  regional_m: 8.0
+  local_m: 4.0
+  voxel_m: 1.0
+validation_passed: true
+validation_messages:
+- 'Map edges underwater: OK'
+- 'Land area: 5600 m²: OK'
+- 'Primary river descends to mouth (1.6 m): OK'
+- 'Peak elevation 37.2 m: OK'
+- 'Height ceiling headroom: OK'
+- 'Fill invariant (filled ≥ regional): OK'
+- 'soil_depth variance 0.1267: OK'
+- 'soil_depth flat 1.59 vs steep 0.45: OK'
+content_hash: 223705178b455c39ec32022776f35b79a8f02b22639061772b69b33e0fe5403f
+fields:
+  bathymetry:
+    width: 37
+    height: 37
+    origin:
+    - -144.0
+    - -144.0
+    spacing_m: 8.0
+    sha256: c35b5f17c590093e1e914daaa9f98f54b2694a0a06196b990c860ccca0c7f336
+    blob: bathymetry.f32.zst
+  beach_mask:
+    width: 73
+    height: 73
+    origin:
+    - -144.0
+    - -144.0
+    spacing_m: 4.0
+    sha256: 21f58abf73b0714da86b20129376b843d92810837c0e652fedf1f497df5fb775
+    blob: beach_mask.f32.zst
+  biome_weights:
+    width: 73
+    height: 73
+    origin:
+    - -144.0
+    - -144.0
+    spacing_m: 4.0
+    sha256: 2270b11dccec35952716ce81acc126c7ab4577d95fd4f7d7cf998f5dbb20ff86
+    blob: biome_weights.f32.zst
+  cliff_mask:
+    width: 73
+    height: 73
+    origin:
+    - -144.0
+    - -144.0
+    spacing_m: 4.0
+    sha256: c055e0727877f2465e9f5e97bf3362c559ab373743a188b6577c0105e582aa8b
+    blob: cliff_mask.f32.zst
+  coast_distance:
+    width: 37
+    height: 37
+    origin:
+    - -144.0
+    - -144.0
+    spacing_m: 8.0
+    sha256: 939ea0744a327dca80ab9c38d6e9df5e6e6c6dd73b3b459bfca26b56dfc7c74e
+    blob: coast_distance.f32.zst
+  elevation_local:
+    width: 73
+    height: 73
+    origin:
+    - -144.0
+    - -144.0
+    spacing_m: 4.0
+    sha256: d97c08b2cacb5ff70ce660b6afef7471dd5cea1aed8ddc7e51e6d2f17ea75439
+    blob: elevation_local.f32.zst
+  elevation_regional:
+    width: 37
+    height: 37
+    origin:
+    - -144.0
+    - -144.0
+    spacing_m: 8.0
+    sha256: b78f85242b1a1c178b019b087fe429b01748ccb5058f46a267bc9cfc90507feb
+    blob: elevation_regional.f32.zst
+  filled_elevation:
+    width: 37
+    height: 37
+    origin:
+    - -144.0
+    - -144.0
+    spacing_m: 8.0
+    sha256: 31b3edb46465740cc95bba09b6d3096fc8406fa8ebbddfaae968e5bb83243e2d
+    blob: filled_elevation.f32.zst
+  flow_accumulation:
+    width: 37
+    height: 37
+    origin:
+    - -144.0
+    - -144.0
+    spacing_m: 8.0
+    sha256: 7a0b7f38a77e6f9ba7e5d4f1a152d273b050f82465152832b366f233048446e5
+    blob: flow_accumulation.f32.zst
+  flow_direction:
+    width: 37
+    height: 37
+    origin:
+    - -144.0
+    - -144.0
+    spacing_m: 8.0
+    sha256: 692d4760c74d43cfb80990e0eef20fca33fb41e66a27dbcd6dbc94843660eaad
+    blob: flow_direction.u8.zst
+  island_mask:
+    width: 73
+    height: 73
+    origin:
+    - -144.0
+    - -144.0
+    spacing_m: 4.0
+    sha256: a175ad5ec1e07927a704d19b22a30b9e8982d27d36f74e270d6b99ab5a7494f7
+    blob: island_mask.f32.zst
+  river_mask:
+    width: 37
+    height: 37
+    origin:
+    - -144.0
+    - -144.0
+    spacing_m: 8.0
+    sha256: 1e92996138f347364a73fdc66fe758ef5a3ff78ac2b563afe00955a43449e7e1
+    blob: river_mask.f32.zst
+  sediment:
+    width: 37
+    height: 37
+    origin:
+    - -144.0
+    - -144.0
+    spacing_m: 8.0
+    sha256: 5e83ceaa284ab6a5fa9b0cc10cb7c56fb6233394a617a0138a8fa22bc111528f
+    blob: sediment.f32.zst
+  slope:
+    width: 73
+    height: 73
+    origin:
+    - -144.0
+    - -144.0
+    spacing_m: 4.0
+    sha256: 760877382f6b56661ac90f7fcca558d298f0871d86f04bf3648a5c8c3085f008
+    blob: slope.f32.zst
+  soil_depth:
+    width: 73
+    height: 73
+    origin:
+    - -144.0
+    - -144.0
+    spacing_m: 4.0
+    sha256: 8e960cd78481dc9e725fe30745eba894072145987d69852554b963cb52cb3781
+    blob: soil_depth.f32.zst
+  wetness:
+    width: 73
+    height: 73
+    origin:
+    - -144.0
+    - -144.0
+    spacing_m: 4.0
+    sha256: e29bca35d43da1ce3ebba1b223059b10d0296222e0f78a02e64fdb1db352abcb
+    blob: wetness.f32.zst
+has_river_graph: true

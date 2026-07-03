@@ -1,0 +1,21 @@
+﻿schema_version: 1
+id: surfaces.grass
+texture: textures.grass
+tags:
+  - soil
+  - vegetation
+rendering:
+  projection: triplanar
+  meters_per_repeat: 2.0
+  normal_strength: 0.95
+  macro_variation:
+    enabled: true
+    scale_m: 36.0
+    color_strength: 0.12
+    roughness_strength: 0.05
+responses:
+  wetness:
+    darkening: 0.22
+    roughness_reduction: 0.28
+  moss:
+    affinity: 0.55

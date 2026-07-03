@@ -1,0 +1,18 @@
+﻿schema_version: 1
+id: render.terrain_high
+active_layers: 4
+projection: triplanar
+projection_axes: 3
+normal_mapping: true
+height_blending: true
+macro_variation: true
+distance_lod:
+  - maximum_distance_m: 80
+    active_layers: 4
+    projection_axes: 3
+  - maximum_distance_m: 240
+    active_layers: 2
+    projection_axes: 2
+  - maximum_distance_m: 800
+    active_layers: 1
+    projection_axes: 1

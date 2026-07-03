@@ -144,7 +144,7 @@ fn move_character(
     let dt = time.delta();
     let up = Vec3::Y;
 
-    for (entity, controller, grounded, collider, mut transform, mut velocity) in &mut query {
+    for (entity, controller, _grounded, collider, mut transform, mut velocity) in &mut query {
         let max_slope = controller.max_slope_deg.to_radians();
         let shape_position = transform.translation.adjust_precision();
         let shape_rotation = transform.rotation.adjust_precision();
@@ -161,16 +161,18 @@ fn move_character(
             |hit| {
                 let normal = Vec3::from(*hit.normal);
                 let angle = up.angle_between(normal);
-                if grounded.grounded && angle > max_slope {
-                    return MoveAndSlideHitResponse::Ignore;
-                }
-                if angle > max_slope && normal.y < 0.5 {
-                    return MoveAndSlideHitResponse::Ignore;
-                }
-                let is_ground = angle <= max_slope;
-                let is_ceiling = is_ground && up.dot(normal) < 0.0;
-                if is_ground || is_ceiling {
+                let is_floor = normal.y > 0.5 && angle <= max_slope;
+                let is_ceiling = normal.y < -0.5;
+                if is_ceiling {
                     hit_ground_or_ceiling = true;
+                    return MoveAndSlideHitResponse::Accept;
+                }
+                if is_floor {
+                    hit_ground_or_ceiling = true;
+                    return MoveAndSlideHitResponse::Accept;
+                }
+                if angle > max_slope {
+                    return MoveAndSlideHitResponse::Accept;
                 }
                 MoveAndSlideHitResponse::Accept
             },
@@ -183,6 +185,9 @@ fn move_character(
             let velocity_along_up = velocity.0.dot(up);
             let new_velocity_along_up = output.projected_velocity.dot(up);
             velocity.0 += (new_velocity_along_up - velocity_along_up) * up;
+            if new_velocity_along_up < 0.0 && velocity.0.y > 0.0 {
+                velocity.0.y = 0.0;
+            }
         } else {
             velocity.0 = output.projected_velocity;
         }

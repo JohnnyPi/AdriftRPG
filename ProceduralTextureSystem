@@ -1,0 +1,2043 @@
+# Data-Driven Procedural Texture System for Bevy
+
+For this project, procedural textures should be treated as a **world-compilation subsystem**, not as a collection of independent shaders.
+
+The central pipeline should be:
+
+```text
+Terrain world fields
+    ↓
+Surface classification
+    ↓
+Material-region palette selection
+    ↓
+Procedural texture synthesis and texture-array packing
+    ↓
+Per-vertex blend weights
+    ↓
+Triplanar PBR terrain shader
+    ↓
+Dynamic wetness, moss, snow, scorch, and damage overlays
+```
+
+This follows the engine’s existing “Lego Box” principle: YAML defines compositions and rules, while Rust owns algorithms, validation, memory layout, and execution. 
+
+The design below targets **Bevy 0.19**, released June 19, 2026. Bevy’s current material API uses `Material`, `AsBindGroup`, custom shaders, array textures, and custom mesh attributes—all suitable for this architecture. ([Bevy][1])
+
+---
+
+## 1. Core design principles
+
+### World data determines the material
+
+The shader should not independently decide that a surface is:
+
+* sand,
+* basalt,
+* rainforest soil,
+* river mud,
+* coral,
+* volcanic ash,
+* exposed bedrock.
+
+Your terrain generator already produces the fields needed to make those decisions:
+
+```text
+Elevation
+Slope
+Curvature
+Rainfall
+Temperature
+Soil moisture
+Coast distance
+River and wetland masks
+Biome
+Geology
+Volcanic age
+Rock hardness
+Erosion and sediment
+```
+
+Those fields should be the authoritative inputs to the texture classifier. 
+
+### Separate scale responsibilities
+
+Use different techniques at different visual scales:
+
+```text
+Kilometers:
+Biome and geological selection
+
+Hundreds of meters:
+Soil distribution, exposed rock, beaches, wetland regions
+
+Meters:
+Material blending, erosion streaks, sediment, vegetation cover
+
+Centimeters:
+Grain, cracks, pebbles, pores, surface roughness
+
+Millimeters:
+Normal-map and roughness-map detail
+```
+
+The CPU handles the first three levels during terrain generation or remeshing. The GPU handles the final two levels during rendering.
+
+### Procedural does not mean runtime-only
+
+The recommended system is hybrid:
+
+```text
+Procedural definitions
+    ↓
+Deterministic texture baking
+    ↓
+Cached texture arrays
+    ↓
+Shader-based projection and microvariation
+```
+
+Do not regenerate 512×512 PBR texture sets every time a chunk loads. Generate or bake them when their recipe changes, cache the result, and reuse them.
+
+### Base surfaces and environmental state are different
+
+Do not create separate permanent materials for:
+
+```text
+wet basalt
+dry basalt
+mossy basalt
+snowy basalt
+burned basalt
+muddy basalt
+```
+
+Use:
+
+```text
+Base surface:
+basalt
+
+Dynamic overlays:
+wetness
+moss
+snow
+ash
+scorch
+mud
+```
+
+This prevents material definitions from multiplying uncontrollably.
+
+---
+
+# 2. High-level subsystem architecture
+
+```text
+assets/terrain_materials/
+        ↓
+TerrainMaterialCatalogAsset
+        ↓
+Definition compiler and validator
+        ↓
+CompiledSurfaceRegistry
+        ↓
+Texture recipe compiler
+        ↓
+Texture bake cache
+        ↓
+GPU texture arrays
+
+WorldAtlas + voxel samples
+        ↓
+SurfaceClassifier
+        ↓
+SurfaceWeightSet
+        ↓
+MaterialRegionCompiler
+        ↓
+Chunk mesh vertex weights
+        ↓
+TerrainMaterial instance
+        ↓
+WGSL triplanar PBR shader
+```
+
+Recommended crate structure:
+
+```text
+crates/
+  terrain_material_core/
+    src/
+      catalog.rs
+      definitions.rs
+      ids.rs
+      classifier.rs
+      curves.rs
+      texture_graph.rs
+      texture_baker.rs
+      cache.rs
+      palette.rs
+      validation.rs
+      compiled.rs
+
+  terrain_material_bevy/
+    src/
+      plugin.rs
+      assets.rs
+      loader.rs
+      material.rs
+      mesh_attributes.rs
+      texture_arrays.rs
+      hot_reload.rs
+      diagnostics.rs
+
+assets/
+  terrain_materials/
+    catalogs/
+    surfaces/
+    textures/
+    classifiers/
+    palettes/
+    overlays/
+    render_profiles/
+    shaders/
+```
+
+The core crate should not depend on Bevy rendering. It should accept plain Rust data and return compiled materials, texture pixels, classifications, and blend weights.
+
+---
+
+# 3. Data asset hierarchy
+
+Use several focused asset types instead of one enormous YAML file.
+
+```text
+TerrainMaterialCatalog
+├── Texture recipes
+├── Texture sets
+├── Surface definitions
+├── Surface classifier rules
+├── Biome palettes
+├── Dynamic overlays
+└── Rendering profiles
+```
+
+## Recommended files
+
+```text
+assets/terrain_materials/
+  catalogs/
+    tropical_island.material_catalog.yaml
+
+  textures/
+    basalt.texture.yaml
+    weathered_basalt.texture.yaml
+    rainforest_soil.texture.yaml
+    beach_sand.texture.yaml
+    river_mud.texture.yaml
+
+  surfaces/
+    basalt.surface.yaml
+    exposed_basalt.surface.yaml
+    tropical_soil.surface.yaml
+    beach_sand.surface.yaml
+    wetland_mud.surface.yaml
+
+  classifiers/
+    tropical_island.classifier.yaml
+
+  palettes/
+    tropical_lowland.palette.yaml
+    volcanic_highland.palette.yaml
+    coast.palette.yaml
+    cave.palette.yaml
+
+  overlays/
+    wetness.overlay.yaml
+    moss.overlay.yaml
+    snow.overlay.yaml
+    scorch.overlay.yaml
+
+  render_profiles/
+    terrain_high.render.yaml
+    terrain_medium.render.yaml
+    terrain_low.render.yaml
+```
+
+---
+
+# 4. Texture recipe definitions
+
+A texture recipe defines how to produce a tileable PBR texture set.
+
+It should produce:
+
+```text
+Base color
+Normal and height
+Occlusion, roughness, and metallic
+Optional porosity or material mask
+```
+
+A practical packing convention is:
+
+```text
+Albedo array:
+RGB = base color
+A   = optional material mask
+
+Normal-height array:
+RGB = encoded tangent-space normal
+A   = height
+
+ORM array:
+R = ambient occlusion
+G = perceptual roughness
+B = metallic
+A = porosity or reserved channel
+```
+
+## Example texture recipe
+
+```yaml
+schema_version: 1
+id: texture.weathered_basalt
+
+resolution: 512
+seed: 140781
+tileable: true
+
+graph:
+  nodes:
+    macro_shape:
+      type: fbm
+      frequency: 2.5
+      octaves: 5
+      persistence: 0.52
+      lacunarity: 2.05
+
+    cellular_blocks:
+      type: voronoi_distance
+      frequency: 7.0
+      jitter: 0.72
+
+    cracks:
+      type: invert
+      input: cellular_blocks
+
+    warped_cracks:
+      type: domain_warp
+      input: cracks
+      warp_source: macro_shape
+      strength: 0.13
+
+    height:
+      type: combine
+      operation: add
+      inputs:
+        - source: macro_shape
+          weight: 0.55
+        - source: warped_cracks
+          weight: -0.22
+
+    weathering:
+      type: slope_filter
+      input: height
+      lower: 0.18
+      upper: 0.72
+
+    base_color:
+      type: color_ramp
+      input: weathering
+      stops:
+        - position: 0.00
+          color: "#17191b"
+        - position: 0.40
+          color: "#292c2c"
+        - position: 0.72
+          color: "#45483f"
+        - position: 1.00
+          color: "#69705d"
+
+    roughness:
+      type: remap
+      input: weathering
+      from: [0.0, 1.0]
+      to: [0.86, 0.62]
+
+    occlusion:
+      type: cavity
+      input: height
+      radius: 4
+
+outputs:
+  base_color: base_color
+
+  normal:
+    type: normal_from_height
+    source: height
+    strength: 3.5
+
+  height: height
+  roughness: roughness
+  occlusion: occlusion
+  metallic:
+    constant: 0.0
+```
+
+## Controlled node vocabulary
+
+YAML should reference a fixed set of Rust implementations:
+
+```text
+constant
+noise
+fbm
+ridged_noise
+billow_noise
+voronoi_distance
+voronoi_edge
+domain_warp
+add
+subtract
+multiply
+min
+max
+smooth_min
+clamp
+remap
+power
+invert
+blur
+sharpen
+cavity
+edge_detect
+slope_filter
+terrace
+color_ramp
+normal_from_height
+```
+
+Do not allow arbitrary executable expressions in data files.
+
+---
+
+# 5. Producing seamless procedural textures
+
+For reliable tileability, use periodic noise rather than merely blending image edges.
+
+Map a two-dimensional texture coordinate onto a four-dimensional periodic domain:
+
+```text
+x = cos(2πu)
+y = sin(2πu)
+z = cos(2πv)
+w = sin(2πv)
+```
+
+Then sample four-dimensional noise:
+
+```rust
+fn periodic_point(uv: Vec2) -> [f32; 4] {
+    let u = uv.x * std::f32::consts::TAU;
+    let v = uv.y * std::f32::consts::TAU;
+
+    [u.cos(), u.sin(), v.cos(), v.sin()]
+}
+```
+
+Because `u = 0` and `u = 1` map to the same position, the resulting texture tiles exactly.
+
+The texture baker should also run automated seam tests:
+
+```rust
+fn maximum_texture_seam_error(
+    image: &GeneratedImage,
+) -> f32 {
+    let horizontal = compare_left_and_right_edges(image);
+    let vertical = compare_top_and_bottom_edges(image);
+
+    horizontal.max(vertical)
+}
+```
+
+Fail the bake when the error exceeds a configured tolerance.
+
+---
+
+# 6. Surface definitions
+
+A surface definition describes the gameplay and rendering identity of a surface.
+
+It should not contain the rules deciding where that surface occurs.
+
+```yaml
+schema_version: 1
+id: surface.exposed_basalt
+
+texture: texture.weathered_basalt
+
+tags:
+  - rock
+  - volcanic
+  - hard
+  - low_soil
+
+rendering:
+  projection: triplanar
+  meters_per_repeat: 2.8
+  triplanar_sharpness: 5.0
+  normal_strength: 1.15
+  height_blend_strength: 0.32
+
+  macro_variation:
+    enabled: true
+    scale_m: 42.0
+    color_strength: 0.10
+    roughness_strength: 0.07
+
+physical:
+  hardness: 0.88
+  permeability: 0.12
+  friction: 0.72
+  porosity: 0.16
+
+responses:
+  wetness:
+    darkening: 0.28
+    roughness_reduction: 0.32
+    normal_flattening: 0.06
+
+  moss:
+    affinity: 0.44
+
+  snow:
+    retention: 0.08
+
+  scorch:
+    visibility: 0.68
+```
+
+This lets rendering, sound, movement, erosion, digging, and effects all reference the same semantic surface.
+
+---
+
+# 7. Texture sets and surface identities
+
+Keep these concepts separate:
+
+```text
+Texture recipe:
+How pixels are generated.
+
+Texture set:
+The baked albedo, normal-height, and ORM layers.
+
+Surface:
+How the texture behaves in the world.
+
+Classifier rule:
+Where the surface should appear.
+```
+
+Multiple surfaces can reuse one texture set.
+
+For example:
+
+```text
+surface.dry_basalt
+surface.cave_basalt
+surface.wave_polished_basalt
+```
+
+could all use:
+
+```text
+texture.basalt
+```
+
+but apply different scales, roughness offsets, overlay responses, and classifier rules.
+
+---
+
+# 8. The surface classifier
+
+The surface classifier converts terrain state into weighted candidate surfaces.
+
+## Classifier input
+
+```rust
+pub struct SurfaceContext {
+    pub world_position: Vec3,
+
+    pub world_normal: Vec3,
+    pub slope_degrees: f32,
+    pub curvature: f32,
+    pub exposure: f32,
+
+    pub elevation_m: f32,
+    pub depth_below_surface_m: f32,
+    pub coast_distance_m: f32,
+
+    pub rainfall: f32,
+    pub temperature: f32,
+    pub moisture: f32,
+    pub sediment: f32,
+
+    pub river_mask: f32,
+    pub wetland_mask: f32,
+    pub beach_mask: f32,
+    pub cliff_mask: f32,
+
+    pub geology: GeologyId,
+    pub biome: BiomeId,
+    pub voxel_material: MaterialId,
+}
+```
+
+Because the final terrain is volumetric, classification must operate on actual mesh vertices or surface samples. A two-dimensional splat map cannot distinguish a cave floor, cave ceiling, and mountaintop sharing the same X/Z coordinates.
+
+## Use weighted scoring, not first-match rules
+
+A first-match system causes hard and fragile boundaries:
+
+```text
+if slope > 45:
+    rock
+else if moisture > 0.7:
+    mud
+else:
+    soil
+```
+
+Instead, every eligible surface receives a score.
+
+```text
+Exposed basalt:
+    geology match
+  + high slope
+  + convex curvature
+  + low soil depth
+  + cliff mask
+
+Tropical soil:
+    compatible biome
+  + moderate slope
+  + high rainfall
+  + sufficient soil depth
+
+Wetland mud:
+    wetland mask
+  + low slope
+  + high moisture
+  + high sediment
+```
+
+The scores are normalized into blend weights.
+
+## Example classifier YAML
+
+```yaml
+schema_version: 1
+id: classifier.tropical_island
+
+rules:
+  - surface: surface.exposed_basalt
+
+    require:
+      geology_any:
+        - basalt
+        - volcanic_tuff
+
+    score:
+      base: 0.15
+
+      curves:
+        slope_degrees:
+          type: smooth_ramp
+          start: 24
+          end: 58
+          weight: 1.20
+
+        soil_depth_m:
+          type: inverse_smooth_ramp
+          start: 0.15
+          end: 1.25
+          weight: 0.90
+
+        cliff_mask:
+          type: linear
+          weight: 1.45
+
+        exposure:
+          type: linear
+          weight: 0.35
+
+  - surface: surface.tropical_soil
+
+    require:
+      biome_any:
+        - lowland_rainforest
+        - moist_forest
+        - cloud_forest
+
+    score:
+      base: 0.30
+
+      curves:
+        slope_degrees:
+          type: smooth_band
+          enter: [0, 8]
+          exit: [31, 46]
+          weight: 0.85
+
+        moisture:
+          type: smooth_ramp
+          start: 0.25
+          end: 0.72
+          weight: 0.70
+
+        soil_depth_m:
+          type: smooth_ramp
+          start: 0.15
+          end: 1.8
+          weight: 1.10
+
+  - surface: surface.beach_sand
+
+    score:
+      base: 0.0
+
+      curves:
+        beach_mask:
+          type: linear
+          weight: 2.4
+
+        slope_degrees:
+          type: inverse_smooth_ramp
+          start: 7
+          end: 18
+          weight: 0.5
+
+        sediment:
+          type: smooth_ramp
+          start: 0.20
+          end: 0.75
+          weight: 0.65
+```
+
+## Scoring result
+
+```rust
+pub struct SurfaceCandidate {
+    pub surface: SurfaceId,
+    pub score: f32,
+}
+
+pub struct SurfaceWeightSet {
+    pub candidates: SmallVec<[SurfaceCandidate; 8]>,
+}
+```
+
+After scoring:
+
+```rust
+fn normalize_scores(
+    candidates: &mut [SurfaceCandidate],
+) {
+    let sum: f32 = candidates
+        .iter()
+        .map(|candidate| candidate.score.max(0.0))
+        .sum();
+
+    if sum <= f32::EPSILON {
+        return;
+    }
+
+    for candidate in candidates {
+        candidate.score =
+            candidate.score.max(0.0) / sum;
+    }
+}
+```
+
+---
+
+# 9. Preventing visible biome bands
+
+Biome and elevation rules can produce contour-shaped material borders.
+
+Add low-amplitude spatial variation to thresholds:
+
+```text
+effective threshold =
+base threshold
++ regional variation
++ local variation
+```
+
+But use the noise only to disturb a valid transition.
+
+Bad:
+
+```text
+Noise chooses whether this is forest soil or snow.
+```
+
+Better:
+
+```text
+Elevation and climate establish the snow transition.
+Noise makes the boundary irregular.
+```
+
+Example:
+
+```rust
+let transition_offset =
+    macro_noise.sample(world_xz * 0.003) * 0.08
+    + detail_noise.sample(world_xz * 0.025) * 0.025;
+
+let adjusted_snow_score =
+    snow_score + transition_offset;
+```
+
+---
+
+# 10. Material regions and chunk palettes
+
+Sampling dozens of texture layers for every fragment is too expensive.
+
+Organize terrain into **material regions** larger than render chunks:
+
+```text
+Voxel chunks:
+32 × 16 × 32 cells
+
+Material region:
+4 × 4 or 8 × 8 horizontal chunks
+```
+
+Each material region receives a palette:
+
+```rust
+pub struct MaterialRegionPalette {
+    pub region: MaterialRegionCoord,
+    pub surfaces: SmallVec<[SurfaceId; 8]>,
+}
+```
+
+A material-region palette might contain:
+
+```text
+tropical soil
+leaf litter
+exposed basalt
+weathered basalt
+river mud
+beach sand
+moss-covered rock
+volcanic ash
+```
+
+The classifier may score any globally registered surface, but only the most relevant regional surfaces are sent to the terrain shader.
+
+## Palette selection
+
+1. Classify surface samples across the material region.
+2. Accumulate total coverage for each surface.
+3. Include required surfaces from geology and biome definitions.
+4. Rank by coverage.
+5. Select the top four or eight.
+6. Reproject every vertex’s weights into that palette.
+7. Normalize again.
+
+```rust
+pub struct CompiledVertexMaterial {
+    pub weights_0: [f32; 4],
+    pub weights_1: [f32; 4],
+}
+```
+
+Using a palette shared by multiple neighboring chunks prevents each chunk from choosing incompatible textures at its border.
+
+---
+
+# 11. Recommended rendering tiers
+
+## Minimum viable implementation: four layers
+
+Use:
+
+```text
+Four surfaces per material region
+One RGBA vertex-color attribute for weights
+One UVec4 material palette
+```
+
+Bevy’s standard mesh vertex output already supports vertex colors, so `Mesh::ATTRIBUTE_COLOR` can carry four interpolated material weights.
+
+```rust
+mesh.insert_attribute(
+    Mesh::ATTRIBUTE_COLOR,
+    material_weights,
+);
+```
+
+This lets you retain the standard Bevy mesh vertex stage and concentrate custom code in the fragment shader.
+
+## Production implementation: eight layers
+
+Use:
+
+```text
+TerrainWeights0: Float32x4
+TerrainWeights1: Float32x4
+Eight palette entries
+```
+
+Bevy supports custom mesh vertex attributes and pipeline specialization for supplying them to shaders. ([Bevy][2])
+
+```rust
+pub const ATTRIBUTE_TERRAIN_WEIGHTS_0:
+    MeshVertexAttribute =
+    MeshVertexAttribute::new(
+        "TerrainWeights0",
+        0x72A9_1001,
+        VertexFormat::Float32x4,
+    );
+
+pub const ATTRIBUTE_TERRAIN_WEIGHTS_1:
+    MeshVertexAttribute =
+    MeshVertexAttribute::new(
+        "TerrainWeights1",
+        0x72A9_1002,
+        VertexFormat::Float32x4,
+    );
+```
+
+Even with an eight-surface palette, the fragment shader should select the strongest two to four weights before sampling textures.
+
+---
+
+# 12. Bevy material definition
+
+Bevy’s official array-texture example binds a `texture_2d_array` through `AsBindGroup` and samples a selected array layer while reusing Bevy’s PBR lighting functions. That is the right foundation for this terrain material. ([Bevy][3])
+
+```rust
+use bevy::{
+    prelude::*,
+    reflect::TypePath,
+    render::render_resource::{
+        AsBindGroup,
+        ShaderType,
+    },
+    shader::ShaderRef,
+};
+
+const TERRAIN_SHADER: &str =
+    "terrain_materials/shaders/terrain_pbr.wgsl";
+
+#[derive(Clone, Copy, Debug, ShaderType)]
+pub struct TerrainMaterialUniform {
+    pub layer_indices: UVec4,
+    pub meters_per_repeat: Vec4,
+    pub normal_strengths: Vec4,
+
+    pub triplanar_sharpness: f32,
+    pub height_blend_strength: f32,
+    pub macro_variation_scale: f32,
+    pub macro_variation_strength: f32,
+}
+
+#[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
+pub struct TerrainMaterial {
+    #[texture(0, dimension = "2d_array")]
+    #[sampler(1)]
+    pub albedo_array: Handle<Image>,
+
+    #[texture(2, dimension = "2d_array")]
+    #[sampler(3)]
+    pub normal_height_array: Handle<Image>,
+
+    #[texture(4, dimension = "2d_array")]
+    #[sampler(5)]
+    pub orm_array: Handle<Image>,
+
+    #[uniform(6)]
+    pub settings: TerrainMaterialUniform,
+}
+
+impl Material for TerrainMaterial {
+    fn fragment_shader() -> ShaderRef {
+        TERRAIN_SHADER.into()
+    }
+}
+```
+
+Register it:
+
+```rust
+pub struct TerrainMaterialPlugin;
+
+impl Plugin for TerrainMaterialPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_plugins(
+            MaterialPlugin::<TerrainMaterial>::default(),
+        );
+    }
+}
+```
+
+---
+
+# 13. Texture-array organization
+
+Use one corresponding layer number across all arrays:
+
+```text
+Layer 0:
+soil albedo
+soil normal-height
+soil ORM
+
+Layer 1:
+basalt albedo
+basalt normal-height
+basalt ORM
+
+Layer 2:
+sand albedo
+sand normal-height
+sand ORM
+```
+
+All array layers must use compatible:
+
+```text
+Dimensions
+Mip count
+Pixel format
+Array-layer count
+Sampling assumptions
+```
+
+Assign array-layer indices deterministically:
+
+```text
+Sort compiled texture-set IDs
+Assign indices in sorted order
+Write manifest
+```
+
+Never let load order determine array indices.
+
+## Manifest
+
+```yaml
+schema_version: 1
+catalog_hash: "0cd7..."
+
+layers:
+  texture.beach_sand: 0
+  texture.rainforest_soil: 1
+  texture.river_mud: 2
+  texture.weathered_basalt: 3
+```
+
+Bevy supports interpreting a vertically stacked image as a two-dimensional array texture through `ImageArrayLayout`, which is useful for prototyping. ([Bevy][3])
+
+Production builds should preferably use a dedicated bake step that constructs the array assets and mip chains before shipping.
+
+---
+
+# 14. Triplanar projection
+
+Planar UVs break on:
+
+* vertical cliffs,
+* cave walls,
+* cave ceilings,
+* overhang undersides,
+* natural arches.
+
+Your volumetric terrain design already identifies triplanar mapping as the appropriate solution for these surfaces. 
+
+Basic triplanar weights:
+
+```wgsl
+fn triplanar_weights(
+    normal: vec3<f32>,
+    sharpness: f32,
+) -> vec3<f32> {
+    var weights = pow(abs(normal), vec3(sharpness));
+    return weights / max(
+        weights.x + weights.y + weights.z,
+        0.0001,
+    );
+}
+```
+
+Basic array sampling:
+
+```wgsl
+fn sample_triplanar_color(
+    texture_array: texture_2d_array<f32>,
+    texture_sampler: sampler,
+    world_position: vec3<f32>,
+    world_normal: vec3<f32>,
+    layer: u32,
+    meters_per_repeat: f32,
+    sharpness: f32,
+) -> vec4<f32> {
+    let scale = 1.0 / meters_per_repeat;
+    let weights =
+        triplanar_weights(world_normal, sharpness);
+
+    let x_sample = textureSample(
+        texture_array,
+        texture_sampler,
+        world_position.yz * scale,
+        layer,
+    );
+
+    let y_sample = textureSample(
+        texture_array,
+        texture_sampler,
+        world_position.xz * scale,
+        layer,
+    );
+
+    let z_sample = textureSample(
+        texture_array,
+        texture_sampler,
+        world_position.xy * scale,
+        layer,
+    );
+
+    return
+        x_sample * weights.x
+        + y_sample * weights.y
+        + z_sample * weights.z;
+}
+```
+
+Normal maps require extra work. Each projected tangent-space normal must be reoriented into world space before blending:
+
+```text
+X projection:
+normal interpreted relative to Y/Z plane
+
+Y projection:
+normal interpreted relative to X/Z plane
+
+Z projection:
+normal interpreted relative to X/Y plane
+```
+
+Blend those reoriented normals and normalize the result.
+
+Do not simply blend the encoded RGB values of all three normal samples.
+
+---
+
+# 15. Four-layer shader blending
+
+For the MVP, use vertex color as surface weights:
+
+```wgsl
+#ifdef VERTEX_COLORS
+    var surface_weights = max(
+        mesh.color,
+        vec4(0.0),
+    );
+#else
+    var surface_weights =
+        vec4(1.0, 0.0, 0.0, 0.0);
+#endif
+
+surface_weights /= max(
+    dot(surface_weights, vec4(1.0)),
+    0.0001,
+);
+```
+
+Sample the four selected array layers:
+
+```wgsl
+let color_0 = sample_triplanar_color(
+    terrain_albedo,
+    terrain_sampler,
+    mesh.world_position,
+    mesh.world_normal,
+    terrain.layer_indices.x,
+    terrain.meters_per_repeat.x,
+    terrain.triplanar_sharpness,
+);
+
+let color_1 = sample_triplanar_color(
+    terrain_albedo,
+    terrain_sampler,
+    mesh.world_position,
+    mesh.world_normal,
+    terrain.layer_indices.y,
+    terrain.meters_per_repeat.y,
+    terrain.triplanar_sharpness,
+);
+```
+
+Then blend:
+
+```wgsl
+let base_color =
+    color_0 * surface_weights.x
+    + color_1 * surface_weights.y
+    + color_2 * surface_weights.z
+    + color_3 * surface_weights.w;
+```
+
+Populate Bevy’s `PbrInput` and invoke the standard PBR lighting functions in the same general pattern as Bevy’s official array-texture example. ([Bevy][3])
+
+---
+
+# 16. Height-aware material blending
+
+Straight linear blending makes materials look painted over one another.
+
+Use each material’s height value to bias its weight.
+
+```text
+Sand settles into rock cavities.
+Moss occupies cracks.
+Soil fills depressions.
+Rock protrudes through thin soil.
+```
+
+Conceptually:
+
+```wgsl
+fn height_blended_weight(
+    original_weight: f32,
+    material_height: f32,
+    blend_strength: f32,
+) -> f32 {
+    return max(
+        original_weight
+        + material_height * blend_strength,
+        0.0,
+    );
+}
+```
+
+After applying the bias to all active materials, normalize the weights again.
+
+Keep height blending restrained. Excessive height bias causes one surface to consume all neighboring materials.
+
+---
+
+# 17. Macrovariation
+
+A perfectly repeated 512×512 texture becomes obvious over a mountainside.
+
+Apply low-frequency world-space variation:
+
+```text
+Color tint variation
+Roughness variation
+Minor scale variation
+Material-weight perturbation
+Weathering intensity
+```
+
+Example:
+
+```wgsl
+let macro_noise =
+    sample_macro_noise(
+        mesh.world_position.xz
+        / terrain.macro_variation_scale,
+    );
+
+let macro_tint =
+    1.0
+    + (macro_noise - 0.5)
+    * terrain.macro_variation_strength;
+
+base_color.rgb *= macro_tint;
+```
+
+Macrovariation should not alter terrain semantics. A basalt cliff should remain basalt.
+
+---
+
+# 18. Dynamic surface overlays
+
+Use an independent overlay system.
+
+```rust
+pub struct SurfaceOverlayState {
+    pub wetness: f32,
+    pub moss: f32,
+    pub snow: f32,
+    pub ash: f32,
+    pub scorch: f32,
+    pub mud: f32,
+}
+```
+
+## Wetness
+
+Wetness can:
+
+```text
+Darken albedo
+Reduce roughness
+Reduce porous normal detail
+Increase specular response
+Create pooled-water effects in cavities
+```
+
+## Moss
+
+Moss can depend on:
+
+```text
+Moisture
+Shade
+Surface orientation
+Rainfall
+Rock porosity
+Distance from ocean spray
+Time undisturbed
+```
+
+## Snow or ash
+
+Snow and ash can depend on:
+
+```text
+Upward-facing normal
+Temperature or eruption state
+Wind exposure
+Slope
+Shelter
+Accumulation history
+```
+
+## Scorch and damage
+
+Localized effects should normally use:
+
+```text
+Decals
+Sparse surface patches
+Persistent voxel or surface-state deltas
+```
+
+Do not permanently rebake the entire basalt texture because one part of one chunk burned.
+
+---
+
+# 19. Overlay storage for volumetric terrain
+
+A global X/Z overlay map will not work for caves.
+
+Use one of these approaches:
+
+### Per-vertex overlay attributes
+
+Best for effects that update when the chunk remeshes:
+
+```text
+Wetness
+Moss potential
+Snow retention
+Weathering
+```
+
+### Sparse surface-patch records
+
+Best for localized persistent effects:
+
+```text
+Scorch
+Blood
+Acid damage
+Oil
+Paint
+Localized mud
+```
+
+### Decals
+
+Best for short-lived or sharply bounded visual effects.
+
+### Voxel-associated state
+
+Best when the effect is tied to material simulation:
+
+```text
+Burned material
+Saturated soil
+Frozen water
+Corroded structure
+```
+
+When a chunk remeshes, voxel state is converted into vertex overlay values.
+
+---
+
+# 20. Asset loading
+
+Define your catalog as a custom Bevy asset.
+
+```rust
+#[derive(Asset, TypePath, Debug)]
+pub struct TerrainMaterialCatalogAsset {
+    pub definition: TerrainMaterialCatalogDefinition,
+}
+```
+
+Loader shape:
+
+```rust
+use bevy::asset::{
+    io::Reader,
+    AssetLoader,
+    LoadContext,
+};
+
+pub struct TerrainMaterialCatalogLoader;
+
+impl AssetLoader for TerrainMaterialCatalogLoader {
+    type Asset = TerrainMaterialCatalogAsset;
+    type Settings = ();
+    type Error = TerrainCatalogError;
+
+    async fn load(
+        &self,
+        reader: &mut dyn Reader,
+        _settings: &Self::Settings,
+        _load_context: &mut LoadContext<'_>,
+    ) -> Result<Self::Asset, Self::Error> {
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes).await?;
+
+        let definition =
+            serde_yaml_ng::from_slice(&bytes)?;
+
+        validate_catalog(&definition)?;
+
+        Ok(TerrainMaterialCatalogAsset {
+            definition,
+        })
+    }
+
+    fn extensions(&self) -> &[&str] {
+        &["material_catalog.yaml"]
+    }
+}
+```
+
+Bevy’s `AssetLoader` loads assets asynchronously from a `Reader`, and `LoadContext` tracks asset dependencies. This allows a catalog loader to record dependencies on referenced texture recipes, surface definitions, and palettes. ([Docs.rs][4])
+
+---
+
+# 21. Catalog compilation
+
+Raw YAML should not be used directly during terrain generation.
+
+Compile it first:
+
+```rust
+pub struct CompiledSurfaceRegistry {
+    pub surfaces: Vec<CompiledSurface>,
+    pub surface_by_id:
+        BTreeMap<SurfaceId, SurfaceIndex>,
+
+    pub texture_layers:
+        BTreeMap<TextureSetId, u32>,
+
+    pub classifiers:
+        BTreeMap<ClassifierId, CompiledClassifier>,
+
+    pub palettes:
+        BTreeMap<PaletteId, CompiledPalette>,
+}
+```
+
+Compilation should:
+
+```text
+Resolve string IDs
+Check references
+Assign numeric indices
+Compile scoring curves
+Topologically sort texture graphs
+Precompute constants
+Calculate content hashes
+Identify required texture outputs
+Assign array layers
+Build dependency indexes
+```
+
+The runtime classifier should not search strings or parse YAML.
+
+---
+
+# 22. Texture bake cache
+
+Cache generated textures by content hash.
+
+```text
+hash =
+texture recipe
++ generator version
++ resolution
++ channel packing
++ color space
++ mip settings
+```
+
+Suggested cache layout:
+
+```text
+cache/
+  procedural_textures/
+    11a408.../
+      albedo.bin
+      normal_height.bin
+      orm.bin
+      metadata.yaml
+```
+
+Metadata:
+
+```yaml
+recipe: texture.weathered_basalt
+recipe_hash: "11a408..."
+generator_version: 4
+resolution: [512, 512]
+mip_levels: 10
+channels:
+  albedo: srgb
+  normal_height: linear
+  orm: linear
+```
+
+When the recipe hash matches, reuse the cached result.
+
+When it does not, rebuild only that texture set and any dependent texture arrays.
+
+---
+
+# 23. Hot reload and invalidation
+
+Changes should propagate through dependencies.
+
+```text
+Texture recipe changed
+    ↓
+Rebake texture
+    ↓
+Repack affected array
+    ↓
+Update GPU image
+    ↓
+Do not remesh terrain
+
+Surface scale changed
+    ↓
+Update material parameters
+    ↓
+Do not rebake texture
+
+Classifier rule changed
+    ↓
+Reclassify affected material regions
+    ↓
+Update vertex blend weights
+    ↓
+Remesh or update mesh attributes
+
+Biome definition changed
+    ↓
+Recompute biome field
+    ↓
+Reclassify affected regions
+```
+
+Bevy tracks asset changes and emits asset events; its asset collections can also be queried for changed underlying assets. ([Docs.rs][5])
+
+Maintain an explicit dependency index:
+
+```rust
+pub struct MaterialDependencyIndex {
+    pub texture_to_surfaces:
+        HashMap<TextureSetId, Vec<SurfaceId>>,
+
+    pub surface_to_classifiers:
+        HashMap<SurfaceId, Vec<ClassifierId>>,
+
+    pub classifier_to_regions:
+        HashMap<ClassifierId, HashSet<MaterialRegionCoord>>,
+}
+```
+
+---
+
+# 24. Asynchronous work pipeline
+
+Do not bake textures or classify thousands of vertices on the render thread.
+
+```text
+Main thread:
+Detect asset or terrain change
+Create immutable job input
+
+Worker task:
+Compile definitions
+Bake texture pixels
+Classify surface samples
+Build mesh attributes
+
+Main thread:
+Insert or update Bevy assets
+Replace material handles
+Replace mesh attributes
+```
+
+Bevy assets and render resources should be created or updated through the application world. Worker tasks should return plain Rust data such as:
+
+```rust
+pub struct GeneratedTextureSet {
+    pub albedo: PixelBuffer,
+    pub normal_height: PixelBuffer,
+    pub orm: PixelBuffer,
+}
+
+pub struct ClassifiedChunkMaterials {
+    pub weights_0: Vec<[f32; 4]>,
+    pub weights_1: Vec<[f32; 4]>,
+    pub palette: MaterialRegionPalette,
+}
+```
+
+---
+
+# 25. Storage buffers and shared palettes
+
+The initial implementation can create one material asset for each material-region palette.
+
+A more advanced implementation can keep one shared material and store many palettes in a GPU storage buffer:
+
+```rust
+pub struct GpuMaterialRegionPalette {
+    pub layer_indices_0: [u32; 4],
+    pub layer_indices_1: [u32; 4],
+    pub scales_0: [f32; 4],
+    pub scales_1: [f32; 4],
+}
+```
+
+Each chunk receives a palette index through an instance tag or custom per-instance data.
+
+Bevy’s current examples demonstrate binding a `ShaderBuffer` to a custom material through `AsBindGroup`, as well as using `MeshTag` to select data inside the shader. ([Bevy][6])
+
+Treat this as an optimization phase. The simpler per-region material handles are easier to debug.
+
+---
+
+# 26. Performance controls
+
+## Limit active material samples
+
+Even if a region supports eight surfaces:
+
+```text
+Sort weights per fragment or vertex
+Select strongest four
+Ignore negligible weights
+Normalize selected weights
+```
+
+## Rendering quality profiles
+
+```yaml
+schema_version: 1
+id: render.terrain_high
+
+active_layers: 4
+projection: triplanar
+projection_axes: 3
+
+normal_mapping: true
+height_blending: true
+macro_variation: true
+
+distance_lod:
+  - maximum_distance_m: 80
+    active_layers: 4
+    projection_axes: 3
+
+  - maximum_distance_m: 240
+    active_layers: 2
+    projection_axes: 2
+
+  - maximum_distance_m: 800
+    active_layers: 1
+    projection_axes: 1
+
+  - maximum_distance_m: infinity
+    active_layers: 1
+    normal_mapping: false
+```
+
+## Channel packing
+
+Use:
+
+```text
+One normal-height sample
+One ORM sample
+One albedo sample
+```
+
+rather than separate textures for every scalar channel.
+
+## Reduce distant detail
+
+At distance:
+
+```text
+Disable height blending
+Reduce normal strength
+Use dominant-axis projection
+Use only the strongest material
+Rely more heavily on macrovariation
+```
+
+---
+
+# 27. Validation
+
+## Schema validation
+
+Reject:
+
+```text
+Unknown fields
+Duplicate IDs
+Missing required fields
+Unsupported schema versions
+Invalid enum values
+```
+
+Use:
+
+```rust
+#[serde(deny_unknown_fields)]
+```
+
+on author-facing definitions.
+
+## Reference validation
+
+Check:
+
+```text
+Every surface references a valid texture
+Every classifier references a valid surface
+Every palette references valid surfaces
+Every graph node references valid inputs
+Every output node exists
+```
+
+## Graph validation
+
+Check:
+
+```text
+No texture-node cycles
+All required channels produced
+No unreachable nodes
+No division by zero
+No invalid remap ranges
+```
+
+## GPU validation
+
+Check:
+
+```text
+All array layers have matching dimensions
+All layers have matching formats
+All arrays have matching layer counts
+Palette indices lie within array bounds
+Uniform values are finite
+```
+
+## Classifier validation
+
+Check:
+
+```text
+At least one fallback surface exists
+Every biome can produce a valid surface
+Every geology category has a valid base layer
+Scores remain finite
+Normalized weights sum approximately to one
+No material region exceeds its palette budget
+```
+
+---
+
+# 28. Debugging tools
+
+The procedural texture system needs first-class debug views.
+
+## Shader views
+
+```text
+Final material
+Surface IDs
+Blend weights
+Texture-array layer
+World normal
+Triplanar axis weights
+Roughness
+Metallic
+Height
+Wetness
+Moss
+Snow
+Macrovariation
+```
+
+## Terrain field views
+
+```text
+Slope
+Curvature
+Biome
+Geology
+Moisture
+Sediment
+Coast distance
+Cliff mask
+Beach mask
+Wetland mask
+```
+
+## Region inspector
+
+Selecting a chunk should show:
+
+```text
+Material-region coordinate
+Selected palette
+Coverage of each surface
+Rejected surfaces
+Classifier scores
+Texture array indices
+Recipe hashes
+Current overlay values
+```
+
+## Seam diagnostics
+
+Automated tests should compare:
+
+```text
+Shared chunk-border vertex weights
+Shared normals
+Material-region palette consistency
+Texture tile edges
+LOD transition output
+```
+
+---
+
+# 29. Persistence
+
+Do not save generated base texture pixels in each save game.
+
+Save:
+
+```text
+Catalog ID
+Catalog content hash
+Generator version
+World seed
+Dynamic material overrides
+Overlay deltas
+Player-painted or constructed surface changes
+```
+
+The baseline surface classification can be regenerated from terrain fields and voxel material state.
+
+For edited terrain:
+
+```text
+Regenerate density and base material
+Apply saved voxel/material overrides
+Reclassify exposed surfaces
+Apply persistent overlay deltas
+Remesh
+```
+
+This aligns with the existing deterministic terrain-delta approach. 
+
+---
+
+# 30. Recommended implementation phases
+
+## Phase 1: Four-layer terrain material
+
+Implement:
+
+```text
+Authored tileable textures
+Albedo, normal-height, and ORM arrays
+Four-surface regional palettes
+Vertex colors as blend weights
+Triplanar albedo and ORM
+Bevy PBR lighting
+```
+
+Start with:
+
+```text
+soil
+basalt
+sand
+mud
+```
+
+## Phase 2: Field-driven classifier
+
+Add:
+
+```text
+Slope
+Biome
+Geology
+Moisture
+Beach mask
+Cliff mask
+Weighted scoring
+Material regions
+```
+
+## Phase 3: Procedural texture recipes
+
+Add:
+
+```text
+Texture graph compiler
+Periodic noise
+CPU texture baker
+Normal generation
+ORM generation
+Content-hash cache
+Array repacking
+```
+
+## Phase 4: Advanced blending
+
+Add:
+
+```text
+Triplanar normal reorientation
+Height-aware blending
+Macrovariation
+Per-surface scale
+Per-surface normal strength
+```
+
+## Phase 5: Dynamic overlays
+
+Add:
+
+```text
+Wetness
+Moss
+Snow or ash
+Scorch
+Mud
+Sparse persistent surface patches
+```
+
+## Phase 6: Eight-layer production pipeline
+
+Add:
+
+```text
+Two custom weight attributes
+Eight-surface material palettes
+Strongest-four sampling
+Storage-buffer palette table
+Material-region LOD
+```
+
+## Phase 7: Tooling
+
+Add:
+
+```text
+Material preview sphere and terrain patch
+Texture graph inspector
+Surface classifier inspector
+Seed browser
+Hot reload
+Seam heatmaps
+Performance counters
+```
+
+---
+
+# Final recommended architecture
+
+The complete system should be divided into five layers:
+
+```text
+1. World semantics
+
+Biome, geology, slope, moisture, sediment,
+coastal state, voxel material, exposure.
+
+2. Surface classification
+
+Weighted rules select meaningful surfaces
+from authoritative world data.
+
+3. Texture synthesis
+
+Procedural graphs generate reusable tileable
+albedo, normal-height, and ORM layers.
+
+4. Material realization
+
+Material regions select compact palettes;
+meshes carry interpolated surface weights.
+
+5. Rendering and state
+
+The shader performs triplanar projection,
+PBR lighting, height blending, macrovariation,
+and dynamic environmental overlays.
+```
+
+The most important boundary is:
+
+> **Rust and world-generation data decide what a surface is. The shader decides how that surface is projected, lit, blended, and visually varied.**
+
+That avoids noisy, unstable biome classification in the shader while still producing detailed cliffs, caves, overhangs, beaches, soil, volcanic terrain, and weather-responsive surfaces.
+
+[1]: https://bevy.org/news/bevy-0-19/?utm_source=chatgpt.com "Bevy 0.19"
+[2]: https://bevy.org/examples/shaders/custom-vertex-attribute/?utm_source=chatgpt.com "Custom Vertex Attribute"
+[3]: https://bevy.org/examples/shaders/array-texture/?utm_source=chatgpt.com "Shaders / Array Texture"
+[4]: https://docs.rs/bevy/latest/bevy/asset/struct.LoadContext.html?utm_source=chatgpt.com "LoadContext in bevy::asset - Rust"
+[5]: https://docs.rs/bevy/latest/bevy/asset/struct.Assets.html?utm_source=chatgpt.com "Assets in bevy::asset - Rust"
+[6]: https://bevy.org/examples/shaders/storage-buffer/?utm_source=chatgpt.com "Storage Buffer"

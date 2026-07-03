@@ -61,9 +61,10 @@ pub fn chunk_has_uploaded_mesh(
     coord: ChunkCoord,
 ) -> bool {
     use crate::terrain::ChunkState;
-    pipeline.chunks.values().any(|chunk| {
-        chunk.coord == coord && chunk.state == ChunkState::Ready && chunk.entity.is_some()
-    })
+    pipeline
+        .chunks
+        .get(&coord)
+        .is_some_and(|chunk| chunk.state == ChunkState::Ready && chunk.entity.is_some())
 }
 
 /// Spawn terrain is ready when the spawn chunk or an adjacent vertical neighbor has uploaded geometry.
@@ -87,6 +88,7 @@ pub fn spawn_terrain_uploaded(
 }
 
 /// True when the spawn chunk's terrain mesh has a physics collider attached.
+/// Neighbor chunks are not accepted — placement must hit the spawn chunk trimesh.
 pub fn spawn_terrain_collider_ready(
     pipeline: &crate::terrain::TerrainPipelineState,
     spawn: ChunkCoord,
@@ -97,17 +99,6 @@ pub fn spawn_terrain_collider_ready(
         .get(&spawn)
         .and_then(|chunk| chunk.entity)
     else {
-        for dy in -1..=1i32 {
-            if dy == 0 {
-                continue;
-            }
-            let neighbor = ChunkCoord::new(spawn.x, spawn.y + dy, spawn.z);
-            if let Some(entity) = pipeline.chunks.get(&neighbor).and_then(|c| c.entity) {
-                if colliders.get(entity).is_ok() {
-                    return true;
-                }
-            }
-        }
         return false;
     };
     colliders.get(entity).is_ok()

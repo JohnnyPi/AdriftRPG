@@ -8,15 +8,11 @@ voxel:
 
 chunks:
   cells: [16, 16, 16]
-  # Centered: X/Z span [-128, +128), Y spans [-80, +80).
-  # Island authoring budget derives from these numbers -- see
-  # docs/terrain_yaml_authoring.md before changing.
-  world_extent: [16, 10, 16]
+  # Centered: X/Z span [-256, +256), Y spans [-112, +112).
+  # Authored op-based island showcase at 4× area (2× linear) vs the original testbed.
+  world_extent: [32, 14, 32]
 
-# Atlas world: terrain shape comes from island_gen; the terrain def carries
-# only the spawn point. Do not point this at an op-based terrain def.
 terrain: terrain.island_testbed
-island_gen: island_gen.island_testbed
 biomes: biomes.expanded_slice
 materials: materials.expanded_slice
 surface: surface.expanded_slice
@@ -24,12 +20,11 @@ water: water.tropical_shallow
 lighting: lighting.late_morning
 sky: sky.expanded_showcase
 
-# landmarks.expanded_slice and structure.coastal_fort were authored against
-# the removed op-based expanded_slice terrain. Re-add them (re-positioned
-# against the volcanic surface) once the island shape is verified.
+hydrology_bodies:
+  - hydrology.upland_pool
 
-ocean_extent_m: 288.0
-coord_offset: [128.0, 0.0, 128.0]
+ocean_extent_m: 576.0
+coord_offset: [256.0, 0.0, 256.0]
 
 resolution:
   regional_m: 8

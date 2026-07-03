@@ -1,48 +1,38 @@
 ﻿schema_version: 1
 id: island_gen.island_large
 description: >
-  Large volcanic island, authored at true world scale from the
-  setup_options.default parameter defaults (2200 m diameter class), adjusted
-  where those defaults violate the budget checks (see notes inline).
+  Large volcanic island — fully procedural at runtime (no baked atlas dependency).
   World budget this file MUST respect (see docs/terrain_yaml_authoring.md):
-    horizontal: chunks cover X/Z in [-1344, +1344); atlas covers +/-1344 (ocean_extent 2688)
-    vertical:   chunks cover Y in [-384, +384); sea level is 2.0 (from water.tropical_shallow)
+    horizontal: chunks cover X/Z in [-1600, +1600); atlas covers +/-1600 (ocean_extent 3200)
+    vertical:   chunks cover Y in [-416, +416); sea level is 2.0 (from water.tropical_shallow)
   Rule of thumb: footprint support radius (~0.59 * diameter + warp) must stay
-  under 1344; peak elevation + noise amplitudes must stay under +382.
+  under 1600; peak elevation + noise amplitudes must stay under +414.
 
 island:
-  # Support radius = 2200 * 0.5 * 1.1775 + 18 warp = ~1313 m < 1344 m half-extent.
-  playable_diameter_m: 2200
-  # Composed peak is 356 m (shield 220 + summit 130 + rim 6) before +/-15 m noise.
-  maximum_height_m: 360
-  # Must equal the world's water def sea level (water.tropical_shallow -> 2.0);
-  # generated cave placement reads this value.
+  # Support radius = 2500 * 0.5 * 1.1775 + 22 warp = ~1494 m < 1600 m half-extent.
+  playable_diameter_m: 2500
+  maximum_height_m: 370
   sea_level_m: 2.0
-  lobe_count: 3
-  # Period = 1/frequency = 400 m -> 5-6 coastline undulations around the island.
-  warp_frequency: 0.0025
-  warp_amplitude: 18
+  lobe_count: 4
+  warp_frequency: 0.0022
+  warp_amplitude: 22
 
 volcano:
-  # Recipe-space coords; world.coord_offset [1344,0,1344] maps this to world (0,0).
-  center: [1344.0, 1344.0]
-  shield_radius_m: 950
+  center: [1600.0, 1600.0]
+  shield_radius_m: 1080
   shield_exponent: 1.3
-  # setup_options defaults are shield 230 + summit 135 = 365 > maximum_height_m
-  # 360 and would fail the composed-relief budget check; trimmed to fit.
-  shield_height_m: 220
-  summit_radius_m: 360
+  shield_height_m: 225
+  summit_radius_m: 400
   summit_exponent: 2.2
-  summit_height_m: 130
-  caldera_radius_m: 120
-  caldera_depth_m: 38
+  summit_height_m: 132
+  caldera_radius_m: 130
+  caldera_depth_m: 40
   caldera_rim_height_m: 6
-  radial_ridge_count: 9
+  radial_ridge_count: 11
   collapse_direction_deg: 215
-  collapse_depth_m: 45
+  collapse_depth_m: 48
 
 surface_noise:
-  # ~4% of island height; 360 + 12 + 3 = 375 <= 384 - 2 ceiling margin.
   regional_amplitude_m: 12
   local_amplitude_m: 3
   voxel_amplitude_m: 0.4
@@ -50,49 +40,38 @@ surface_noise:
 hydrology:
   routing: d8
   rainfall_base: 1.0
-  # Units: accumulation CELLS on the regional grid (2688 m / regional_m 16 =
-  # 168x168, ~10,700 land cells). At ~2% / ~8% of land cells these match the
-  # setup_options defaults and should produce several streams and a carved
-  # primary river per major basin.
-  stream_threshold: 220
-  permanent_river_threshold: 900
-  minimum_stream_length_m: 60
+  stream_threshold: 180
+  permanent_river_threshold: 750
+  minimum_stream_length_m: 80
 
 erosion:
   stream_power_iterations: 22
   m: 0.48
   n: 1.0
-  # 22 iterations x 0.2 m cap = <=4.4 m of carving on 356 m of relief.
   maximum_step_m: 0.2
   thermal_iterations: 12
   thermal_transfer_rate: 0.16
 
 coast:
-  shelf_width_min_m: 80
-  # setup_options allows 300, but coastline (~1100 m + warp) + 300 exceeds the
-  # 1344 m half-extent and the shelf would clip into a wall at the world edge.
-  shelf_width_max_m: 200
-  # Floor budget: sea 2 - 20 - 8 m deep-falloff slack = -26 >> -384 chunk floor.
+  shelf_width_min_m: 90
+  shelf_width_max_m: 240
   shelf_depth_min_m: 8
-  shelf_depth_max_m: 20
+  shelf_depth_max_m: 22
   deep_slope_min: 0.18
   deep_slope_max: 0.5
 
 beaches:
   maximum_slope_deg: 13
-  width_min_m: 8
-  width_max_m: 30
+  width_min_m: 10
+  width_max_m: 36
   berm_height_min_m: 0.5
-  berm_height_max_m: 1.2
+  berm_height_max_m: 1.4
 
 caves:
-  # Chambers land at 0.38-0.56 * shield_radius = ~360-530 m from center along
-  # the 215 deg collapse bearing, well inside the island.
-  chamber_count_min: 5
-  chamber_count_max: 7
-  passage_radius_min_m: 2.0
-  passage_radius_max_m: 4.5
+  chamber_count_min: 6
+  chamber_count_max: 9
+  passage_radius_min_m: 2.2
+  passage_radius_max_m: 5.0
   minimum_cover_m: 8
-  # Relief is ~356 m; 80 m max depth keeps chambers inside the edifice.
-  maximum_depth_m: 80
+  maximum_depth_m: 90
   overhang_enabled: true

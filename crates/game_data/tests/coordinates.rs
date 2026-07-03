@@ -23,6 +23,9 @@ fn recipe_to_world_subtracts_coord_offset() {
         coord_offset: [128.0, 0.0, 128.0],
         island_gen: None,
         resolution: None,
+        island_atlas_baked: None,
+        hydrology_bodies: Vec::new(),
+        material_catalog: None,
     };
 
     let recipe = [140.0, 50.0, 132.0];
@@ -58,6 +61,9 @@ fn rejects_non_unit_cell_size() {
         coord_offset: None,
         island_gen: None,
         resolution: None,
+        island_atlas_baked: None,
+        hydrology_bodies: Vec::new(),
+        material_catalog: None,
     })]);
 
     assert!(!report.is_ok());

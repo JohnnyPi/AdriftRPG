@@ -5,19 +5,27 @@ use crate::field2d::{smoothstep, Field2D};
 use crate::island_gen::params::IslandGenParams;
 use crate::noise::ValueNoise;
 
-const SALT_SHELF_WIDTH: u64 = 0xC04A_7D15_5E1F_0001;
-const SALT_SHELF_DEPTH: u64 = 0xC04A_7D15_5E1F_0002;
-const SALT_DEEP_SLOPE: u64 = 0xC04A_7D15_D33F_0003;
+pub const SALT_SHELF_WIDTH: u64 = 0xC04A_7D15_5E1F_0001;
+pub const SALT_SHELF_DEPTH: u64 = 0xC04A_7D15_5E1F_0002;
+pub const SALT_DEEP_SLOPE: u64 = 0xC04A_7D15_D33F_0003;
 
-fn seeded_unit(params: &IslandGenParams, wx: f32, wz: f32, salt: u64) -> f32 {
-    ValueNoise::new(params.seed.wrapping_add(salt)).sample(wx * 0.0025, 0.0, wz * 0.0025)
+fn seeded_unit(noise: &ValueNoise, wx: f32, wz: f32) -> f32 {
+    noise.sample(wx * 0.0025, 0.0, wz * 0.0025)
 }
 
 fn range_mix(min: f32, max: f32, t: f32) -> f32 {
     min + (max - min) * t.clamp(0.0, 1.0)
 }
 
-pub fn bathymetry_height(params: &IslandGenParams, wx: f32, wz: f32, coast_distance: f32) -> f32 {
+pub fn bathymetry_height(
+    params: &IslandGenParams,
+    wx: f32,
+    wz: f32,
+    coast_distance: f32,
+    shelf_width_noise: &ValueNoise,
+    shelf_depth_noise: &ValueNoise,
+    deep_slope_noise: &ValueNoise,
+) -> f32 {
     let sea = params.island.sea_level_m;
     if coast_distance <= 0.0 {
         return sea;
@@ -26,17 +34,17 @@ pub fn bathymetry_height(params: &IslandGenParams, wx: f32, wz: f32, coast_dista
     let shelf_width = range_mix(
         coast.shelf_width_min_m,
         coast.shelf_width_max_m,
-        seeded_unit(params, wx, wz, SALT_SHELF_WIDTH),
+        seeded_unit(shelf_width_noise, wx, wz),
     );
     let shelf_depth = range_mix(
         coast.shelf_depth_min_m,
         coast.shelf_depth_max_m,
-        seeded_unit(params, wx, wz, SALT_SHELF_DEPTH),
+        seeded_unit(shelf_depth_noise, wx, wz),
     );
     let deep_slope = range_mix(
         coast.deep_slope_min,
         coast.deep_slope_max,
-        seeded_unit(params, wx, wz, SALT_DEEP_SLOPE),
+        seeded_unit(deep_slope_noise, wx, wz),
     );
 
     if coast_distance < shelf_width {
@@ -220,13 +228,22 @@ mod tests {
         }
     }
 
+    fn bathymetry_noises(params: &IslandGenParams) -> (ValueNoise, ValueNoise, ValueNoise) {
+        (
+            ValueNoise::new(params.seed.wrapping_add(SALT_SHELF_WIDTH)),
+            ValueNoise::new(params.seed.wrapping_add(SALT_SHELF_DEPTH)),
+            ValueNoise::new(params.seed.wrapping_add(SALT_DEEP_SLOPE)),
+        )
+    }
+
     #[test]
     fn bathymetry_deepens_past_shelf_width() {
         let params = IslandGenParams::default();
+        let (w, d, s) = bathymetry_noises(&params);
         let shelf_width = params.coast.shelf_width_min_m
             + (params.coast.shelf_width_max_m - params.coast.shelf_width_min_m) * 0.5;
-        let shallow = bathymetry_height(&params, 0.0, 0.0, shelf_width);
-        let deep = bathymetry_height(&params, 0.0, 0.0, shelf_width * 2.0);
+        let shallow = bathymetry_height(&params, 0.0, 0.0, shelf_width, &w, &d, &s);
+        let deep = bathymetry_height(&params, 0.0, 0.0, shelf_width * 2.0, &w, &d, &s);
         assert!(
             deep < shallow,
             "depth at 2x shelf ({deep}) should exceed 1x ({shallow})"
@@ -242,8 +259,10 @@ mod tests {
         let wx = 120.0;
         let wz = -40.0;
         let dist = 80.0;
-        let ha = bathymetry_height(&a, wx, wz, dist);
-        let hb = bathymetry_height(&b, wx, wz, dist);
+        let (wa, da, sa) = bathymetry_noises(&a);
+        let (wb, db, sb) = bathymetry_noises(&b);
+        let ha = bathymetry_height(&a, wx, wz, dist, &wa, &da, &sa);
+        let hb = bathymetry_height(&b, wx, wz, dist, &wb, &db, &sb);
         assert!(
             (ha - hb).abs() > 0.01,
             "different seeds should change shelf profile at the same point"

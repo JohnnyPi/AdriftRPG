@@ -82,7 +82,7 @@ fn handle_edit_keys(
         }
     }
 
-    let Some(source) = pipeline.density_source.clone() else {
+    let Some(source) = pipeline.density_source.as_ref() else {
         return;
     };
 

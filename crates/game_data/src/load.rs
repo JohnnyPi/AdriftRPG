@@ -91,59 +91,65 @@ fn parse_yaml_file(path: &Path, text: &str) -> DataResult<RawDefinition> {
         .join("/");
 
     let definition = if relative.contains("/config/app") || id.starts_with("app.") {
-        RawDefinition::App(deserialize(path, text)?)
+        RawDefinition::App(deserialize_value(path, value)?)
     } else if id.starts_with("performance.") {
-        RawDefinition::Performance(deserialize(path, text)?)
+        RawDefinition::Performance(deserialize_value(path, value)?)
     } else if id.starts_with("player.") {
-        RawDefinition::Player(deserialize(path, text)?)
+        RawDefinition::Player(deserialize_value(path, value)?)
     } else if id.starts_with("camera.") {
-        RawDefinition::Camera(deserialize(path, text)?)
+        RawDefinition::Camera(deserialize_value(path, value)?)
     } else if id.starts_with("lighting.") {
-        RawDefinition::Lighting(deserialize(path, text)?)
+        RawDefinition::Lighting(deserialize_value(path, value)?)
     } else if id.starts_with("water.") {
-        RawDefinition::Water(deserialize(path, text)?)
+        RawDefinition::Water(deserialize_value(path, value)?)
     } else if id.starts_with("world.") {
-        RawDefinition::World(deserialize(path, text)?)
+        RawDefinition::World(deserialize_value(path, value)?)
     } else if id.starts_with("terrain.") {
-        RawDefinition::TerrainGeneration(deserialize(path, text)?)
+        RawDefinition::TerrainGeneration(deserialize_value(path, value)?)
     } else if id.starts_with("biomes.") {
-        RawDefinition::Biomes(deserialize(path, text)?)
+        RawDefinition::Biomes(deserialize_value(path, value)?)
     } else if id.starts_with("materials.") {
-        RawDefinition::TerrainMaterials(deserialize(path, text)?)
+        RawDefinition::TerrainMaterials(deserialize_value(path, value)?)
     } else if id.starts_with("surface.") {
-        RawDefinition::SurfaceRules(deserialize(path, text)?)
+        RawDefinition::SurfaceRules(deserialize_value(path, value)?)
     } else if id.starts_with("vegetation.") {
-        RawDefinition::Vegetation(deserialize(path, text)?)
+        RawDefinition::Vegetation(deserialize_value(path, value)?)
     } else if id.starts_with("cave.") {
-        RawDefinition::Cave(deserialize(path, text)?)
+        RawDefinition::Cave(deserialize_value(path, value)?)
     } else if id.starts_with("debug.") {
-        RawDefinition::Debug(deserialize(path, text)?)
+        RawDefinition::Debug(deserialize_value(path, value)?)
     } else if id.starts_with("options.") {
-        RawDefinition::Options(deserialize(path, text)?)
+        RawDefinition::Options(deserialize_value(path, value)?)
     } else if id.starts_with("physics.") {
-        RawDefinition::Physics(deserialize(path, text)?)
-    } else if id.starts_with("river.") {
-        RawDefinition::River(deserialize(path, text)?)
-    } else if id.starts_with("hydrology.") {
-        RawDefinition::Hydrology(deserialize(path, text)?)
+        RawDefinition::Physics(deserialize_value(path, value)?)
     } else if id.starts_with("waterbody.") {
-        RawDefinition::WaterBodyMaterial(deserialize(path, text)?)
+        RawDefinition::WaterBodyMaterial(deserialize_value(path, value)?)
+    } else if id.starts_with("hydrology.") {
+        RawDefinition::Hydrology(deserialize_value(path, value)?)
     } else if id.starts_with("atmosphere.") {
-        RawDefinition::Atmosphere(deserialize(path, text)?)
+        RawDefinition::Atmosphere(deserialize_value(path, value)?)
     } else if id.starts_with("fog.") {
-        RawDefinition::Fog(deserialize(path, text)?)
+        RawDefinition::Fog(deserialize_value(path, value)?)
     } else if id.starts_with("sky.") {
-        RawDefinition::Sky(deserialize(path, text)?)
+        RawDefinition::Sky(deserialize_value(path, value)?)
     } else if id.starts_with("landmarks.") {
-        RawDefinition::Landmarks(deserialize(path, text)?)
+        RawDefinition::Landmarks(deserialize_value(path, value)?)
     } else if id.starts_with("routes.") {
-        RawDefinition::Routes(deserialize(path, text)?)
+        RawDefinition::Routes(deserialize_value(path, value)?)
     } else if id.starts_with("structure.") {
-        RawDefinition::Structure(deserialize(path, text)?)
+        RawDefinition::Structure(deserialize_value(path, value)?)
     } else if id.starts_with("island_gen.") {
-        RawDefinition::IslandGeneration(deserialize(path, text)?)
+        RawDefinition::IslandGeneration(deserialize_value(path, value)?)
     } else if id.starts_with("setup.") {
-        RawDefinition::SetupSchema(deserialize(path, text)?)
+        RawDefinition::SetupSchema(deserialize_value(path, value)?)
+    } else if id.starts_with("textures.") {
+        RawDefinition::TextureRecipe(deserialize_value(path, value)?)
+    } else if id.starts_with("surfaces.") {
+        RawDefinition::SurfaceMaterial(deserialize_value(path, value)?)
+    } else if id.starts_with("catalogs.") {
+        RawDefinition::MaterialCatalog(deserialize_value(path, value)?)
+    } else if id.starts_with("overlays.") {
+        RawDefinition::Overlay(deserialize_value(path, value)?)
     } else {
         return Err(DataError::Parse {
             path: path.display().to_string(),
@@ -154,8 +160,11 @@ fn parse_yaml_file(path: &Path, text: &str) -> DataResult<RawDefinition> {
     Ok(definition)
 }
 
-fn deserialize<T: serde::de::DeserializeOwned>(path: &Path, text: &str) -> DataResult<T> {
-    serde_yaml::from_str(text).map_err(|error| DataError::Parse {
+fn deserialize_value<T: serde::de::DeserializeOwned>(
+    path: &Path,
+    value: serde_yaml::Value,
+) -> DataResult<T> {
+    serde_yaml::from_value(value).map_err(|error| DataError::Parse {
         path: path.display().to_string(),
         message: error.to_string(),
     })
@@ -168,7 +177,11 @@ fn strip_utf8_bom(text: &str) -> &str {
 /// Procedural PBR recipe files use a separate schema and are loaded by `terrain_material_bevy`.
 fn should_skip_config_file(path: &Path) -> bool {
     path.components().any(|component| {
-        component.as_os_str() == "procedural"
+        let s = component.as_os_str();
+        s == "procedural"
+            || s == "baked"
+            || s == "render_profiles"
+            || s.to_string_lossy().ends_with(".atlas")
     })
 }
 

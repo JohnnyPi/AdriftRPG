@@ -1,0 +1,18 @@
+﻿schema_version: 1
+id: cave.testbed_collapse
+description: Collapse-flank cave passage on the authored testbed (bearing ~215 deg).
+
+operations:
+  - type: ellipsoid
+    center: [196.0, 10.0, 196.0]
+    radii: [5.0, 4.0, 5.0]
+    combine: subtract
+  - type: capsule
+    start: [196.0, 10.0, 196.0]
+    end: [188.0, 6.0, 184.0]
+    radius: 3.2
+    combine: subtract
+  - type: ellipsoid
+    center: [184.0, 4.0, 178.0]
+    radii: [7.0, 5.0, 7.0]
+    combine: subtract

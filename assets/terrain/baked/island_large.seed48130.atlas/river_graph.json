@@ -1,0 +1,851 @@
+{
+  "points": [
+    {
+      "position_xz": [
+        0.0,
+        0.0
+      ],
+      "bed_elevation": 348.17252,
+      "water_elevation": 349.77252,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 1.0
+    },
+    {
+      "position_xz": [
+        16.0,
+        -16.0
+      ],
+      "bed_elevation": 331.32175,
+      "water_elevation": 332.92175,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 2.0
+    },
+    {
+      "position_xz": [
+        32.0,
+        -32.0
+      ],
+      "bed_elevation": 308.2308,
+      "water_elevation": 309.8308,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 3.0
+    },
+    {
+      "position_xz": [
+        48.0,
+        -48.0
+      ],
+      "bed_elevation": 279.1114,
+      "water_elevation": 280.7114,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 4.0
+    },
+    {
+      "position_xz": [
+        64.0,
+        -64.0
+      ],
+      "bed_elevation": 250.71399,
+      "water_elevation": 252.314,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 5.0
+    },
+    {
+      "position_xz": [
+        80.0,
+        -80.0
+      ],
+      "bed_elevation": 226.05785,
+      "water_elevation": 227.65785,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 6.0
+    },
+    {
+      "position_xz": [
+        96.0,
+        -80.0
+      ],
+      "bed_elevation": 217.16083,
+      "water_elevation": 222.96663,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 169.0
+    },
+    {
+      "position_xz": [
+        112.0,
+        -64.0
+      ],
+      "bed_elevation": 213.53171,
+      "water_elevation": 222.96663,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 183.0
+    },
+    {
+      "position_xz": [
+        112.0,
+        -48.0
+      ],
+      "bed_elevation": 216.42189,
+      "water_elevation": 222.96663,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 185.0
+    },
+    {
+      "position_xz": [
+        128.0,
+        -32.0
+      ],
+      "bed_elevation": 209.62053,
+      "water_elevation": 222.96663,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 196.0
+    },
+    {
+      "position_xz": [
+        128.0,
+        -16.0
+      ],
+      "bed_elevation": 212.3755,
+      "water_elevation": 222.96663,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 202.0
+    },
+    {
+      "position_xz": [
+        128.0,
+        0.0
+      ],
+      "bed_elevation": 211.88145,
+      "water_elevation": 222.96663,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 210.0
+    },
+    {
+      "position_xz": [
+        128.0,
+        16.0
+      ],
+      "bed_elevation": 213.24258,
+      "water_elevation": 222.96663,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 216.0
+    },
+    {
+      "position_xz": [
+        144.0,
+        32.0
+      ],
+      "bed_elevation": 209.40935,
+      "water_elevation": 222.96663,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 230.0
+    },
+    {
+      "position_xz": [
+        160.0,
+        48.0
+      ],
+      "bed_elevation": 213.88719,
+      "water_elevation": 222.96663,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 244.0
+    },
+    {
+      "position_xz": [
+        176.0,
+        64.0
+      ],
+      "bed_elevation": 221.30174,
+      "water_elevation": 222.96663,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 474.0
+    },
+    {
+      "position_xz": [
+        192.0,
+        80.0
+      ],
+      "bed_elevation": 221.36662,
+      "water_elevation": 222.96663,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 475.0
+    },
+    {
+      "position_xz": [
+        208.0,
+        80.0
+      ],
+      "bed_elevation": 214.58585,
+      "water_elevation": 216.18585,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 477.0
+    },
+    {
+      "position_xz": [
+        224.0,
+        80.0
+      ],
+      "bed_elevation": 206.8751,
+      "water_elevation": 208.47511,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 478.0
+    },
+    {
+      "position_xz": [
+        240.0,
+        80.0
+      ],
+      "bed_elevation": 198.79451,
+      "water_elevation": 200.39452,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 479.0
+    },
+    {
+      "position_xz": [
+        256.0,
+        80.0
+      ],
+      "bed_elevation": 189.22784,
+      "water_elevation": 190.82785,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 480.0
+    },
+    {
+      "position_xz": [
+        272.0,
+        80.0
+      ],
+      "bed_elevation": 180.0565,
+      "water_elevation": 181.65651,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 481.0
+    },
+    {
+      "position_xz": [
+        288.0,
+        80.0
+      ],
+      "bed_elevation": 172.0286,
+      "water_elevation": 173.6286,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 482.0
+    },
+    {
+      "position_xz": [
+        304.0,
+        80.0
+      ],
+      "bed_elevation": 167.08455,
+      "water_elevation": 168.68456,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 483.0
+    },
+    {
+      "position_xz": [
+        320.0,
+        80.0
+      ],
+      "bed_elevation": 162.04034,
+      "water_elevation": 163.64035,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 484.0
+    },
+    {
+      "position_xz": [
+        336.0,
+        80.0
+      ],
+      "bed_elevation": 157.97012,
+      "water_elevation": 159.57013,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 485.0
+    },
+    {
+      "position_xz": [
+        352.0,
+        80.0
+      ],
+      "bed_elevation": 152.4646,
+      "water_elevation": 154.0646,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 486.0
+    },
+    {
+      "position_xz": [
+        368.0,
+        80.0
+      ],
+      "bed_elevation": 147.12099,
+      "water_elevation": 148.721,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 487.0
+    },
+    {
+      "position_xz": [
+        384.0,
+        80.0
+      ],
+      "bed_elevation": 142.14966,
+      "water_elevation": 143.74966,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 488.0
+    },
+    {
+      "position_xz": [
+        400.0,
+        80.0
+      ],
+      "bed_elevation": 137.44191,
+      "water_elevation": 139.04192,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 489.0
+    },
+    {
+      "position_xz": [
+        416.0,
+        80.0
+      ],
+      "bed_elevation": 132.5438,
+      "water_elevation": 134.1438,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 490.0
+    },
+    {
+      "position_xz": [
+        432.0,
+        80.0
+      ],
+      "bed_elevation": 128.08952,
+      "water_elevation": 129.68953,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 491.0
+    },
+    {
+      "position_xz": [
+        448.0,
+        80.0
+      ],
+      "bed_elevation": 123.88089,
+      "water_elevation": 125.48089,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 492.0
+    },
+    {
+      "position_xz": [
+        464.0,
+        80.0
+      ],
+      "bed_elevation": 119.63515,
+      "water_elevation": 121.235146,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 493.0
+    },
+    {
+      "position_xz": [
+        480.0,
+        80.0
+      ],
+      "bed_elevation": 116.142456,
+      "water_elevation": 117.742455,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 494.0
+    },
+    {
+      "position_xz": [
+        496.0,
+        80.0
+      ],
+      "bed_elevation": 112.183586,
+      "water_elevation": 113.783585,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 495.0
+    },
+    {
+      "position_xz": [
+        512.0,
+        80.0
+      ],
+      "bed_elevation": 108.08536,
+      "water_elevation": 109.685356,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 496.0
+    },
+    {
+      "position_xz": [
+        528.0,
+        80.0
+      ],
+      "bed_elevation": 104.23612,
+      "water_elevation": 105.83612,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 497.0
+    },
+    {
+      "position_xz": [
+        544.0,
+        80.0
+      ],
+      "bed_elevation": 98.94806,
+      "water_elevation": 100.54806,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 498.0
+    },
+    {
+      "position_xz": [
+        560.0,
+        80.0
+      ],
+      "bed_elevation": 94.24178,
+      "water_elevation": 95.84178,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 499.0
+    },
+    {
+      "position_xz": [
+        576.0,
+        80.0
+      ],
+      "bed_elevation": 90.664925,
+      "water_elevation": 92.26492,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 500.0
+    },
+    {
+      "position_xz": [
+        592.0,
+        80.0
+      ],
+      "bed_elevation": 87.35847,
+      "water_elevation": 88.958466,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 501.0
+    },
+    {
+      "position_xz": [
+        608.0,
+        80.0
+      ],
+      "bed_elevation": 83.73508,
+      "water_elevation": 85.335075,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 502.0
+    },
+    {
+      "position_xz": [
+        624.0,
+        80.0
+      ],
+      "bed_elevation": 80.16638,
+      "water_elevation": 81.76638,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 503.0
+    },
+    {
+      "position_xz": [
+        640.0,
+        80.0
+      ],
+      "bed_elevation": 76.90653,
+      "water_elevation": 78.50653,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 504.0
+    },
+    {
+      "position_xz": [
+        656.0,
+        80.0
+      ],
+      "bed_elevation": 74.49685,
+      "water_elevation": 76.09685,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 505.0
+    },
+    {
+      "position_xz": [
+        672.0,
+        80.0
+      ],
+      "bed_elevation": 68.86902,
+      "water_elevation": 70.46902,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 506.0
+    },
+    {
+      "position_xz": [
+        688.0,
+        80.0
+      ],
+      "bed_elevation": 65.84986,
+      "water_elevation": 67.44986,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 507.0
+    },
+    {
+      "position_xz": [
+        704.0,
+        80.0
+      ],
+      "bed_elevation": 60.48179,
+      "water_elevation": 62.081787,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 508.0
+    },
+    {
+      "position_xz": [
+        720.0,
+        80.0
+      ],
+      "bed_elevation": 56.641567,
+      "water_elevation": 58.241566,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 509.0
+    },
+    {
+      "position_xz": [
+        736.0,
+        80.0
+      ],
+      "bed_elevation": 53.204422,
+      "water_elevation": 54.80442,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 510.0
+    },
+    {
+      "position_xz": [
+        752.0,
+        80.0
+      ],
+      "bed_elevation": 50.072506,
+      "water_elevation": 51.672504,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 511.0
+    },
+    {
+      "position_xz": [
+        768.0,
+        80.0
+      ],
+      "bed_elevation": 48.689137,
+      "water_elevation": 50.289135,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 512.0
+    },
+    {
+      "position_xz": [
+        784.0,
+        80.0
+      ],
+      "bed_elevation": 46.006042,
+      "water_elevation": 47.60604,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 513.0
+    },
+    {
+      "position_xz": [
+        800.0,
+        80.0
+      ],
+      "bed_elevation": 42.976635,
+      "water_elevation": 44.576633,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 514.0
+    },
+    {
+      "position_xz": [
+        816.0,
+        80.0
+      ],
+      "bed_elevation": 38.073437,
+      "water_elevation": 39.673435,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 515.0
+    },
+    {
+      "position_xz": [
+        832.0,
+        80.0
+      ],
+      "bed_elevation": 34.351543,
+      "water_elevation": 35.95154,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 516.0
+    },
+    {
+      "position_xz": [
+        848.0,
+        80.0
+      ],
+      "bed_elevation": 33.064724,
+      "water_elevation": 34.664722,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 517.0
+    },
+    {
+      "position_xz": [
+        864.0,
+        80.0
+      ],
+      "bed_elevation": 31.248095,
+      "water_elevation": 32.848095,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 518.0
+    },
+    {
+      "position_xz": [
+        880.0,
+        80.0
+      ],
+      "bed_elevation": 28.32665,
+      "water_elevation": 29.926651,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 519.0
+    },
+    {
+      "position_xz": [
+        896.0,
+        80.0
+      ],
+      "bed_elevation": 24.854057,
+      "water_elevation": 26.454058,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 520.0
+    },
+    {
+      "position_xz": [
+        912.0,
+        80.0
+      ],
+      "bed_elevation": 20.782232,
+      "water_elevation": 22.382233,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 521.0
+    },
+    {
+      "position_xz": [
+        928.0,
+        80.0
+      ],
+      "bed_elevation": 18.353827,
+      "water_elevation": 19.953827,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 522.0
+    },
+    {
+      "position_xz": [
+        944.0,
+        80.0
+      ],
+      "bed_elevation": 17.025969,
+      "water_elevation": 18.625969,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 523.0
+    },
+    {
+      "position_xz": [
+        960.0,
+        80.0
+      ],
+      "bed_elevation": 13.919391,
+      "water_elevation": 15.519391,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 524.0
+    },
+    {
+      "position_xz": [
+        976.0,
+        80.0
+      ],
+      "bed_elevation": 10.748603,
+      "water_elevation": 12.348603,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 525.0
+    },
+    {
+      "position_xz": [
+        992.0,
+        80.0
+      ],
+      "bed_elevation": 7.2818623,
+      "water_elevation": 8.881863,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 526.0
+    },
+    {
+      "position_xz": [
+        1008.0,
+        80.0
+      ],
+      "bed_elevation": 3.991257,
+      "water_elevation": 5.591257,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 527.0
+    },
+    {
+      "position_xz": [
+        1024.0,
+        80.0
+      ],
+      "bed_elevation": 1.0552542,
+      "water_elevation": 2.6552544,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 528.0
+    },
+    {
+      "position_xz": [
+        1040.0,
+        80.0
+      ],
+      "bed_elevation": 0.07917333,
+      "water_elevation": 2.4320421,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 529.0
+    },
+    {
+      "position_xz": [
+        1056.0,
+        80.0
+      ],
+      "bed_elevation": -0.754218,
+      "water_elevation": 2.4320421,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 642.0
+    },
+    {
+      "position_xz": [
+        1056.0,
+        96.0
+      ],
+      "bed_elevation": -0.64153385,
+      "water_elevation": 2.4320421,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 697.0
+    },
+    {
+      "position_xz": [
+        1056.0,
+        112.0
+      ],
+      "bed_elevation": 0.8320422,
+      "water_elevation": 2.4320421,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 757.0
+    },
+    {
+      "position_xz": [
+        1056.0,
+        128.0
+      ],
+      "bed_elevation": 0.10342932,
+      "water_elevation": 2.0,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 811.0
+    },
+    {
+      "position_xz": [
+        1056.0,
+        144.0
+      ],
+      "bed_elevation": -1.0874069,
+      "water_elevation": 2.0,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 855.0
+    },
+    {
+      "position_xz": [
+        1056.0,
+        160.0
+      ],
+      "bed_elevation": -1.0354267,
+      "water_elevation": 2.0,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 896.0
+    },
+    {
+      "position_xz": [
+        1056.0,
+        176.0
+      ],
+      "bed_elevation": -0.46272016,
+      "water_elevation": 2.0,
+      "width": 6.5,
+      "depth": 1.6,
+      "discharge": 898.0
+    }
+  ]
+}

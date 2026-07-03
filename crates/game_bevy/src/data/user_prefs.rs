@@ -87,6 +87,28 @@ pub fn load_user_prefs() -> UserSetupPrefs {
     }
 }
 
+/// Align persisted prefs with the loaded registry (warn on drift).
+pub fn sanitize_user_prefs(prefs: &mut UserSetupPrefs, registry: &game_data::ConfigRegistry) {
+    if registry.world_by_id(&prefs.world_stable_id()).is_err() {
+        warn!(
+            world_id = %prefs.world_id,
+            "unknown world_id in user prefs; using active world"
+        );
+        if let Ok(world) = registry.active_world() {
+            prefs.world_id = world.id.as_str().to_string();
+        }
+    }
+    if let Ok(world) = registry.world_by_id(&prefs.world_stable_id()) {
+        if prefs.island_overrides.is_empty() && prefs.seed != world.seed {
+            warn!(
+                seed = prefs.seed,
+                world_seed = world.seed,
+                "user prefs seed differs from world seed with no island overrides"
+            );
+        }
+    }
+}
+
 pub fn save_user_prefs(prefs: &UserSetupPrefs) -> Result<(), String> {
     let dir = user_data_root();
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;

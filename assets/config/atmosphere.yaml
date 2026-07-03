@@ -9,16 +9,22 @@ sun:
 
 ambient:
   color: [0.45, 0.52, 0.62]
-  brightness: 450.0
+  brightness: 0.0
+
+environment:
+  intensity_scale: 1.0
 
 moon:
-  enabled: false
+  enabled: true
   azimuth_deg: 315.0
   elevation_deg: 35.0
-  illuminance: 0.15
+  # Gameplay-boosted moon lux (readable moonlit night, not physical 0.15).
+  illuminance: 2.0
   phase: 1.0
   angular_radius: 0.008
 
 exposure:
-  target: 1.0
+  ev_min: 9.0
+  ev_max: 15.0
+  bias: 0.0
   adaptation_speed: 2.5

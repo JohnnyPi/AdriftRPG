@@ -59,8 +59,13 @@ impl ChunkSlotRemapper {
         }
         let local = self.palette.slot_count;
         if local as usize >= CHUNK_LOCAL_SLOT_COUNT {
-            // Merge overflow into slot 0 (dominant fallback).
-            return 0;
+            let best = self.palette.local_to_global[..self.palette.slot_count as usize]
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, global)| global.abs_diff(global_layer))
+                .map(|(idx, _)| idx as u8)
+                .unwrap_or(0);
+            return best;
         }
         self.palette.local_to_global[local as usize] = global_layer;
         self.palette.slot_count = local.saturating_add(1);

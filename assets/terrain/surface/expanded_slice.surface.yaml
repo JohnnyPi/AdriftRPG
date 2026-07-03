@@ -21,8 +21,29 @@ classifiers:
       - { material: rock, weight: 0.30 }
       - { material: forest_floor, weight: 0.25 }
       - { material: grass, weight: 0.10 }
+  - id: land_forest
+    blend:
+      - { material: forest_floor, weight: 0.55 }
+      - { material: forest_floor, weight: 0.30 }
+      - { material: grass, weight: 0.25 }
+      - { material: wet_rock, weight: 0.15 }
+  - id: land_scrub
+    blend:
+      - { material: grass, weight: 0.40 }
+      - { material: rock, weight: 0.35 }
+      - { material: forest_floor, weight: 0.20 }
+      - { material: sand, weight: 0.10 }
+  - id: land_alpine_rock
+    blend:
+      - { material: rock, weight: 0.65 }
+      - { material: rock, weight: 0.25 }
+      - { material: wet_rock, weight: 0.20 }
+      - { material: grass, weight: 0.05 }
   - id: land_default
     weighted_mix:
+      - { classifier: land_forest, weight: 1.0 }
+      - { classifier: land_scrub, weight: 0.85 }
+      - { classifier: land_alpine_rock, weight: 0.9 }
       - { classifier: land_alpine, weight: 1.0 }
       - { classifier: land_wetland, weight: 1.0 }
       - { classifier: land_core, weight: 1.0 }
@@ -65,25 +86,25 @@ gates:
 
   - id: coast
     when:
-      coast_distance_max: 22.0
-      elevation_above_sea_max: 5.0
+      coast_distance_max: 56.0
+      elevation_above_sea_max: 6.0
     gate_weight:
-      coast_distance: { from: 18.0, to: 22.0, invert: true }
-      elevation_above_sea: { from: 2.0, to: 5.0, invert: true }
+      coast_distance: { from: 28.0, to: 56.0, invert: true }
+      elevation_above_sea: { from: 1.5, to: 6.0, invert: true }
     classifier: coast
 
   - id: river
     when:
-      river_distance_max: 7.0
+      river_distance_max: 18.0
     gate_weight:
-      river_distance: { from: 3.0, to: 7.0, invert: true }
+      river_distance: { from: 4.0, to: 18.0, invert: true }
     classifier: river
 
   - id: cliff
     when:
-      slope_min: 46.0
+      slope_min: 44.0
     gate_weight:
-      slope: { from: 46.0, to: 50.0 }
+      slope: { from: 44.0, to: 52.0 }
     classifier: cliff
 
   - id: land

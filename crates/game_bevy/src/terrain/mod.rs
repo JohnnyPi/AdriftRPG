@@ -1,7 +1,7 @@
 // crates/game_bevy/src/terrain/mod.rs
+mod horizon_skirt;
 mod editing;
 mod features;
-mod island_params;
 mod mesh_convert;
 mod material;
 mod metrics;
@@ -10,26 +10,40 @@ mod recipe;
 mod residency;
 
 pub use editing::TerrainEditingPlugin;
-pub use features::{CameraWaterState, TerrainFeaturePlugin, TerrainFeatureRegistry};
-/// VS2 §20 — river spline generation lives in [`TerrainFeaturePlugin`].
-#[allow(dead_code)]
-pub type RiverGenerationPlugin = TerrainFeaturePlugin;
-/// VS2 §20 — water occupancy registry lives in [`TerrainFeaturePlugin`].
-#[allow(dead_code)]
-pub type WaterBodyPlugin = TerrainFeaturePlugin;
-pub use island_params::island_params_from_compiled;
-pub use material::{TerrainMaterialHandle, TerrainMaterialPlugin};
+pub use features::{
+    effective_runtime_sea_level_m, CameraWaterState, TerrainFeaturePlugin, TerrainFeatureRegistry,
+};
+pub use material::{queue_compiled_palette_reload, TerrainMaterialHandle, TerrainMaterialPlugin};
+pub use mesh_convert::insert_terrain_material_attributes;
 pub use metrics::{TerrainPipelineMetrics, WorldSeedOverride};
-pub use recipe::build_density_source_from_prefs;
+pub use recipe::{build_density_source, build_density_source_from_prefs};
 pub use terrain_generation::compile_terrain_recipe;
-#[cfg(test)]
-pub(crate) use recipe::build_density_source;
+
+/// Cheap probe that the terrain recipe (and optional atlas) can be built without user prefs.
+pub fn validate_density_source_buildable(
+    registry: &game_data::ConfigRegistry,
+    world_id: Option<&shared::StableId>,
+    seed_override: Option<u64>,
+    field_stack: terrain_generation::FieldStackParams,
+) -> Result<(), String> {
+    let source = build_density_source(registry, world_id, seed_override, field_stack);
+    let _ = source.recipe();
+    if let Some(atlas) = source.atlas() {
+        if !atlas.validation_passed {
+            return Err(format!(
+                "island atlas validation failed: {}",
+                atlas.validation_messages.join("; ")
+            ));
+        }
+    }
+    Ok(())
+}
 pub use pipeline::{
     regen_terrain_with_seed, TerrainPipelineState, TerrainPlugin, TerrainRecipeRevision,
     TerrainRegenPending, TerrainSpawnPoint, TerrainWorldInitSet,
 };
 pub use residency::{
-    draw_residency_rings, spawn_terrain_collider_ready, spawn_terrain_uploaded,
+    chunk_world_center, draw_residency_rings, spawn_terrain_collider_ready, spawn_terrain_uploaded,
     world_position_in_decoration_radius, world_position_in_high_detail_radius,
     ChunkResidencyPlugin, TerrainWorldRuntime,
 };
@@ -52,6 +66,8 @@ pub enum ChunkState {
     #[default]
     Unrequested,
     GeneratingDensity,
+    /// Density samples cached; mesh only when inside render radius.
+    DensityReady,
     Meshing,
     AwaitingUpload,
     Ready,

@@ -1,15 +1,17 @@
 // crates/game_bevy/src/scene/bootstrap.rs
+use bevy::light::{light_consts::lux, CascadeShadowConfig, CascadeShadowConfigBuilder};
 use bevy::prelude::*;
-use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder};
 use tracing::info;
 
 use crate::data::ConfigRegistryResource;
+use crate::environment::atmosphere::{atmosphere_clear_color, attach_volumetric_sun};
+use crate::environment::celestial::MoonLight;
 use crate::environment::lighting_state::sun_direction_from_angles;
-use crate::environment::{CaveAmbientZone, SunLight};
+use crate::environment::{SunLight};
 use crate::player::spawn_player;
 use crate::state::AppState;
-use crate::terrain::TerrainSpawnPoint;
-use crate::terrain::TerrainWorldInitSet;
+use crate::terrain::{TerrainSpawnPoint, TerrainWorldInitSet};
+use crate::environment::config_init::EnvironmentInitSet;
 
 pub struct BootstrapScenePlugin;
 
@@ -17,7 +19,9 @@ impl Plugin for BootstrapScenePlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             OnEnter(AppState::Running),
-            spawn_bootstrap_scene.after(TerrainWorldInitSet),
+            spawn_bootstrap_scene
+                .after(TerrainWorldInitSet)
+                .after(EnvironmentInitSet),
         );
     }
 }
@@ -26,7 +30,6 @@ fn spawn_bootstrap_scene(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut ambient: ResMut<GlobalAmbientLight>,
     registry: Res<ConfigRegistryResource>,
     spawn_point: Res<TerrainSpawnPoint>,
 ) {
@@ -40,9 +43,8 @@ fn spawn_bootstrap_scene(
         .map(|p| p.gravity_mps2)
         .unwrap_or(player.gravity_mps2);
 
-    let sun_dir = registry
-        .0
-        .active_atmosphere()
+    let atmo = registry.0.active_atmosphere();
+    let sun_dir = atmo
         .map(|atmo| sun_direction_from_angles(atmo.sun_azimuth_deg, atmo.sun_elevation_deg))
         .unwrap_or_else(|| {
             Vec3::new(
@@ -52,38 +54,12 @@ fn spawn_bootstrap_scene(
             )
             .normalize_or_zero()
         });
-    let (sun_illuminance, sun_color) = registry
-        .0
-        .active_atmosphere()
-        .map(|atmo| (atmo.sun_illuminance_lux, atmo.sun_color))
-        .unwrap_or((lighting.sun_illuminance_lux, lighting.sun_color));
+    let sun_color = atmo
+        .map(|atmo| atmo.sun_color)
+        .unwrap_or(lighting.sun_color);
 
-    let sky_color = if let Some(atmo) = registry.0.active_atmosphere() {
-        Color::srgb(atmo.ambient_color[0] * 0.9, atmo.ambient_color[1] * 0.95, atmo.ambient_color[2] * 1.05)
-    } else {
-        Color::srgb(
-            lighting.fog_color[0],
-            lighting.fog_color[1],
-            lighting.fog_color[2],
-        )
-    };
-    commands.insert_resource(ClearColor(sky_color));
-
-    if let Some(atmo) = registry.0.active_atmosphere() {
-        ambient.color = Color::srgb(
-            atmo.ambient_color[0],
-            atmo.ambient_color[1],
-            atmo.ambient_color[2],
-        );
-        ambient.brightness = atmo.ambient_brightness;
-    } else {
-        ambient.color = Color::srgb(
-            lighting.ambient_color[0],
-            lighting.ambient_color[1],
-            lighting.ambient_color[2],
-        );
-        ambient.brightness = lighting.ambient_brightness;
-    }
+    commands.insert_resource(atmosphere_clear_color());
+    commands.insert_resource(GlobalAmbientLight::NONE);
 
     commands.insert_resource(avian3d::prelude::Gravity(Vec3::new(
         0.0,
@@ -91,28 +67,38 @@ fn spawn_bootstrap_scene(
         0.0,
     )));
 
-    commands.spawn((
-        SunLight,
-        DirectionalLight {
-            illuminance: sun_illuminance,
-            color: Color::srgb(sun_color[0], sun_color[1], sun_color[2]),
-            shadow_maps_enabled: lighting.sun_shadows_enabled && performance.shadows_enabled,
-            ..default()
-        },
-        cascade_shadow_config(&performance.shadow_quality),
-        Transform::from_rotation(Quat::from_rotation_arc(-Vec3::Z, sun_dir)),
-    ));
+    let sun_entity = commands
+        .spawn((
+            SunLight,
+            DirectionalLight {
+                illuminance: lux::RAW_SUNLIGHT,
+                color: Color::srgb(sun_color[0], sun_color[1], sun_color[2]),
+                shadow_maps_enabled: lighting.sun_shadows_enabled && performance.shadows_enabled,
+                ..default()
+            },
+            cascade_shadow_config(&performance.shadow_quality),
+            Transform::from_rotation(Quat::from_rotation_arc(-Vec3::Z, sun_dir)),
+        ))
+        .id();
+    attach_volumetric_sun(&mut commands, sun_entity);
 
-    commands.spawn((
-        CaveAmbientZone,
-        PointLight {
-            color: Color::srgb(0.35, 0.45, 0.65),
-            intensity: 120000.0,
-            range: 25.0,
-            ..default()
-        },
-        Transform::from_xyz(26.0, -2.0, 12.0),
-    ));
+    if let Some(atmo) = atmo {
+        if atmo.moon_enabled {
+            let moon_dir = sun_direction_from_angles(atmo.moon_azimuth_deg, atmo.moon_elevation_deg);
+            commands.spawn((
+                MoonLight,
+                DirectionalLight {
+                    illuminance: atmo.moon_illuminance,
+                    color: Color::srgb(0.72, 0.78, 0.92),
+                    shadow_maps_enabled: false,
+                    ..default()
+                },
+                Transform::from_rotation(Quat::from_rotation_arc(-Vec3::Z, moon_dir)),
+            ));
+        }
+    }
+
+    // Demo cave beacon light is spawned by the interaction module when present.
 
     spawn_player(
         &mut commands,

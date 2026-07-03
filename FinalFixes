@@ -1,5 +1,0 @@
-Two minor items (not FINAL_REVIEW findings, noting for completeness):
-
-Field2D<u8>::sample_nearest doesn't have the zero-size guard that sample_bilinear has — self.width - 1 underflows if width is 0. One-line guard would match the f32 path.
-Stylistic: the impl<T: Copy> Field2D<T> block (lines 13–30) sits above the struct definition — legal, just unusual placement, presumably an artifact of the edit that added tier().
-

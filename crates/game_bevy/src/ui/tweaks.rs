@@ -15,10 +15,10 @@ pub struct LightingTweaks {
 impl Default for LightingTweaks {
     fn default() -> Self {
         Self {
-            fog_color: [0.62, 0.74, 0.86],
-            fog_start_m: 40.0,
-            fog_end_m: 220.0,
-            override_fog: true,
+            fog_color: [0.58, 0.68, 0.76],
+            fog_start_m: 60.0,
+            fog_end_m: 520.0,
+            override_fog: false,
         }
     }
 }
@@ -56,7 +56,6 @@ impl Default for MovementTweaks {
 pub struct PhysicsTweaks {
     pub gravity: f32,
     pub prop_friction: f32,
-    pub platform_speed: f32,
     pub use_overrides: bool,
 }
 
@@ -65,7 +64,6 @@ impl Default for PhysicsTweaks {
         Self {
             gravity: 18.0,
             prop_friction: 0.6,
-            platform_speed: 2.5,
             use_overrides: false,
         }
     }
@@ -84,6 +82,7 @@ pub struct WorldTweaks {
     pub decoration_radius: i32,
     pub high_detail_radius: i32,
     pub show_residency_rings: bool,
+    pub show_semantic_landmarks: bool,
 }
 
 impl Default for WorldTweaks {
@@ -95,6 +94,7 @@ impl Default for WorldTweaks {
             decoration_radius: 5,
             high_detail_radius: 4,
             show_residency_rings: false,
+            show_semantic_landmarks: false,
         }
     }
 }
@@ -123,6 +123,28 @@ impl TerrainTweaks {
     }
 }
 
+/// Terrain material shader and overlay overrides.
+#[derive(Resource, Clone, Debug)]
+pub struct TerrainMaterialTweaks {
+    pub global_wetness: f32,
+    pub global_moss: f32,
+    pub macro_variation_strength: f32,
+    pub debug_mode: u32,
+    pub use_overrides: bool,
+}
+
+impl Default for TerrainMaterialTweaks {
+    fn default() -> Self {
+        Self {
+            global_wetness: 0.0,
+            global_moss: 0.0,
+            macro_variation_strength: 0.10,
+            debug_mode: 0,
+            use_overrides: false,
+        }
+    }
+}
+
 impl Default for TerrainTweaks {
     fn default() -> Self {
         Self {
@@ -136,9 +158,6 @@ impl Default for TerrainTweaks {
 }
 
 /// Water body overrides (Phase 5+).
-///
-/// `pool_elevation_m` was removed with the legacy demo hydrology (the
-/// unbounded upland pool at 31.5 m); atlas worlds have sea + generated river.
 #[derive(Resource, Clone, Debug)]
 pub struct WaterTweaks {
     pub sea_level_m: f32,
@@ -150,9 +169,9 @@ pub struct WaterTweaks {
 impl Default for WaterTweaks {
     fn default() -> Self {
         Self {
-            sea_level_m: 0.0,
-            shallow_color: [0.2, 0.55, 0.65],
-            deep_color: [0.05, 0.2, 0.35],
+            sea_level_m: 2.0,
+            shallow_color: [0.18, 0.62, 0.58],
+            deep_color: [0.03, 0.18, 0.32],
             use_overrides: false,
         }
     }
@@ -180,25 +199,86 @@ impl Default for RiverTweaks {
 
 /// Map clock hours (0–24) to sun azimuth/elevation for lighting tests.
 pub fn sun_angles_from_time_of_day(hours: f32) -> (f32, f32) {
-    use std::f32::consts::PI;
+    use std::f32::consts::TAU;
     let hour = hours.rem_euclid(24.0);
-    // Solar noon at 12:00, sunrise/sunset near 6:00 / 18:00.
-    let day_phase = ((hour - 6.0) / 12.0).clamp(0.0, 1.0) * PI;
-    let elevation = day_phase.sin() * 62.0;
+    let phase = (hour - 6.0) / 24.0 * TAU;
+    let elevation = phase.sin() * 62.0;
     let azimuth = 55.0 + hour * 15.0;
     (azimuth.rem_euclid(360.0), elevation)
 }
 
 /// Directional lux from sun elevation (matches perceived day/night).
 pub fn sun_illuminance_for_elevation(elevation_deg: f32) -> f32 {
-    let day = ((elevation_deg + 8.0) / 70.0).clamp(0.0, 1.0);
-    400.0 + day.powf(1.35) * 99_600.0
+    if elevation_deg <= -6.0 {
+        return 0.0;
+    }
+    let day = ((elevation_deg + 6.0) / 70.0).clamp(0.0, 1.0);
+    day.powf(0.65) * 100_000.0
+}
+
+/// Peak sun scale applied on top of the elevation curve (keeps HDR headroom).
+pub const SUN_PEAK_SCALE: f32 = 0.8;
+
+/// Atmosphere environment-map intensity from sun elevation (night floor for readability).
+pub fn environment_intensity_for_elevation(elevation_deg: f32, scale: f32) -> f32 {
+    let day = ((elevation_deg + 6.0) / 66.0).clamp(0.0, 1.0);
+    const NIGHT_FLOOR: f32 = 0.15;
+    const DAY_PEAK: f32 = 0.9;
+    (NIGHT_FLOOR + day.powf(0.7) * (DAY_PEAK - NIGHT_FLOOR)) * scale
+}
+
+/// Gameplay moon lux from celestial state (readable moonlit nights).
+pub fn moon_gameplay_illuminance(
+    sun_elevation_deg: f32,
+    moon_elevation_deg: f32,
+    moon_phase: f32,
+    moon_lux_max: f32,
+    cloud_cover: f32,
+) -> f32 {
+    if sun_elevation_deg >= 6.0 {
+        return 0.0;
+    }
+    let night = sun_elevation_deg < -2.0;
+    let twilight = !night;
+    let elevation = (moon_elevation_deg / 45.0).clamp(0.0, 1.0);
+    let phase = moon_phase.clamp(0.0, 1.0).powf(0.8);
+    let clouds = 1.0 - cloud_cover * 0.85;
+    let strength = elevation * phase * clouds * moon_lux_max;
+    if night {
+        strength
+    } else if twilight {
+        strength * 0.25
+    } else {
+        0.0
+    }
 }
 
 /// Ambient fill that dims with the sun.
 pub fn ambient_brightness_for_elevation(elevation_deg: f32, base: f32) -> f32 {
     let day = ((elevation_deg + 6.0) / 60.0).clamp(0.0, 1.0);
     base * (0.12 + day * 0.88)
+}
+
+/// Warm sun color near the horizon, neutral at midday.
+pub fn sun_color_for_elevation(elevation_deg: f32) -> [f32; 3] {
+    let t = (1.0 - (elevation_deg / 12.0).clamp(0.0, 1.0)).powf(1.4);
+    [
+        1.0 * (1.0 - t) + t * 1.0,
+        0.97 * (1.0 - t) + t * 0.72,
+        0.92 * (1.0 - t) + t * 0.45,
+    ]
+}
+
+/// Camera EV100 from sun elevation; tuned for readable nights and clear midday.
+pub fn exposure_ev_for_elevation(
+    elevation_deg: f32,
+    min_ev: f32,
+    max_ev: f32,
+    bias: f32,
+) -> f32 {
+    let day = ((elevation_deg + 6.0) / 66.0).clamp(0.0, 1.0);
+    let ev = min_ev + day.powf(0.85) * (max_ev - min_ev);
+    (ev + bias).clamp(min_ev, max_ev)
 }
 
 /// Atmosphere / sky overrides (Phase 7–9).
@@ -209,8 +289,10 @@ pub struct AtmosphereTweaks {
     pub time_of_day_hours: f32,
     pub sun_azimuth_deg: f32,
     pub sun_elevation_deg: f32,
-    pub exposure_min: f32,
-    pub exposure_max: f32,
+    pub exposure_ev_min: f32,
+    pub exposure_ev_max: f32,
+    pub exposure_bias: f32,
+    pub environment_intensity_scale: f32,
     pub zenith_color: [f32; 3],
     pub horizon_color: [f32; 3],
     pub mie_strength: f32,
@@ -221,17 +303,19 @@ pub struct AtmosphereTweaks {
 
 impl Default for AtmosphereTweaks {
     fn default() -> Self {
-        let (azimuth, elevation) = sun_angles_from_time_of_day(10.0);
         Self {
             drive_sun_from_time_of_day: false,
             time_of_day_hours: 10.0,
-            sun_azimuth_deg: azimuth,
-            sun_elevation_deg: elevation,
-            exposure_min: 0.4,
-            exposure_max: 1.6,
-            zenith_color: [0.25, 0.45, 0.75],
-            horizon_color: [0.62, 0.74, 0.86],
-            mie_strength: 0.5,
+            // Match atmosphere.default and sky.expanded_showcase (active presentation).
+            sun_azimuth_deg: 145.0,
+            sun_elevation_deg: 42.0,
+            exposure_ev_min: 9.0,
+            exposure_ev_max: 15.0,
+            exposure_bias: 0.0,
+            environment_intensity_scale: 1.0,
+            zenith_color: [0.22, 0.42, 0.78],
+            horizon_color: [0.58, 0.72, 0.88],
+            mie_strength: 0.55,
             height_fog_density: 0.02,
             underwater_fog_density: 0.15,
             use_overrides: false,
@@ -273,15 +357,26 @@ pub struct WaterPhysicsTweaks {
     pub flow_multiplier: f32,
     pub shallow_depth_m: f32,
     pub shallow_speed_scale: f32,
+    pub swim_up_speed_mps: f32,
+    pub submerged_sink_cap_mps: f32,
+    /// When true, buoyancy only applies in the shallow wading band near the surface.
+    pub buoyancy_surface_only: bool,
+}
+
+impl WaterPhysicsTweaks {
+    pub const DEFAULT_SHALLOW_DEPTH_M: f32 = 1.5;
 }
 
 impl Default for WaterPhysicsTweaks {
     fn default() -> Self {
         Self {
-            buoyancy_strength: 1.0,
+            buoyancy_strength: 0.35,
             flow_multiplier: 1.0,
-            shallow_depth_m: 1.5,
+            shallow_depth_m: Self::DEFAULT_SHALLOW_DEPTH_M,
             shallow_speed_scale: 0.7,
+            swim_up_speed_mps: 3.2,
+            submerged_sink_cap_mps: 2.5,
+            buoyancy_surface_only: true,
         }
     }
 }
@@ -301,5 +396,68 @@ impl Default for EcologyTweaks {
             show_wetness_heatmap: false,
             biome_debug_mode: 0,
         }
+    }
+}
+
+#[cfg(test)]
+mod lighting_curve_tests {
+    use super::*;
+
+    #[test]
+    fn noon_exposure_exceeds_night_in_valid_ev_range() {
+        let noon = exposure_ev_for_elevation(62.0, 9.0, 15.0, 0.0);
+        let night = exposure_ev_for_elevation(-10.0, 9.0, 15.0, 0.0);
+        assert!(noon > night);
+        assert!((8.0..=16.0).contains(&noon));
+        assert!((8.0..=16.0).contains(&night));
+    }
+
+    #[test]
+    fn night_exposure_is_readable() {
+        let night = exposure_ev_for_elevation(-10.0, 9.0, 15.0, 0.0);
+        assert!(night >= 9.0);
+    }
+
+    #[test]
+    fn exposure_not_stuck_at_legacy_multiplier() {
+        let noon = exposure_ev_for_elevation(62.0, 9.0, 15.0, 0.0);
+        let night = exposure_ev_for_elevation(-10.0, 9.0, 15.0, 0.0);
+        assert!((noon - 1.6).abs() > 0.5);
+        assert!((night - 1.6).abs() > 0.5);
+    }
+
+    #[test]
+    fn environment_intensity_drops_at_night() {
+        let day = environment_intensity_for_elevation(60.0, 1.0);
+        let night = environment_intensity_for_elevation(-10.0, 1.0);
+        assert!(day > night);
+        assert!(night >= 0.12);
+    }
+
+    #[test]
+    fn moon_visible_at_night() {
+        let lux = moon_gameplay_illuminance(-10.0, 35.0, 1.0, 2.0, 0.0);
+        assert!(lux > 0.5);
+    }
+
+    #[test]
+    fn day_night_cycle_key_hours_have_sane_lighting() {
+        let hours = [0.0, 6.0, 12.0, 18.0, 24.0];
+        let mut noon_ev = 0.0f32;
+        let mut midnight_ev = f32::MAX;
+        for hour in hours {
+            let (_, elevation) = sun_angles_from_time_of_day(hour);
+            let ev = exposure_ev_for_elevation(elevation, 9.0, 15.0, 0.0);
+            let env = environment_intensity_for_elevation(elevation, 1.0);
+            assert!((8.0..=16.0).contains(&ev), "hour {hour} ev {ev}");
+            assert!((0.1..=1.0).contains(&env), "hour {hour} env {env}");
+            noon_ev = noon_ev.max(ev);
+            midnight_ev = midnight_ev.min(ev);
+        }
+        assert!(noon_ev > midnight_ev + 3.0);
+        let (_, midnight_elev) = sun_angles_from_time_of_day(0.0);
+        let moon_lux =
+            moon_gameplay_illuminance(midnight_elev, 35.0, 1.0, 2.0, 0.0);
+        assert!(moon_lux > 0.3, "readable moonlit midnight");
     }
 }

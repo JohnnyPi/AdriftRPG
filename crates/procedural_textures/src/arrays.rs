@@ -1,4 +1,5 @@
 // crates/procedural_textures/src/arrays.rs
+use crate::cache::bake_recipe_with_cache;
 use crate::error::TextureGenerationError;
 use crate::material_recipe::{order_recipes_for_palette, TerrainMaterialRecipe};
 use crate::maps::GeneratedPbrMaps;
@@ -61,7 +62,7 @@ fn build_cpu_arrays_from_ordered(
             )));
         }
 
-        let mut maps = recipe.generator.generate(width, height)?;
+        let mut maps = bake_recipe_with_cache(recipe)?;
         apply_tint(&mut maps, recipe.tint);
         validate_map_lengths(&maps)?;
         albedo.extend_from_slice(&maps.albedo_rgba8);

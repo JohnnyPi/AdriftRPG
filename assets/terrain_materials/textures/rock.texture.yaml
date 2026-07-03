@@ -1,0 +1,16 @@
+﻿schema_version: 1
+id: textures.rock
+resolution: 512
+seed: 1002
+tileable: true
+generator:
+  Rock:
+    seed: 1002
+    scale: 3.0
+    octaves: 6
+    attenuation: 2.0
+    color_light: [0.48, 0.46, 0.44]
+    color_dark: [0.22, 0.21, 0.20]
+    normal_strength: 3.4
+    roughness: 0.85
+    metallic: 0.0

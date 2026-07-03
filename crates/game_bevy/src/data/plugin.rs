@@ -7,6 +7,7 @@ use game_data::{load_registry_from_directory, ConfigRegistry};
 use shared::DataError;
 use tracing::{error, info, warn};
 
+use crate::data::sanitize_user_prefs;
 use crate::data::watcher::YamlWatcher;
 use crate::state::AppState;
 
@@ -41,10 +42,11 @@ fn initial_load(
     mut status: ResMut<ConfigLoadStatus>,
     mut next_state: ResMut<NextState<AppState>>,
 ) {
-    let prefs = crate::data::load_user_prefs();
-    commands.insert_resource(prefs);
+    let mut prefs = crate::data::load_user_prefs();
     match load_registry_from_directory(&status.assets_root) {
         Ok(registry) => {
+            sanitize_user_prefs(&mut prefs, &registry);
+            commands.insert_resource(prefs);
             info!(
                 registry_hash = %registry.hash,
                 world = %registry.app.world,

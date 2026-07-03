@@ -4,6 +4,6 @@ description: Large island — surface comes from the island atlas; no authored o
 # Recipe-space: ~1000 m from the volcano center along the 215 deg collapse
 # bearing, near the coastline on the flank-collapse side (same side as the
 # cave mouth). resolve_player_spawn searches nearby for walkable ground.
-spawn: [525.0, 0.0, 770.0]
+spawn: [781.0, 0.0, 1026.0]
 includes: []
 operations: []

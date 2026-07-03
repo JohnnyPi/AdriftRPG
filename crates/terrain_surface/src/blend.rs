@@ -42,8 +42,12 @@ impl SurfaceMaterialBlend {
 pub struct MaterialVertex {
     pub local_indices: [u8; 4],
     pub weights: [f32; 4],
+    /// Second weight vector for eight-layer regional palettes.
+    pub weights_1: [f32; 4],
     /// Biome color multiplier (defaults to white).
     pub tint: [f32; 3],
+    /// Dynamic overlay channels packed for the terrain shader.
+    pub overlay: [f32; 2],
 }
 
 impl Default for MaterialVertex {
@@ -51,7 +55,9 @@ impl Default for MaterialVertex {
         Self {
             local_indices: [0; 4],
             weights: [1.0, 0.0, 0.0, 0.0],
+            weights_1: [0.0; 4],
             tint: [1.0, 1.0, 1.0],
+            overlay: [0.0, 0.0],
         }
     }
 }
@@ -79,7 +85,9 @@ pub fn remap_blend_to_local_slots(
     MaterialVertex {
         local_indices,
         weights,
+        weights_1: [0.0; 4],
         tint: [1.0, 1.0, 1.0],
+        overlay: [0.0, 0.0],
     }
 }
 

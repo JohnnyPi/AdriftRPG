@@ -14,7 +14,10 @@ struct TerrainSettings {
     height_blend_strength: f32,
     layer_count: u32,
     debug_mode: u32,
-    _padding: vec2<f32>,
+    macro_variation_scale: f32,
+    macro_variation_strength: f32,
+    global_wetness: f32,
+    global_moss: f32,
 }
 
 struct TerrainLayerScales {
@@ -152,6 +155,41 @@ fn sample_triplanar_normal(
     return normalize(nx * blend.x + ny * blend.y + nz * blend.z);
 }
 
+fn hash21(p: vec2<f32>) -> f32 {
+    return fract(sin(dot(p, vec2<f32>(127.1, 311.7))) * 43758.5453);
+}
+
+fn macro_noise(world_xz: vec2<f32>) -> f32 {
+    let scale = max(settings.macro_variation_scale, 1.0);
+    let p = world_xz / scale;
+    return hash21(floor(p)) * 0.6 + hash21(floor(p + vec2<f32>(17.0, 31.0))) * 0.4;
+}
+
+fn strongest_four_weights(w: vec4<f32>) -> vec4<f32> {
+    var sorted = array<f32, 4>(w.x, w.y, w.z, w.w);
+    for (var bubble_pass = 0u; bubble_pass < 3u; bubble_pass = bubble_pass + 1u) {
+        for (var i = 0u; i < 3u; i = i + 1u) {
+            if sorted[i] < sorted[i + 1u] {
+                let tmp = sorted[i];
+                sorted[i] = sorted[i + 1u];
+                sorted[i + 1u] = tmp;
+            }
+        }
+    }
+    let threshold = sorted[3];
+    var out = vec4<f32>(
+        select(0.0, w.x, w.x >= threshold * 0.25),
+        select(0.0, w.y, w.y >= threshold * 0.25),
+        select(0.0, w.z, w.z >= threshold * 0.25),
+        select(0.0, w.w, w.w >= threshold * 0.25),
+    );
+    let sum = out.x + out.y + out.z + out.w;
+    if sum > 0.001 {
+        return out / sum;
+    }
+    return w;
+}
+
 fn global_layer_for_local(local: u32) -> u32 {
     if local >= 8u {
         return 0u;
@@ -248,7 +286,14 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
         u32(idx23.x),
         u32(idx23.y),
     );
-    var blend_weights = array<f32, 4>(weights.x, weights.y, weights.z, weights.w);
+    var blend_weights = strongest_four_weights(weights);
+
+    var vertex_wetness = 0.0;
+#ifdef VERTEX_TANGENTS
+    vertex_wetness = in.world_tangent.w;
+#endif
+    let wetness = clamp(vertex_wetness + settings.global_wetness, 0.0, 1.0);
+    let moss = settings.global_moss;
 
     var height_weights = array<f32, 4>(0.0, 0.0, 0.0, 0.0);
     var height_sum = 0.0;
@@ -314,6 +359,13 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     albedo *= biome_tint;
 #endif
 
+    let macro_n = macro_noise(world_pos.xz);
+    let macro_tint = 1.0 + (macro_n - 0.5) * settings.macro_variation_strength;
+    albedo *= macro_tint;
+    albedo *= 1.0 - wetness * 0.28;
+    roughness = clamp(roughness * (1.0 - wetness * 0.32), 0.04, 1.0);
+    albedo = mix(albedo, albedo * vec3<f32>(0.55, 0.75, 0.45), moss * 0.35);
+
     if settings.debug_mode == 1u {
         var dominant = 0u;
         var dominant_w = 0.0;
@@ -325,6 +377,14 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
         }
         let hue = f32(dominant) / max(f32(settings.layer_count), 1.0);
         return vec4<f32>(hue, 0.5, 1.0 - hue, 1.0);
+    }
+
+    if settings.debug_mode == 3u {
+        return vec4<f32>(wetness, moss, 0.0, 1.0);
+    }
+    if settings.debug_mode == 4u {
+        let macro_n = macro_noise(world_pos.xz);
+        return vec4<f32>(macro_n, macro_n, macro_n, 1.0);
     }
 
     var pbr_input: PbrInput = pbr_input_new();

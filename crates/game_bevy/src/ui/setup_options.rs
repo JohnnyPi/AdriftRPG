@@ -120,12 +120,13 @@ fn draw_setup_options(
         return;
     };
 
-    let schema = registry.0.active_setup_schema().ok();
-    let island_base = registry
+    let schema = registry
         .0
-        .world_by_id(&prefs.world_stable_id())
-        .ok()
-        .and_then(|w| registry.0.island_generation_for_world(w));
+        .effective_setup_schema_for_id(&prefs.world_stable_id())
+        .or_else(|| registry.0.active_setup_schema().ok());
+    let world = registry.0.world_by_id(&prefs.world_stable_id()).ok();
+    let island_base = world.and_then(|w| registry.0.island_generation_for_world(w));
+    let baked_atlas = world.and_then(|w| w.island_atlas_baked.as_deref());
 
     let mut viewport_ui = egui::Ui::new(
         ctx.clone(),
@@ -189,7 +190,19 @@ fn draw_setup_options(
                     }
                 });
 
-            if ui
+            if let Some(baked_path) = baked_atlas {
+                let world_seed = world.map(|w| w.seed).unwrap_or(prefs.seed);
+                ui.label(format!("Terrain: baked atlas (seed {world_seed})"));
+                ui.label(egui::RichText::new(baked_path).small().weak());
+                if ui
+                    .add(
+                        egui::Slider::new(&mut prefs.seed, 1..=999_999).text("Cave seed"),
+                    )
+                    .changed()
+                {
+                    ui_state.params_stale = true;
+                }
+            } else if ui
                 .add(egui::Slider::new(&mut prefs.seed, 1..=999_999).text("Seed"))
                 .changed()
             {

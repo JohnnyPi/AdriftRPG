@@ -1,5 +1,5 @@
 ﻿schema_version: 1
-id: setup.default
+id: setup.large
 
 groups:
   - id: island
@@ -25,7 +25,7 @@ groups:
         min: -5
         max: 5
         step: 0.5
-        default: 0
+        default: 2.0
       - id: lobe_count
         label: Geological lobes
         bind: island.lobe_count
@@ -57,14 +57,14 @@ groups:
         min: 80
         max: 400
         step: 5
-        default: 230
+        default: 220
       - id: summit_height
         label: Summit height (m)
         bind: volcano.summit_height_m
         min: 40
         max: 250
         step: 5
-        default: 135
+        default: 130
       - id: caldera_depth
         label: Caldera depth (m)
         bind: volcano.caldera_depth_m
@@ -121,7 +121,7 @@ groups:
         min: 40
         max: 500
         step: 10
-        default: 300
+        default: 200
       - id: beach_slope
         label: Max beach slope (deg)
         bind: beaches.maximum_slope_deg

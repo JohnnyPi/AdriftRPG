@@ -1,0 +1,14 @@
+﻿schema_version: 1
+id: surfaces.sand
+texture: textures.sand
+tags:
+  - sand
+  - soft
+rendering:
+  projection: triplanar
+  meters_per_repeat: 2.86
+  normal_strength: 0.7
+responses:
+  wetness:
+    darkening: 0.18
+    roughness_reduction: 0.22

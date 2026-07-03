@@ -14,6 +14,7 @@ pub enum TextureRecipe {
     Ground(GroundConfig),
     Sand(SandConfig),
     Cobblestone(CobblestoneConfig),
+    Graph(crate::texture_graph::TextureGraphRecipe),
 }
 
 pub fn texture_recipe_from_yaml_value(value: &serde_yaml::Value) -> Result<TextureRecipe, TextureGenerationError> {
@@ -44,10 +45,30 @@ pub fn texture_recipe_from_yaml_value(value: &serde_yaml::Value) -> Result<Textu
                 TextureGenerationError::InvalidConfig(format!("Cobblestone config: {e}"))
             })?,
         )),
+        "Graph" => Ok(TextureRecipe::Graph(
+            crate::texture_graph::TextureGraphRecipe::from_yaml_value(config_value, 0)?,
+        )),
         other => Err(TextureGenerationError::InvalidConfig(format!(
             "unknown generator variant '{other}'"
         ))),
     }
+}
+
+/// Parse a texture recipe from a catalog `generator:` block or standalone graph YAML.
+pub fn texture_recipe_from_definition(
+    generator: Option<&serde_yaml::Value>,
+    graph: Option<&serde_yaml::Value>,
+    seed: u32,
+) -> Result<Option<TextureRecipe>, TextureGenerationError> {
+    if let Some(value) = generator {
+        return Ok(Some(texture_recipe_from_yaml_value(value)?));
+    }
+    if let Some(value) = graph {
+        return Ok(Some(TextureRecipe::Graph(
+            crate::texture_graph::TextureGraphRecipe::from_yaml_value(value, seed)?,
+        )));
+    }
+    Ok(None)
 }
 
 impl TextureRecipe {
@@ -63,6 +84,7 @@ impl TextureRecipe {
             Self::Cobblestone(config) => {
                 CobblestoneGenerator::new(config.clone()).generate(width, height)
             }
+            Self::Graph(config) => config.generate(width, height),
         }
     }
 

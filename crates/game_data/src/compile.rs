@@ -123,6 +123,9 @@ pub struct CompiledWorld {
     pub coord_offset: [f32; 3],
     pub island_gen: Option<StableId>,
     pub resolution: Option<GenerationResolutionDefinition>,
+    pub island_atlas_baked: Option<String>,
+    pub hydrology_bodies: Vec<StableId>,
+    pub material_catalog: Option<StableId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -328,6 +331,9 @@ impl CompiledWorld {
             coord_offset: def.coord_offset.unwrap_or([0.0, 0.0, 0.0]),
             island_gen: def.island_gen.clone(),
             resolution: def.resolution.clone(),
+            island_atlas_baked: def.island_atlas_baked.clone(),
+            hydrology_bodies: def.hydrology_bodies.clone(),
+            material_catalog: def.material_catalog.clone(),
         })
     }
 
@@ -336,6 +342,22 @@ impl CompiledWorld {
             position[0] - self.coord_offset[0],
             position[1] - self.coord_offset[1],
             position[2] - self.coord_offset[2],
+        ]
+    }
+
+    /// Recipe-space XZ to world-space XZ.
+    pub fn recipe_xz_to_world(&self, recipe_x: f32, recipe_z: f32) -> [f32; 2] {
+        [
+            recipe_x - self.coord_offset[0],
+            recipe_z - self.coord_offset[2],
+        ]
+    }
+
+    /// World-space XZ to recipe-space XZ.
+    pub fn world_xz_to_recipe(&self, world_x: f32, world_z: f32) -> [f32; 2] {
+        [
+            world_x + self.coord_offset[0],
+            world_z + self.coord_offset[2],
         ]
     }
 
@@ -595,37 +617,6 @@ pub struct CompiledPhysics {
     pub maximum_substeps: u32,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct CompiledRiver {
-    pub id: StableId,
-    pub source_region_center: [f32; 2],
-    pub source_region_radius_m: f32,
-    pub minimum_elevation_m: f32,
-    pub grid_spacing_m: f32,
-    pub direction_inertia: f32,
-    pub maximum_turn_deg: f32,
-    pub depression_repair_radius_cells: u32,
-    pub maximum_breach_depth_m: f32,
-    pub source_width_m: f32,
-    pub mouth_width_m: f32,
-    pub source_depth_m: f32,
-    pub mouth_depth_m: f32,
-    pub bank_width_m: f32,
-    pub minimum_depth_m: f32,
-    pub maximum_segment_slope: f32,
-    pub waterfall_threshold_m: f32,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct CompiledHydrology {
-    pub id: StableId,
-    pub kind: String,
-    pub elevation_m: f32,
-    pub depth_m: Option<f32>,
-    pub center: Option<[f32; 2]>,
-    pub radius_m: Option<f32>,
-}
-
 impl From<&OptionsDefinition> for CompiledOptions {
     fn from(def: &OptionsDefinition) -> Self {
         Self {
@@ -648,43 +639,6 @@ impl From<&PhysicsDefinition> for CompiledPhysics {
     }
 }
 
-impl From<&RiverDefinition> for CompiledRiver {
-    fn from(def: &RiverDefinition) -> Self {
-        Self {
-            id: def.header.id.clone(),
-            source_region_center: def.source.region_center,
-            source_region_radius_m: def.source.region_radius_m,
-            minimum_elevation_m: def.source.minimum_elevation_m,
-            grid_spacing_m: def.routing.grid_spacing_m,
-            direction_inertia: def.routing.direction_inertia,
-            maximum_turn_deg: def.routing.maximum_turn_deg,
-            depression_repair_radius_cells: def.routing.depression_repair_radius_cells,
-            maximum_breach_depth_m: def.routing.maximum_breach_depth_m,
-            source_width_m: def.channel.source_width_m,
-            mouth_width_m: def.channel.mouth_width_m,
-            source_depth_m: def.channel.source_depth_m,
-            mouth_depth_m: def.channel.mouth_depth_m,
-            bank_width_m: def.channel.bank_width_m,
-            minimum_depth_m: def.water.minimum_depth_m,
-            maximum_segment_slope: def.water.maximum_segment_slope,
-            waterfall_threshold_m: def.water.waterfall_threshold_m,
-        }
-    }
-}
-
-impl From<&HydrologyDefinition> for CompiledHydrology {
-    fn from(def: &HydrologyDefinition) -> Self {
-        Self {
-            id: def.header.id.clone(),
-            kind: def.kind.clone(),
-            elevation_m: def.elevation_m,
-            depth_m: def.depth_m,
-            center: def.center,
-            radius_m: def.radius_m,
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CompiledAtmosphere {
     pub id: StableId,
@@ -700,7 +654,10 @@ pub struct CompiledAtmosphere {
     pub moon_angular_radius: f32,
     pub ambient_color: [f32; 3],
     pub ambient_brightness: f32,
-    pub exposure_target: f32,
+    pub environment_intensity_scale: f32,
+    pub exposure_ev_min: f32,
+    pub exposure_ev_max: f32,
+    pub exposure_bias: f32,
     pub exposure_adaptation_speed: f32,
 }
 
@@ -708,6 +665,7 @@ pub struct CompiledAtmosphere {
 pub struct CompiledFog {
     pub id: StableId,
     pub distance_color: [f32; 3],
+    pub distance_inscattering_color: [f32; 3],
     pub distance_start_m: f32,
     pub distance_end_m: f32,
     pub height_base_m: f32,
@@ -826,6 +784,29 @@ impl From<&WaterBodyMaterialDefinition> for CompiledWaterBodyMaterial {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct CompiledHydrologyBody {
+    pub id: StableId,
+    pub kind: String,
+    pub elevation_m: f32,
+    pub depth_m: Option<f32>,
+    pub center: Option<[f32; 2]>,
+    pub radius_m: Option<f32>,
+}
+
+impl From<&HydrologyDefinition> for CompiledHydrologyBody {
+    fn from(def: &HydrologyDefinition) -> Self {
+        Self {
+            id: def.header.id.clone(),
+            kind: def.kind.clone(),
+            elevation_m: def.elevation_m,
+            depth_m: def.depth_m,
+            center: def.center,
+            radius_m: def.radius_m,
+        }
+    }
+}
+
 impl From<&AtmosphereDefinition> for CompiledAtmosphere {
     fn from(def: &AtmosphereDefinition) -> Self {
         Self {
@@ -842,7 +823,10 @@ impl From<&AtmosphereDefinition> for CompiledAtmosphere {
             moon_angular_radius: def.moon.angular_radius,
             ambient_color: def.ambient.color,
             ambient_brightness: def.ambient.brightness,
-            exposure_target: def.exposure.target,
+            environment_intensity_scale: def.environment.intensity_scale,
+            exposure_ev_min: def.exposure.ev_min,
+            exposure_ev_max: def.exposure.ev_max,
+            exposure_bias: def.exposure.bias,
             exposure_adaptation_speed: def.exposure.adaptation_speed,
         }
     }
@@ -853,6 +837,7 @@ impl From<&FogDefinition> for CompiledFog {
         Self {
             id: def.header.id.clone(),
             distance_color: def.distance.color,
+            distance_inscattering_color: def.distance.inscattering_color,
             distance_start_m: def.distance.start_m,
             distance_end_m: def.distance.end_m,
             height_base_m: def.height.base_height_m,

@@ -8,18 +8,24 @@ materials:
     albedo: [0.34, 0.52, 0.28]
     triplanar_scale: 0.5
     roughness: 0.9
+    texture: textures.grass
+    surface: surfaces.grass
   - key: sand
     id: 1
     name: sand
     albedo: [0.86, 0.78, 0.58]
     triplanar_scale: 0.35
     roughness: 0.95
+    texture: textures.sand
+    surface: surfaces.sand
   - key: rock
     id: 2
     name: rock
     albedo: [0.45, 0.44, 0.42]
     triplanar_scale: 0.25
     roughness: 0.85
+    texture: textures.rock
+    surface: surfaces.rock
   - key: cave_stone
     id: 3
     name: cave_stone

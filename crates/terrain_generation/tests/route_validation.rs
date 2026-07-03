@@ -22,6 +22,7 @@ use terrain_generation::{
 use voxel_core::CHUNK_CELLS;
 
 const TESTBED_WORLD: &str = "world.island_testbed";
+const LARGE_WORLD: &str = "world.island_large";
 
 fn workspace_assets() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -37,7 +38,13 @@ fn testbed_source() -> RecipeDensitySource {
     let world = registry
         .world_by_id(&shared::StableId::new(TESTBED_WORLD))
         .expect("testbed world");
-    build_atlas_density_source(&registry, &shared::StableId::new(TESTBED_WORLD), world.seed)
+    build_atlas_density_source(
+        &registry,
+        &shared::StableId::new(TESTBED_WORLD),
+        world.seed,
+        None,
+        None,
+    )
 }
 
 fn recipe_xz(source: &RecipeDensitySource, rx: f32, rz: f32) -> (f32, f32) {
@@ -209,7 +216,7 @@ fn outdoor_columns_have_foundation_bedrock() {
         for wz in (-100..=100).step_by(4) {
             let xf = wx as f32;
             let zf = wz as f32;
-            let surface = source.terrain_surface_height_at(xf, zf);
+            let surface = source.foundation_surface_at(xf, zf);
             if surface < sea + 1.0 {
                 continue;
             }
@@ -407,6 +414,36 @@ fn testbed_routes_from_yaml_are_traversable() {
         .expect("routes.island_testbed should be authored for the testbed world");
     assert!(!routes.routes.is_empty(), "routes def contains no routes");
     let source = testbed_source();
+    for route in &routes.routes {
+        assert_route_traversable(&source, &route.waypoints);
+    }
+}
+
+fn large_source() -> RecipeDensitySource {
+    let registry = load_registry_from_directory(workspace_assets()).expect("registry");
+    let world = registry
+        .world_by_id(&shared::StableId::new(LARGE_WORLD))
+        .expect("large world");
+    build_atlas_density_source(
+        &registry,
+        &shared::StableId::new(LARGE_WORLD),
+        world.seed,
+        None,
+        None,
+    )
+}
+
+#[test]
+fn large_routes_from_yaml_are_traversable() {
+    let registry = load_registry_from_directory(workspace_assets()).expect("registry");
+    let world = registry
+        .world_by_id(&shared::StableId::new(LARGE_WORLD))
+        .expect("large world");
+    let routes = registry
+        .routes_for_world(world)
+        .expect("routes.island_large should be authored for the large world");
+    assert!(!routes.routes.is_empty(), "routes def contains no routes");
+    let source = large_source();
     for route in &routes.routes {
         assert_route_traversable(&source, &route.waypoints);
     }

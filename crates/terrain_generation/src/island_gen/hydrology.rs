@@ -221,7 +221,8 @@ pub fn trace_primary_river(
             if acc < params.hydrology.stream_threshold && elev <= sea_level + 4.0 {
                 continue;
             }
-            let score = acc + elev.max(sea_level) * 2.0;
+            // Log-scale accumulation so mouth cells do not dominate summit sources.
+            let score = acc.ln().max(0.0) * 8.0 + (elev - sea_level).max(0.0) * 1.5;
             if score > best_score {
                 best_score = score;
                 let wx = filled.origin[0] + x as f32 * filled.spacing;
@@ -284,13 +285,16 @@ pub fn trace_primary_river(
     let n = path.len();
     let mut points = Vec::new();
     let source_acc = accumulation.get(sx, sz).max(params.hydrology.rainfall_base);
+    let mut max_water_elev = f32::MAX;
     for (i, ((x, z), (gx, gz))) in path.iter().zip(cells.iter()).enumerate() {
         let t = i as f32 / (n - 1) as f32;
         let acc = (accumulation.get(*gx, *gz) / source_acc).clamp(0.0, 1.0);
         let width = 1.8 + (6.5 - 1.8) * acc.max(t * 0.35);
         let depth = 0.4 + (1.6 - 0.4) * acc.max(t * 0.5);
         let terrain_height = filled.get(*gx, *gz);
-        let water_elevation = terrain_height.max(sea_level) - depth * 0.25;
+        let mut water_elevation = terrain_height.max(sea_level) - depth * 0.25;
+        water_elevation = water_elevation.min(max_water_elev);
+        max_water_elev = water_elevation;
         let bed_elevation = (water_elevation - depth).max(sea_level - depth * 0.25);
         points.push(RiverControlPoint {
             position_xz: [*x, *z],
@@ -304,6 +308,46 @@ pub fn trace_primary_river(
         });
     }
     Some(RiverSpline { points })
+}
+
+/// Re-sample bed and water elevations from the post-carve elevation field so
+/// the ribbon mesh matches the meshed terrain channel.
+pub fn refresh_river_elevations_after_carve(
+    river: &mut RiverSpline,
+    carved_elevation: &Field2D<f32>,
+    sea_level: f32,
+    minimum_depth_m: f32,
+) {
+    let n = river.points.len();
+    if n == 0 {
+        return;
+    }
+    for point in &mut river.points {
+        let bed = carved_elevation.sample_bilinear(point.position_xz[0], point.position_xz[1]);
+        point.bed_elevation = bed;
+        let depth = point.depth.max(minimum_depth_m);
+        point.water_elevation = (bed + depth).max(sea_level);
+    }
+    for i in (1..n).rev() {
+        let downstream = river.points[i].water_elevation;
+        let bed = river.points[i - 1].bed_elevation;
+        river.points[i - 1].water_elevation = river.points[i - 1]
+            .water_elevation
+            .max(bed + minimum_depth_m)
+            .max(downstream);
+    }
+    for i in 1..n {
+        if river.points[i].water_elevation > river.points[i - 1].water_elevation {
+            river.points[i].water_elevation = river.points[i - 1].water_elevation;
+        }
+        river.points[i].water_elevation = river.points[i]
+            .water_elevation
+            .max(river.points[i].bed_elevation + minimum_depth_m);
+    }
+    if let Some(last) = river.points.last_mut() {
+        last.water_elevation = sea_level;
+        last.width = last.width.max(6.5);
+    }
 }
 
 #[cfg(test)]

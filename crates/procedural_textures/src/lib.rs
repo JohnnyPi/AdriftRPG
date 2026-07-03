@@ -2,6 +2,8 @@
 //! CPU procedural PBR texture generation (Symbios-style, Bevy-independent).
 
 mod arrays;
+mod cache;
+mod curves;
 mod error;
 mod generators;
 mod maps;
@@ -9,11 +11,18 @@ mod material_recipe;
 mod normal;
 mod noise;
 mod recipe;
+mod seam;
+mod texture_graph;
 
 pub use arrays::{
     arrays_fingerprint, build_cpu_arrays, build_cpu_arrays_for_palette, build_cpu_arrays_in_core_order,
     CpuTextureArrays,
 };
+pub use cache::{
+    bake_recipe_with_cache, cache_root, texture_cache_key, try_load_texture_cache,
+    write_texture_cache,
+};
+pub use curves::{remap, sample_color_ramp, smoothstep, ColorStop};
 pub use error::TextureGenerationError;
 pub use generators::{
     CobblestoneConfig, CobblestoneGenerator, GroundConfig, GroundGenerator, RockConfig,
@@ -25,7 +34,14 @@ pub use material_recipe::{
     order_recipes_for_palette, strip_utf8_bom, ProceduralMaterialsDocument, TerrainMaterialIdName,
     TerrainMaterialRecipe, CORE_ISLAND_LAYER_ORDER,
 };
-pub use recipe::{texture_recipe_from_yaml_value, ProceduralTextureGenerator, TextureRecipe};
+pub use recipe::{
+    texture_recipe_from_definition, texture_recipe_from_yaml_value, ProceduralTextureGenerator,
+    TextureRecipe,
+};
+pub use seam::{assert_seamless, maximum_texture_seam_error, DEFAULT_SEAM_TOLERANCE};
+pub use texture_graph::{
+    texture_graph_from_yaml_value, TextureGraphDefinition, TextureGraphRecipe, GENERATOR_VERSION,
+};
 
 #[cfg(test)]
 mod tests {
@@ -117,5 +133,54 @@ mod tests {
             .filter(|r| r.id != "RiverSilt")
             .collect();
         assert!(order_recipes_for_core_layers(&recipes).is_err());
+    }
+
+    #[test]
+    fn texture_cache_path_uses_cache_root() {
+        let path = crate::cache::texture_cache_path([0u8; 32]);
+        assert_eq!(path.parent(), Some(cache_root()));
+    }
+
+    #[test]
+    fn slope_filter_graph_node() {
+        use crate::texture_graph::{
+            GraphNodeDefinition, GraphOutputDefinition, TextureGraphDefinition, TextureGraphRecipe,
+        };
+
+        fn graph_with_constant(value: f32) -> TextureGraphRecipe {
+            let mut nodes = std::collections::BTreeMap::new();
+            nodes.insert(
+                "src".to_string(),
+                GraphNodeDefinition::Constant { value },
+            );
+            nodes.insert(
+                "filtered".to_string(),
+                GraphNodeDefinition::SlopeFilter {
+                    input: "src".to_string(),
+                    lower: 0.0,
+                    upper: 1.0,
+                },
+            );
+            let mut outputs = std::collections::BTreeMap::new();
+            outputs.insert(
+                "height".to_string(),
+                GraphOutputDefinition::NodeRef("filtered".to_string()),
+            );
+            TextureGraphRecipe {
+                seed: 1,
+                normal_strength: 1.0,
+                roughness: 0.5,
+                metallic: 0.0,
+                graph: TextureGraphDefinition { nodes, outputs },
+                seam_tolerance: 0.01,
+            }
+        }
+
+        let mid = graph_with_constant(0.5).generate(2, 2).expect("mid");
+        let low = graph_with_constant(-1.0).generate(2, 2).expect("low");
+        let mid_height = mid.ormh_rgba8[3];
+        let low_height = low.ormh_rgba8[3];
+        assert!(mid_height > 100, "expected ~128, got {mid_height}");
+        assert_eq!(low_height, 0);
     }
 }

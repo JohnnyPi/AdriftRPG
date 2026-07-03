@@ -3,11 +3,13 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 
 use crate::data::ConfigRegistryResource;
+use crate::environment::celestial::CelestialState;
+use crate::environment::lighting_state::EnvironmentLightingState;
 use crate::state::AppState;
 
 use super::tweaks::{
     AtmosphereTweaks, CameraTweaks, EcologyTweaks, LightingTweaks, MovementTweaks,
-    PhysicsTweaks, RiverTweaks, TerrainTweaks, WaterPhysicsTweaks, WaterTweaks, WorldTweaks,
+    PhysicsTweaks, RiverTweaks, TerrainMaterialTweaks, TerrainTweaks, WaterPhysicsTweaks, WaterTweaks, WorldTweaks,
 };
 
 #[derive(Resource, Clone, Debug)]
@@ -62,6 +64,7 @@ impl Plugin for OptionsPanelPlugin {
             .init_resource::<PhysicsTweaks>()
             .init_resource::<WorldTweaks>()
             .init_resource::<TerrainTweaks>()
+            .init_resource::<TerrainMaterialTweaks>()
             .init_resource::<WaterTweaks>()
             .init_resource::<RiverTweaks>()
             .init_resource::<AtmosphereTweaks>()
@@ -96,12 +99,44 @@ fn init_options_from_registry(
     registry: Res<ConfigRegistryResource>,
     mut panel: ResMut<OptionsPanelState>,
     mut commands: Commands,
+    mut movement: ResMut<MovementTweaks>,
+    mut physics: ResMut<PhysicsTweaks>,
+    mut water: ResMut<WaterTweaks>,
+    mut camera: ResMut<CameraTweaks>,
+    mut lighting: ResMut<LightingTweaks>,
 ) {
     if let Ok(options) = registry.0.active_options() {
         panel.tab = parse_options_tab(&options.default_tab);
         commands.insert_resource(OptionsKeyBindings {
             toggle: parse_options_key(&options.toggle_key).unwrap_or(KeyCode::Escape),
         });
+    }
+    if let Ok(player) = registry.0.active_player() {
+        movement.walk_speed = player.walk_speed_mps;
+        movement.run_speed = player.run_speed_mps;
+        movement.acceleration = player.acceleration_mps2;
+        movement.deceleration = player.deceleration_mps2;
+        movement.jump_buffer_s = player.jump_buffer_s;
+        movement.coyote_time_s = player.coyote_time_s;
+        movement.max_slope_deg = player.maximum_walkable_slope_deg;
+    }
+    if let Ok(physics_def) = registry.0.active_physics() {
+        physics.gravity = physics_def.gravity_mps2;
+    }
+    if let Ok(water_def) = registry.0.active_water() {
+        water.sea_level_m = water_def.sea_level_m;
+        water.shallow_color = water_def.shallow_color;
+        water.deep_color = water_def.deep_color;
+    }
+    if let Ok(camera_def) = registry.0.active_camera() {
+        camera.orbit_distance = camera_def.distance_default_m;
+        camera.collision_inward_sharpness = camera_def.collision_inward_sharpness;
+        camera.collision_outward_sharpness = camera_def.collision_outward_sharpness;
+    }
+    if let Some(fog) = registry.0.active_fog() {
+        lighting.fog_color = fog.distance_color;
+        lighting.fog_start_m = fog.distance_start_m;
+        lighting.fog_end_m = fog.distance_end_m;
     }
 }
 
@@ -151,6 +186,8 @@ fn draw_options_panel(
     mut water_physics: ResMut<WaterPhysicsTweaks>,
     mut ecology: ResMut<EcologyTweaks>,
     registry: Res<ConfigRegistryResource>,
+    celestial: Option<Res<CelestialState>>,
+    lighting_state: Option<Res<EnvironmentLightingState>>,
 ) {
     if !panel.open {
         return;
@@ -182,9 +219,14 @@ fn draw_options_panel(
                 OptionsTab::Water => {
                     draw_water_tab(ui, &mut water, &mut river, &mut water_physics)
                 }
-                OptionsTab::Debug => {
-                    draw_debug_tab(ui, &mut camera, &mut atmosphere, &mut ecology)
-                }
+                OptionsTab::Debug => draw_debug_tab(
+                    ui,
+                    &mut camera,
+                    &mut atmosphere,
+                    &mut ecology,
+                    celestial.as_deref(),
+                    lighting_state.as_deref(),
+                ),
             }
 
             ui.separator();
@@ -224,22 +266,18 @@ fn draw_atmosphere_tab(
         ui.add(egui::Slider::new(&mut lighting.fog_color[2], 0.0..=1.0));
     });
     ui.add(egui::Slider::new(&mut lighting.fog_start_m, 5.0..=120.0).text("start (m)"));
-    ui.add(egui::Slider::new(&mut lighting.fog_end_m, 50.0..=400.0).text("end (m)"));
+    ui.add(egui::Slider::new(&mut lighting.fog_end_m, 100.0..=800.0).text("end (m)"));
 
     ui.separator();
-    ui.heading("Sun & sky");
-    ui.checkbox(&mut atmosphere.use_overrides, "Override YAML");
+    ui.heading("Sun");
+    ui.checkbox(&mut atmosphere.use_overrides, "Override YAML sun angles");
     ui.add_enabled(
         atmosphere.use_overrides,
         egui::Slider::new(&mut atmosphere.sun_azimuth_deg, 0.0..=360.0).text("azimuth"),
     );
     ui.add_enabled(
         atmosphere.use_overrides,
-        egui::Slider::new(&mut atmosphere.sun_elevation_deg, 5.0..=85.0).text("elevation"),
-    );
-    ui.add_enabled(
-        atmosphere.use_overrides,
-        egui::Slider::new(&mut atmosphere.mie_strength, 0.0..=2.0).text("Mie haze"),
+        egui::Slider::new(&mut atmosphere.sun_elevation_deg, -10.0..=85.0).text("elevation"),
     );
     ui.add_enabled(
         atmosphere.use_overrides,
@@ -256,6 +294,7 @@ fn draw_world_tab(ui: &mut egui::Ui, world: &mut WorldTweaks, terrain: &mut Terr
     ui.add(egui::Slider::new(&mut world.render_radius, 2..=10).text("render radius"));
     ui.add(egui::Slider::new(&mut world.physics_radius, 2..=8).text("physics radius"));
     ui.checkbox(&mut world.show_residency_rings, "Show residency rings (Ctrl+F7)");
+    ui.checkbox(&mut world.show_semantic_landmarks, "Show semantic landmarks");
 
     ui.separator();
     ui.heading("Terrain fields");
@@ -330,15 +369,7 @@ fn draw_physics_tab(ui: &mut egui::Ui, physics: &mut PhysicsTweaks) {
         physics.use_overrides,
         egui::Slider::new(&mut physics.prop_friction, 0.0..=1.5).text("prop friction"),
     );
-    ui.add_enabled(
-        physics.use_overrides,
-        egui::Slider::new(&mut physics.platform_speed, 0.5..=6.0).text("platform speed"),
-    );
-    ui.separator();
-    ui.add_enabled_ui(false, |ui| {
-        ui.label("Buoyancy — coming in Water Physics phase");
-        ui.label("Break thresholds — deferred");
-    });
+    ui.label("Prop friction applies to physics demo crates when overrides are enabled.");
 }
 
 fn draw_water_tab(
@@ -370,6 +401,20 @@ fn draw_water_tab(
     ui.add(
         egui::Slider::new(&mut water_physics.shallow_depth_m, 0.5..=3.0).text("shallow depth"),
     );
+    ui.add(
+        egui::Slider::new(&mut water_physics.swim_up_speed_mps, 0.5..=6.0).text("swim up speed"),
+    );
+    ui.add(
+        egui::Slider::new(&mut water_physics.shallow_speed_scale, 0.1..=1.0).text("shallow speed scale"),
+    );
+    ui.add(
+        egui::Slider::new(&mut water_physics.submerged_sink_cap_mps, 0.5..=4.0)
+            .text("submerged sink cap"),
+    );
+    ui.checkbox(
+        &mut water_physics.buoyancy_surface_only,
+        "buoyancy surface only (wading band)",
+    );
 }
 
 fn draw_debug_tab(
@@ -377,6 +422,8 @@ fn draw_debug_tab(
     camera: &mut CameraTweaks,
     atmosphere: &mut AtmosphereTweaks,
     ecology: &mut EcologyTweaks,
+    celestial: Option<&CelestialState>,
+    lighting_state: Option<&EnvironmentLightingState>,
 ) {
     ui.heading("Time of day");
     ui.checkbox(
@@ -386,7 +433,7 @@ fn draw_debug_tab(
     ui.add_enabled(
         atmosphere.drive_sun_from_time_of_day,
         egui::Slider::new(&mut atmosphere.time_of_day_hours, 0.0..=24.0)
-            .text("hours (0=midnight, 12=noon)"),
+            .text("hours (0/24=night, 6=dawn, 12=noon, 18=dusk)"),
     );
     if atmosphere.drive_sun_from_time_of_day {
         let (azimuth, elevation) =
@@ -398,7 +445,35 @@ fn draw_debug_tab(
         "Sun azimuth {:.0}°, elevation {:.0}°",
         atmosphere.sun_azimuth_deg, atmosphere.sun_elevation_deg
     ));
-    ui.label("Also try Atmosphere tab for Mie haze and fog while testing.");
+
+    if let Some(celestial) = celestial {
+        ui.label(format!(
+            "Target EV100 {:.2} · env-map {:.2}",
+            celestial.exposure_ev100, celestial.environment_intensity
+        ));
+        if let Some(state) = lighting_state {
+            ui.label(format!("Applied EV100 {:.2}", state.current_exposure));
+        }
+    }
+
+    ui.add_enabled(
+        atmosphere.drive_sun_from_time_of_day,
+        egui::Slider::new(&mut atmosphere.exposure_ev_min, 7.0..=12.0).text("exposure EV min"),
+    );
+    ui.add_enabled(
+        atmosphere.drive_sun_from_time_of_day,
+        egui::Slider::new(&mut atmosphere.exposure_ev_max, 12.0..=16.0).text("exposure EV max"),
+    );
+    ui.add_enabled(
+        atmosphere.drive_sun_from_time_of_day,
+        egui::Slider::new(&mut atmosphere.exposure_bias, -1.0..=1.0).text("exposure bias"),
+    );
+    ui.add_enabled(
+        atmosphere.drive_sun_from_time_of_day,
+        egui::Slider::new(&mut atmosphere.environment_intensity_scale, 0.5..=1.5)
+            .text("env-map scale"),
+    );
+    ui.label("Scrub the clock to preview day/night lighting balance.");
 
     ui.separator();
     ui.heading("Fly camera");

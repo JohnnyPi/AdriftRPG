@@ -1,5 +1,6 @@
 // crates/terrain_generation/src/noise.rs
 /// Deterministic 3D value noise for terrain detail (no external deps).
+#[derive(Clone, Copy, Debug)]
 pub struct ValueNoise {
     seed: u64,
 }

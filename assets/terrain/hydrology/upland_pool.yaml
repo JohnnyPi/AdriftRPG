@@ -1,0 +1,7 @@
+﻿schema_version: 1
+id: hydrology.upland_pool
+kind: lake
+elevation_m: 31.5
+depth_m: 2.5
+center: [210.0, 324.0]
+radius_m: 22.0

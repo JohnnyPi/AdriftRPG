@@ -1,0 +1,8 @@
+﻿schema_version: 1
+id: overlays.wetness
+wetness:
+  darkening: 0.28
+  roughness_reduction: 0.32
+  normal_flattening: 0.06
+moss:
+  affinity: 0.40

@@ -59,7 +59,7 @@ pub fn mesh_from_terrain_data(data: &TerrainMeshData, cell_size_m: f32) -> Mesh 
             Mesh::ATTRIBUTE_TANGENT,
             material_vertices
                 .iter()
-                .map(|v| [v.tint[0], v.tint[1], v.tint[2], 1.0])
+                .map(|v| [v.tint[0], v.tint[1], v.tint[2], v.overlay[0]])
                 .collect::<Vec<_>>(),
         );
     } else {
@@ -82,6 +82,43 @@ pub fn mesh_from_terrain_data(data: &TerrainMeshData, cell_size_m: f32) -> Mesh 
     }
     mesh.insert_indices(Indices::U32(data.indices.clone()));
     mesh
+}
+
+/// Attach terrain triplanar blend channels used by `terrain_material.wgsl`.
+pub fn insert_terrain_material_attributes(
+    mesh: &mut Mesh,
+    material_vertices: &[terrain_surface::MaterialVertex],
+) {
+    let vertex_count = material_vertices.len();
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_COLOR,
+        material_vertices
+            .iter()
+            .map(|v| [v.weights[0], v.weights[1], v.weights[2], v.weights[3]])
+            .collect::<Vec<_>>(),
+    );
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_UV_0,
+        material_vertices
+            .iter()
+            .map(|v| [v.local_indices[0] as f32, v.local_indices[1] as f32])
+            .collect::<Vec<_>>(),
+    );
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_UV_1,
+        material_vertices
+            .iter()
+            .map(|v| [v.local_indices[2] as f32, v.local_indices[3] as f32])
+            .collect::<Vec<_>>(),
+    );
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_TANGENT,
+        material_vertices
+            .iter()
+            .map(|v| [v.tint[0], v.tint[1], v.tint[2], v.overlay[0]])
+            .collect::<Vec<_>>(),
+    );
+    let _ = vertex_count;
 }
 
 pub fn chunk_world_transform(coord: ChunkCoord, cell_size_m: f32) -> Transform {

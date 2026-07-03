@@ -8,7 +8,18 @@ publish = false
 name = "bake-materials"
 path = "src/bake_materials.rs"
 
+[[bin]]
+name = "bake-atlas"
+path = "src/bake_atlas.rs"
+
+[[bin]]
+name = "validate-catalog"
+path = "src/validate_catalog.rs"
+
 [dependencies]
+game_data = { path = "../game_data" }
+shared = { path = "../shared" }
+terrain_generation = { path = "../terrain_generation" }
 procedural_textures = { path = "../procedural_textures" }
 clap = { version = "4", features = ["derive"] }
 serde_yaml = "0.9"

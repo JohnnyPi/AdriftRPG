@@ -13,7 +13,10 @@ pub struct TerrainMaterialSettings {
     pub height_blend_strength: f32,
     pub layer_count: u32,
     pub debug_mode: u32,
-    pub _padding: Vec2,
+    pub macro_variation_scale: f32,
+    pub macro_variation_strength: f32,
+    pub global_wetness: f32,
+    pub global_moss: f32,
 }
 
 /// Per-layer repeat scale in world meters (up to 64 layers).

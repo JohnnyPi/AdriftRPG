@@ -7,10 +7,10 @@ use crate::camera::ThirdPersonCameraPlugin;
 use crate::data::{assets_root, DataAssetPlugin};
 use crate::debug_tools::DebugToolsPlugin;
 use crate::environment::{
-    BiomePlugin, EnvironmentAudioStubPlugin, EnvironmentConfigPlugin, EnvironmentLightingPlugin,
-    FogPlugin, LightingPlugin, SkyPlugin,
+    AtmosphereScenePlugin, BiomePlugin, CelestialPlugin, CloudPlugin, EnvironmentAudioStubPlugin,
+    EnvironmentConfigPlugin, EnvironmentLightingPlugin, FogPlugin, LightingPlugin,
+    VolumetricScatterPlugin,
 };
-use crate::interaction::InteractionPlugin;
 use crate::physics::GamePhysicsPlugin;
 use crate::performance::PerformanceValidationPlugin;
 use crate::player::{CharacterMotorPlugin, PlayerPlugin};
@@ -20,12 +20,13 @@ use crate::terrain::{
     ChunkResidencyPlugin, TerrainEditingPlugin, TerrainFeaturePlugin, TerrainMaterialPlugin,
     TerrainPlugin,
 };
-use crate::ui::{configure_ui_overlay_for_game, sync_camera_viewports_to_window, HudPlugin, MainMenuPlugin, OptionsPanelPlugin, SetupOptionsPlugin, UiOverlayPlugin};
+use crate::ui::{
+    configure_ui_overlay_for_game, sync_camera_viewports_to_window, HudPlugin, MainMenuPlugin,
+    OptionsPanelPlugin, SetupOptionsPlugin, UiOverlayPlugin,
+};
 use crate::vegetation::VegetationPlugin;
 use crate::water::WaterPlugin;
-use crate::structures::StructurePlugin;
-use crate::world::WorldSemanticPlugin;
-use crate::world::WorldProfilePlugin;
+use crate::world::{WorldProfilePlugin, WorldSemanticPlugin};
 
 pub struct VerticalSlicePlugin;
 
@@ -77,13 +78,15 @@ pub fn configure_vertical_slice_app(app: &mut App, window_title: &str) {
         LightingPlugin,
         EnvironmentConfigPlugin,
         EnvironmentLightingPlugin,
-        SkyPlugin,
+        CelestialPlugin,
+        AtmosphereScenePlugin,
+        VolumetricScatterPlugin,
+        CloudPlugin,
         FogPlugin,
         EnvironmentAudioStubPlugin,
         WaterPlugin,
         VegetationPlugin,
         DebugToolsPlugin,
-        InteractionPlugin,
         HudPlugin,
     ))
     .add_plugins((
@@ -93,7 +96,7 @@ pub fn configure_vertical_slice_app(app: &mut App, window_title: &str) {
         MainMenuPlugin,
         WorldSemanticPlugin,
     ))
-    .add_plugins((WorldProfilePlugin, StructurePlugin, PerformanceValidationPlugin))
+    .add_plugins((WorldProfilePlugin, PerformanceValidationPlugin))
     .init_state::<AppState>()
     .add_systems(
         OnEnter(AppState::Running),

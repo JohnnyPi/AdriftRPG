@@ -96,14 +96,12 @@ pub fn volcanic_height(params: &IslandGenParams, wx: f32, wz: f32, land_mask: f3
 }
 
 /// Regional-tier surface noise applied during regional elevation build.
-pub fn regional_detail_at(params: &IslandGenParams, wx: f32, wz: f32) -> f32 {
-    let noise = ValueNoise::new(params.seed.wrapping_add(17));
+pub fn regional_detail_at(params: &IslandGenParams, wx: f32, wz: f32, noise: &ValueNoise) -> f32 {
     (noise.fbm_2d(wx * 0.002, wz * 0.002, 3) - 0.5) * params.surface_noise.regional_amplitude_m
 }
 
 /// Local-tier surface noise applied during local elevation build.
-pub fn local_detail_at(params: &IslandGenParams, wx: f32, wz: f32) -> f32 {
-    let noise = ValueNoise::new(params.seed.wrapping_add(23));
+pub fn local_detail_at(params: &IslandGenParams, wx: f32, wz: f32, noise: &ValueNoise) -> f32 {
     (noise.fbm_2d(wx * 0.035, wz * 0.035, 2) - 0.5) * params.surface_noise.local_amplitude_m
 }
 
@@ -170,6 +168,7 @@ mod tests {
     fn supported_interior_never_dips_below_sea() {
         let params = IslandGenParams::default();
         let sea = params.island.sea_level_m;
+        let mask_noise = ValueNoise::new(params.seed);
         let extent = params.island.playable_diameter_m * 0.6;
         let step = extent / 48.0;
         let mut checked = 0u32;
@@ -179,7 +178,7 @@ mod tests {
             while x <= extent {
                 let wx = params.volcano.center[0] + x;
                 let wz = params.volcano.center[1] + z;
-                let mask = build_island_mask(&params, wx, wz);
+                let mask = build_island_mask(&params, wx, wz, &mask_noise);
                 if mask > 0.85 {
                     let h = volcanic_height(&params, wx, wz, mask);
                     assert!(

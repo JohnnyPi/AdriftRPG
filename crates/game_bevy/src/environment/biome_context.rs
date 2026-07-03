@@ -1,4 +1,5 @@
 // crates/game_bevy/src/environment/biome_context.rs
+use crate::ui::WaterPhysicsTweaks;
 use terrain_generation::{cavity_sdf_at, RecipeDensitySource, ValueNoise, CAVITY_EXTERIOR_MARGIN};
 
 /// Slope above which exposed rock replaces the biome default surface material.
@@ -6,7 +7,6 @@ pub const ROCK_SLOPE_DEG: f32 = 35.0;
 
 const ELEVATION_COOLING: f32 = 0.02;
 const BASE_TEMPERATURE: f32 = 0.65;
-const SHALLOW_WATER_MARGIN: f32 = 1.5;
 const COAST_HUMIDITY_SCALE: f32 = 60.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -59,7 +59,11 @@ impl ChunkColumnCache {
             for lx in 0..side {
                 let wx = origin_x + lx as i32 - 1;
                 let wz = origin_z + lz as i32 - 1;
-                heights[lz * side + lx] = source.terrain_surface_height_at(wx as f32, wz as f32);
+                heights[lz * side + lx] = if let Some(atlas) = source.atlas() {
+                    atlas.surface_height_at(wx as f32, wz as f32)
+                } else {
+                    source.terrain_surface_height_at(wx as f32, wz as f32)
+                };
             }
         }
 
@@ -128,7 +132,7 @@ impl BiomeSampleContext {
     }
 
     pub fn is_underwater(&self) -> bool {
-        self.world_y < self.sea_level_m + SHALLOW_WATER_MARGIN
+        self.world_y < self.sea_level_m + WaterPhysicsTweaks::DEFAULT_SHALLOW_DEPTH_M
     }
 
     pub fn is_cave(&self) -> bool {
@@ -208,7 +212,7 @@ fn sample_climate(
     let coast_humidity = (-distance_to_water / COAST_HUMIDITY_SCALE).exp() * 0.22;
 
     if let Some(atlas) = source.atlas() {
-        let wetness = (atlas.sample_wetness(x, z) / 600.0).clamp(0.0, 1.0);
+        let wetness = (atlas.sample_wetness(x, z) / atlas.max_wetness()).clamp(0.0, 1.0);
         moisture = (moisture * 0.45 + wetness * 0.55).clamp(0.0, 1.0);
     }
 

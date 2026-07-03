@@ -21,8 +21,7 @@ fn island_support(d: f32, coast_start: f32, coast_end: f32) -> f32 {
     1.0 - smoothstep(coast_start, coast_end, d)
 }
 
-pub fn build_island_mask(params: &IslandGenParams, wx: f32, wz: f32) -> f32 {
-    let noise = ValueNoise::new(params.seed);
+pub fn build_island_mask(params: &IslandGenParams, wx: f32, wz: f32, noise: &ValueNoise) -> f32 {
     let warp = if params.island.warp_amplitude > 0.0 {
         let f = params.island.warp_frequency;
         [
@@ -78,6 +77,7 @@ mod tests {
             params.center[0] - extent * 0.5,
             params.center[1] - extent * 0.5,
         ];
+        let noise = ValueNoise::new(params.seed);
         let w = (extent / spacing).ceil() as u32 + 1;
         let h = w;
         let mut sum_x = 0.0f64;
@@ -87,7 +87,7 @@ mod tests {
             for x in 0..w {
                 let wx = origin[0] + x as f32 * spacing;
                 let wz = origin[1] + z as f32 * spacing;
-                let m = build_island_mask(&params, wx, wz) as f64;
+                let m = build_island_mask(&params, wx, wz, &noise) as f64;
                 sum_x += wx as f64 * m;
                 sum_z += wz as f64 * m;
                 weight += m;

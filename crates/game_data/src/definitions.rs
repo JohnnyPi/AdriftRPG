@@ -2,6 +2,11 @@
 use serde::{Deserialize, Serialize};
 use shared::{DefinitionHeader, StableId};
 
+use crate::material_catalog::{
+    MaterialCatalogDefinition, MaterialEntryRenderingDefinition, OverlayDefinition,
+    SurfaceMaterialDefinition, TerrainMaterialResponsesDefinition, TextureRecipeDefinition,
+};
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AppDefinition {
@@ -230,6 +235,35 @@ pub struct WorldDefinition {
     pub island_gen: Option<StableId>,
     #[serde(default)]
     pub resolution: Option<GenerationResolutionDefinition>,
+    /// Optional path relative to assets root for a baked island atlas golden reference.
+    #[serde(default)]
+    pub island_atlas_baked: Option<String>,
+    /// Optional inland lake/pond hydrology definitions (`hydrology.*` YAML ids).
+    #[serde(default)]
+    pub hydrology_bodies: Vec<StableId>,
+    /// Optional material catalog (`catalogs.*`) bundling textures, surfaces, overlays.
+    #[serde(default)]
+    pub material_catalog: Option<StableId>,
+}
+
+impl WorldDefinition {
+    /// Horizontal span of the chunk volume on X/Z in meters.
+    pub fn horizontal_extent_m(&self) -> f32 {
+        let cell_span = self.chunks.cells[0] as f32 * self.voxel.cell_size_m;
+        let x_extent = self.chunks.world_extent[0] as f32 * cell_span;
+        let z_extent = self.chunks.world_extent[2] as f32 * cell_span;
+        x_extent.max(z_extent)
+    }
+
+    /// Square atlas extent covering the world's horizontal chunk volume.
+    pub fn effective_ocean_extent_m(&self) -> f32 {
+        const DERIVED_OCEAN_PADDING_M: f32 = 32.0;
+        let horizontal = self.horizontal_extent_m();
+        let authored = self
+            .ocean_extent_m
+            .unwrap_or(horizontal + DERIVED_OCEAN_PADDING_M);
+        authored.max(horizontal)
+    }
 }
 
 /// Multi-tier generation spacing (PhasedExpansionPlan §2.2).
@@ -523,6 +557,18 @@ pub struct TerrainMaterialEntryDefinition {
     /// Optional procedural generator block (Rock/Ground/Sand/Cobblestone).
     #[serde(default)]
     pub generator: Option<serde_yaml::Value>,
+    /// Reference to a `textures.*` recipe in the material catalog.
+    #[serde(default)]
+    pub texture: Option<StableId>,
+    /// Reference to a `surfaces.*` definition in the material catalog.
+    #[serde(default)]
+    pub surface: Option<StableId>,
+    /// Per-entry rendering overrides (schema v3).
+    #[serde(default)]
+    pub rendering: Option<MaterialEntryRenderingDefinition>,
+    /// Per-entry overlay response overrides (schema v3).
+    #[serde(default)]
+    pub responses: Option<TerrainMaterialResponsesDefinition>,
 }
 
 impl TerrainMaterialEntryDefinition {
@@ -896,8 +942,32 @@ pub struct IslandErosionDefinition {
     pub m: f32,
     pub n: f32,
     pub maximum_step_m: f32,
+    #[serde(default = "default_stream_power_erodibility")]
+    pub stream_power_erodibility: f32,
     pub thermal_iterations: u32,
     pub thermal_transfer_rate: f32,
+    #[serde(default = "default_thermal_talus_deg")]
+    pub thermal_talus_deg: f32,
+    #[serde(default = "default_river_bank_width_m")]
+    pub river_bank_width_m: f32,
+    #[serde(default = "default_river_carve_strength")]
+    pub river_carve_strength: f32,
+}
+
+fn default_stream_power_erodibility() -> f32 {
+    0.00002
+}
+
+fn default_thermal_talus_deg() -> f32 {
+    38.0
+}
+
+fn default_river_bank_width_m() -> f32 {
+    3.5
+}
+
+fn default_river_carve_strength() -> f32 {
+    1.2
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -1093,7 +1163,23 @@ pub struct AtmosphereDefinition {
     #[serde(default)]
     pub moon: AtmosphereMoonDefinition,
     pub ambient: AtmosphereAmbientDefinition,
+    #[serde(default)]
+    pub environment: AtmosphereEnvironmentDefinition,
     pub exposure: AtmosphereExposureDefinition,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct AtmosphereEnvironmentDefinition {
+    pub intensity_scale: f32,
+}
+
+impl Default for AtmosphereEnvironmentDefinition {
+    fn default() -> Self {
+        Self {
+            intensity_scale: 1.0,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1139,8 +1225,21 @@ pub struct AtmosphereAmbientDefinition {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AtmosphereExposureDefinition {
-    pub target: f32,
+    #[serde(default = "default_exposure_ev_min")]
+    pub ev_min: f32,
+    #[serde(default = "default_exposure_ev_max")]
+    pub ev_max: f32,
+    #[serde(default)]
+    pub bias: f32,
     pub adaptation_speed: f32,
+}
+
+fn default_exposure_ev_min() -> f32 {
+    9.0
+}
+
+fn default_exposure_ev_max() -> f32 {
+    15.0
 }
 
 /// Fog presentation (assets/config/fog.yaml).
@@ -1170,8 +1269,14 @@ pub struct FogLocalVolumeDefinition {
 #[serde(deny_unknown_fields)]
 pub struct FogDistanceDefinition {
     pub color: [f32; 3],
+    #[serde(default = "default_fog_inscattering_color")]
+    pub inscattering_color: [f32; 3],
     pub start_m: f32,
     pub end_m: f32,
+}
+
+fn default_fog_inscattering_color() -> [f32; 3] {
+    [0.72, 0.78, 0.88]
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1388,6 +1493,10 @@ pub enum RawDefinition {
     Structure(StructureDefinition),
     IslandGeneration(IslandGenerationDefinition),
     SetupSchema(SetupSchemaDefinition),
+    TextureRecipe(TextureRecipeDefinition),
+    SurfaceMaterial(SurfaceMaterialDefinition),
+    MaterialCatalog(MaterialCatalogDefinition),
+    Overlay(OverlayDefinition),
 }
 
 impl RawDefinition {
@@ -1420,6 +1529,10 @@ impl RawDefinition {
             Self::Structure(def) => &def.header.id,
             Self::IslandGeneration(def) => &def.header.id,
             Self::SetupSchema(def) => &def.header.id,
+            Self::TextureRecipe(def) => &def.header.id,
+            Self::SurfaceMaterial(def) => &def.header.id,
+            Self::MaterialCatalog(def) => &def.header.id,
+            Self::Overlay(def) => &def.header.id,
         }
     }
 
@@ -1434,7 +1547,7 @@ impl RawDefinition {
             Self::World(def) => def.header.validate(),
             Self::TerrainGeneration(def) => def.header.validate(),
             Self::Biomes(def) => def.header.validate(),
-            Self::TerrainMaterials(def) => def.header.validate_schema(&[1, 2]),
+            Self::TerrainMaterials(def) => def.header.validate_schema(&[1, 2, 3]),
             Self::SurfaceRules(def) => def.header.validate(),
             Self::Vegetation(def) => def.header.validate(),
             Self::Cave(def) => def.header.validate(),
@@ -1452,6 +1565,10 @@ impl RawDefinition {
             Self::Structure(def) => def.header.validate(),
             Self::IslandGeneration(def) => def.header.validate(),
             Self::SetupSchema(def) => def.header.validate(),
+            Self::TextureRecipe(def) => def.header.validate(),
+            Self::SurfaceMaterial(def) => def.header.validate(),
+            Self::MaterialCatalog(def) => def.header.validate(),
+            Self::Overlay(def) => def.header.validate(),
         }
     }
 }

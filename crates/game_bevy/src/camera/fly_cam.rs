@@ -72,7 +72,9 @@ pub fn update_fly_cam(
         return;
     }
 
-    let config = registry.0.active_camera().expect("camera config");
+    let Some(config) = registry.0.active_camera().ok() else {
+        return;
+    };
     let dt = clamp_visual_delta(time.delta_secs());
 
     if input_state.left_look {

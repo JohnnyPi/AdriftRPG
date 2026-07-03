@@ -24,7 +24,9 @@ pub fn read_camera_orbit_input(
         return;
     };
 
-    let config = registry.0.active_camera().expect("camera config");
+    let Some(config) = registry.0.active_camera().ok() else {
+        return;
+    };
     let delta = mouse_motion.delta;
 
     if input_state.rotating_camera() {
@@ -60,7 +62,9 @@ pub fn read_camera_zoom_input(
         return;
     };
 
-    let config = registry.0.active_camera().expect("camera config");
+    let Some(config) = registry.0.active_camera().ok() else {
+        return;
+    };
     let mut scroll_delta = 0.0f32;
     for event in mouse_scroll.read() {
         scroll_delta += match event.unit {

@@ -69,6 +69,7 @@ fn update_hud(
         &mut Text,
         (With<HudWaterText>, Without<HudSpeedText>, Without<HudGroundedText>, Without<HudBiomeText>),
     >,
+    mut last_biome: Local<Option<(i32, i32, i32, String)>>,
 ) {
     let Ok((transform, movement, grounded_state)) = player.single() else {
         return;
@@ -86,9 +87,24 @@ fn update_hud(
     if let (Some(source), Ok(mut text)) = (pipeline.density_source.as_ref(), biome_text.single_mut())
     {
         let p = transform.translation;
-        let density = source.density_at(p.x, p.y, p.z);
-        let biome = classify_biome(biomes.as_ref(), source, p.x, p.y, p.z, density);
-        **text = format!("Biome: {biome:?}");
+        let cell = (
+            p.x.floor() as i32,
+            p.y.floor() as i32,
+            p.z.floor() as i32,
+        );
+        let label = if last_biome
+            .as_ref()
+            .is_some_and(|(x, y, z, _)| (*x, *y, *z) == cell)
+        {
+            last_biome.as_ref().unwrap().3.clone()
+        } else {
+            let density = source.density_at(p.x, p.y, p.z);
+            let biome = classify_biome(biomes.as_ref(), source.as_ref(), p.x, p.y, p.z, density);
+            let label = format!("Biome: {biome:?}");
+            *last_biome = Some((cell.0, cell.1, cell.2, label.clone()));
+            label
+        };
+        **text = label;
     }
     if let Ok(mut text) = water_text.single_mut() {
         **text = if movement.in_shallow_water {

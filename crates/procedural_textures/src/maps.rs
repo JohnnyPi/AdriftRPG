@@ -1,5 +1,5 @@
 // crates/procedural_textures/src/maps.rs
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct GeneratedPbrMaps {
     pub width: u32,
     pub height: u32,

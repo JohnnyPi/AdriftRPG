@@ -1,0 +1,89 @@
+﻿schema_version: 1
+id: biomes.island_large
+description: >
+  Island-large biome bands — elevation and distance thresholds scaled from
+  biomes.expanded_slice by relief ratio 7.2 (360/50 m) and diameter ratio
+  12.22 (2200/180 m). Zero runtime scaling cost; same material palette.
+rules:
+  - id: shallow_water
+    material_id: 1
+    color: [0.18, 0.62, 0.58]
+    tint: [1.0, 1.0, 1.0]
+    elevation_max: 25.0
+  - id: deep_water
+    material_id: 1
+    color: [0.05, 0.22, 0.38]
+    tint: [1.0, 1.0, 1.0]
+    elevation_max: -36.0
+  - id: offshore_shelf
+    material_id: 1
+    color: [0.10, 0.42, 0.50]
+    tint: [1.0, 1.0, 1.0]
+    elevation_min: -108.0
+    elevation_max: 14.0
+  - id: cave
+    material_id: 3
+    color: [0.22, 0.20, 0.26]
+    tint: [1.0, 1.0, 1.0]
+    cave_depth_min: 14.0
+    elevation_max: 216.0
+  - id: beach
+    material_id: 1
+    color: [0.92, 0.84, 0.62]
+    tint: [1.05, 1.02, 0.95]
+    elevation_min: -7.0
+    elevation_max: 101.0
+    water_distance_max: 428.0
+  - id: wetland
+    material_id: 4
+    color: [0.18, 0.36, 0.16]
+    tint: [0.95, 1.05, 0.9]
+    elevation_max: 36.0
+    moisture_min: 0.60
+  - id: riverbank
+    material_id: 4
+    color: [0.24, 0.44, 0.20]
+    tint: [1.0, 1.0, 0.95]
+    elevation_max: 86.0
+    river_distance_max: 98.0
+  - id: mountain_alpine
+    material_id: 2
+    color: [0.62, 0.64, 0.68]
+    tint: [1.02, 1.02, 1.08]
+    elevation_min: 202.0
+    slope_min: 12.0
+  - id: rocky_upland
+    material_id: 2
+    color: [0.48, 0.46, 0.44]
+    tint: [1.0, 0.98, 0.96]
+    elevation_min: 86.0
+    elevation_max: 194.0
+    slope_min: 18.0
+  - id: coastal_scrub
+    material_id: 6
+    color: [0.58, 0.56, 0.28]
+    tint: [1.05, 1.0, 0.9]
+    elevation_min: 14.0
+    elevation_max: 115.0
+    water_distance_max: 978.0
+    moisture_min: 0.30
+  - id: forest
+    material_id: 5
+    color: [0.20, 0.48, 0.16]
+    tint: [0.92, 1.08, 0.88]
+    elevation_min: 29.0
+    elevation_max: 130.0
+    slope_max: 25.0
+    moisture_min: 0.55
+  - id: scrub
+    material_id: 6
+    color: [0.58, 0.54, 0.24]
+    tint: [1.05, 1.0, 0.85]
+    elevation_min: 29.0
+    elevation_max: 101.0
+    moisture_min: 0.38
+  - id: grassland
+    material_id: 0
+    color: [0.42, 0.62, 0.28]
+    tint: [1.0, 1.02, 0.95]
+    moisture_min: 0.15

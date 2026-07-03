@@ -1,0 +1,173 @@
+## ⚠️ Upload integrity: files lost to name collisions
+
+Your project files were flattened into one directory, and several files with duplicate names overwrote each other. These files are **referenced everywhere but absent**, so I could not review them, and any fixes we make must be careful not to contradict them:
+
+- `crates/game_bevy/src/plugin.rs` (`VerticalSlicePlugin` — the app wiring) — collided with `camera/plugin.rs`
+- `crates/terrain_generation/src/recipe.rs` (`RecipeDensitySource`, `DensitySource`, `RecipeOp`, `default_vertical_slice_recipe`, spawn resolution) — collided with `procedural_textures/recipe.rs`. **This is the single most load-bearing unreviewed file.**
+- `crates/terrain_generation/src/island_gen/mod.rs` (`build_island_atlas` — the atlas build orchestration/ordering) — collided with `camera/mod.rs`
+- `crates/terrain_generation/src/noise.rs` (`ValueNoise`) — collided with `procedural_textures/noise.rs`
+- `crates/physics_bridge/src/collision.rs` (`terrain_ground_filter`, `CharacterCollisionQuery`) — collided with `camera/collision.rs`
+- `crates/game_bevy/src/terrain/mod.rs`, `terrain/recipe.rs`, `terrain/material.rs`; `player/mod.rs` (`Player`, `spawn_player`, input→intent); `physics/mod.rs` (`GamePhysicsPlugin`, `PlayerMoveIntent`, FixedUpdate ordering); `environment/mod.rs`; `water/*` (the entire water **rendering** module — `WaterMaterial` exists, per `hot_reload.rs`); `vegetation/*`, `structures/*`, `interaction/*`, `performance/*`, `ui/mod.rs`, `data/mod.rs`, `debug_tools/mod.rs`
+- Also shadowed: several `tests.rs`, `debug.rs`, `spawn.rs`, `environment.rs` variants outside the camera module
+
+Re-uploading with unique names (e.g., prefixed paths) would let me close those gaps. Everything below is based on what's present.
+
+---
+
+# Top-Level Summary
+
+**What this codebase is:** a well-layered voxel island game — YAML config compiler (`game_data`) → island field-atlas generator (`terrain_generation`) → signed-density sampling with edits (`voxel_core`) → Surface Nets meshing with per-vertex 4-way material blends (`terrain_meshing` + `terrain_surface`) → sparse interest-driven chunk streaming in Bevy (`game_bevy/terrain`) → triplanar texture-array rendering (`terrain_material_bevy` + `procedural_textures`) → procedural Bevy atmosphere/fog/celestial stack → kinematic character controller on Avian3D with wading/buoyancy → egui setup screen with async atlas preview and hot reload.
+
+**Overall quality is high**: strong separation between Bevy-free simulation crates and the Bevy layer, deterministic hashing/golden-atlas regression infrastructure, budget validation with human-readable messages, and unusually good regression tests that encode past bugs. The problems are concentrated in a handful of algorithmic and lifecycle areas, not in the architecture.
+
+**The five most impactful defects, ranked:**
+
+1. **Density-radius/render-radius churn loop (terrain pipeline)** — every non-empty chunk in the annulus between `render_radius` (7) and `density_radius` (10) regenerates density → mesh → gets culled → resets to `Unrequested` → regenerates, forever. Your density/mesh budget is permanently saturated by throwaway work (~5,800 chunks cycling at default radii).
+2. **Stream-power erosion iterations are a no-op multiplier** — slope/accumulation are never recomputed between iterations, so 22 iterations ≡ one pass at 22× the capped step. The knob doesn't do what it claims and the "erosion budget" in validation is only accidentally consistent.
+3. **`maximum_mesh_jobs` is never enforced** — mesh tasks spawn unbounded the instant density completes; only density jobs are budgeted. Combined with (1) this is the frame-hitch source.
+4. **Day/night cycle can't reach night** — `sun_angles_from_time_of_day` clamps elevation to ≥ 0°, `sun_illuminance_for_elevation` floors at 400 lux, and the moon's "night" branch requires elevation < −2°, which is unreachable. Also `sun_color_for_elevation` has a typo pushing the red channel to ~1.98 at the horizon.
+5. **Character controller ceiling/steep-wall logic is incoherent** — `is_ceiling = is_ground && up.dot(normal) < 0.0` is unsatisfiable, and the `grounded && angle > max_slope → Ignore` branch tells `move_and_slide` to pass through steep walls while grounded.
+
+---
+
+# Pipeline-by-Pipeline Review
+
+## 1. Data / Config (`game_data`, `data/hot_reload.rs`, `watcher.rs`, `user_prefs.rs`)
+
+**Works:** YAML discovery with duplicate-ID rejection, BOM stripping, prefix-based classification, `deny_unknown_fields`, compiled registry with SHA-256 hash for hot-reload detection, debounced file watcher, `BTreeMap`-backed prefs (hash-stable). `validate_island_world_budget` is exemplary — loud, derived from the same math the generator uses.
+
+**Issues:**
+- **[minor]** `parse_yaml_file` classifies by id-prefix with a long else-if chain; a new definition type silently requires touching this. A registry table or serde-tagged enum would be more robust.
+- **[minor]** `registry_hash` serializes the whole registry to JSON every reload — fine at this scale, worth noting for growth.
+- **[minor]** `reload_terrain_material` in hot_reload.rs is a stub (`let _ = proc_state;`) — dead system that pretends to do work.
+- **[minor]** `apply_lighting_hot_reload` (environment/lighting.rs) has no effect beyond re-setting `ClearColor::BLACK`, and its `override_fog` early-out inversion makes it run every frame when fog overrides are on, for nothing.
+
+## 2. Island Generation (`island_gen/*`, `island_atlas.rs`, `field2d.rs`, `resolution.rs`)
+
+**Works:** footprint lobes with domain warp and centroid stability, volcano stack with proportional ridges/contiguity floor (with regression tests for past bugs), priority-flood + D8 + topologically-ordered accumulation (correct), coast distance via two-pass chamfer, coast/beach classification, soil/biome weight fields, tiered regional/local residual composition, mask-blended land↔bathymetry coastline (the "teal crust" fix), atlas rim extrapolation that keeps deepening offshore, and thorough `validate_atlas` checks matching your manifest output.
+
+**Incorrect:**
+- **[major]** `apply_stream_power_erosion`: `accumulation` and `slope` are loop-invariant, so the per-iteration deltas are identical every iteration. It's `min(erosion, max_step) × iterations` — no channel incision feedback, no knickpoint migration. Either recompute slope (cheap) each iteration, or collapse the loop into one pass and rename the parameters honestly. Hydrology is also computed once; classic pipelines interleave fill/flow/erode.
+- **[moderate]** `apply_beach_profiles`: `target = sea + berm − coast_distance * 0.08` puts the berm crest exactly at the waterline and slopes *down* going inland — inverted relative to a real beach profile (rise from waterline to berm, then blend to terrain). The `mask * 0.6` lerp hides it, but back-of-beach cells get pulled below their surroundings, which is likely contributing to odd wet depressions behind beaches.
+- **[moderate]** `trace_primary_river` source selection: `if acc < stream_threshold && elev <= sea + 4.0 { continue }` admits any high-elevation cell regardless of accumulation, and the score `acc + elev*2` lets a huge-accumulation near-mouth cell win over the summit — producing occasional stub rivers. Also, unlike `river.rs::generate_river_spline`, the traced spline never enforces monotonic non-increasing `water_elevation`, so the ribbon water surface can locally ascend (validation only checks the *filled terrain* descent, not the water).
+- **[perf]** `seeded_unit` (coast.rs, bathymetry.rs) and `regional_detail_at`/`local_detail_at` (volcano.rs) construct `ValueNoise::new` per sample. These run per grid cell during atlas build *and* (for the detail functions, if the missing recipe.rs calls them at voxel time) per column at runtime. Hoist noise construction.
+
+**Missing:** no lakes/ponds (priority-flood epsilon deliberately drains all depressions, and hydrology only ever registers sea + one river); `CoastModifierKind::CliffShelf` is a declared variant that evaluates to `0.0` depression (silent no-op); only a single primary river is traced even though `river_mask` marks a full network.
+
+## 3. Density Source / Voxel Core (`chunk_gen.rs`, `density_ops.rs`, `topology.rs`, `edits.rs`, `coords.rs`, `terrain_chunk.rs`)
+
+**Works:** clean SDF ops with documented sign convention, metric-corrected ellipsoid SDF, foundation seal that respects declared cavities and island factor, correct `div_euclid`/`rem_euclid` negative-coordinate handling, edit overlay with neighbor-chunk fanout and t² falloff, stable density hashing.
+
+**Issues:**
+- **[moderate]** Unit convention split: edits are keyed on integer *sample corners*, and both `editing.rs` and `edits.apply_command` sample procedural density as `wx as f32` (indices), while `generate_padded_samples_runtime` samples at `wx * cell_size_m` (meters). This only agrees because `cell_size_m` is validated to 1.0 — but the pipeline threads `cell_size_m` around as though it were variable. Either commit to 1.0 (drop the parameter from the runtime paths) or fix the edit paths to convert. Right now it's a landmine for the first person who relaxes the validation.
+- **[minor]** `count_outdoor_void_columns` steps y by 0.5 from `bedrock_top.max(sea-4)` — it can miss voids whose solid roof is thinner than 0.5 m; acceptable for a diagnostic, worth a comment.
+- **[minor]** `TerrainEditStore` has `chunk_deltas()` for persistence but nothing serializes/loads it — edit persistence is stubbed, edits vanish on regen (regen even calls `edit_store.clear()` intentionally, but there's no save path at all).
+
+## 4. Meshing (`surface_nets.rs`, `dual_contouring.rs`, `mesh_convert.rs`)
+
+**Works:** correct Surface Nets with halo vertices so min-face quads use neighbor-consistent positions (seamless because both chunks evaluate identical padded samples), central-difference normals, deterministic material ranking in the fallback blend path, per-chunk 8-slot palette remapping, empty-mesh short-circuit.
+
+**Issues:**
+- **[moderate]** `ChunkSlotRemapper::allocate_global` overflow silently merges the 9th+ material into slot 0 — that vertex's weight is *reattributed to whatever material happens to be slot 0*, not merely quantized. On material-rich chunks (coast + river + cave junctions) this shows as wrong-texture speckle. Better: merge into the *nearest existing* slot or drop the weight and renormalize; at minimum log once per chunk.
+- **[minor]** `estimate_normal` samples at the rounded vertex position rather than trilinear gradient at the actual position — visible as slight faceting on smooth slopes; cheap to upgrade.
+- **[minor]** `mesh_convert.rs` smuggles material data through `ATTRIBUTE_COLOR`/`UV0`/`UV1`/`TANGENT`. It works, but tangents are semantically wrong (real tangents would help triplanar normal quality), and it deserves a comment block documenting the packing contract with `terrain_material.wgsl` (shader not in dump).
+- `DualContouringMesher` is an acknowledged stub — fine.
+
+## 5. Runtime Terrain Chunk Pipeline (`pipeline.rs`, `residency.rs`, `features.rs`, `editing.rs`, `metrics.rs`, `horizon_skirt.rs`)
+
+This is where the biggest holistic fixes live.
+
+**Works:** sparse chunk records (the O(radius³) refactor is sound in concept), revision-guarded job results, spawn-chunk prioritization, distance-sorted uploads, physics-radius-gated collider attachment with per-frame budget, edit invalidation with entity despawn, F8 regen with recipe-hash change detection.
+
+**Incorrect:**
+- **[critical] Annulus churn.** Chunks between `render_radius` and `density_radius`: `dispatch_density_jobs` starts them (density radius), `poll_density_jobs` unconditionally chains a mesh job, `poll_mesh_jobs` queues upload, then `manage_chunk_residency` culls the upload item (render radius), `reset_transient_chunk_states` returns them to `Unrequested`, and dispatch restarts them next frame. Result: perpetual regeneration of ~(2·10+1)³ − (2·7+1)³ ≈ 5,886 chunks, saturating the density budget forever and delaying real work. The design needs a `DensityReady` (or `MeshedCached`) state: prefetch density within `density_radius`, only mesh/upload within `render_radius`, and let the annulus rest.
+- **[major]** `maximum_mesh_jobs` and the mesh budget are never consulted — every completed density job immediately spawns a mesh task. Under churn (above) or fast movement this floods the compute pool.
+- **[major]** `Collider::trimesh(...)` is built synchronously inside `upload_chunk_meshes` on the main thread for *every* uploaded chunk — including chunks outside the physics radius whose collider is later discarded by `attach_pending_colliders`. Move trimesh construction into the mesh task (or a third async stage) and gate it on physics radius.
+- **[moderate]** `ChunkState::Failed` is terminal while in radius — a transient meshing failure permanently holes the world until F8. Add retry with backoff or reset to `Unrequested` after N seconds.
+- **[moderate]** `edit_store.clone()` (a full `HashMap` clone) happens once per dispatch call *and again per job* (`edits.clone()` in the loop), plus a third clone into every `DensityJobResult`. Wrap the store in `Arc` and snapshot once per revision.
+- **[perf]** `dispatch_density_jobs` rebuilds and sorts the full (2r+1)³ candidate vector every frame, even when every chunk is resident and `to_start` will be empty. Early-out when `slots == 0` is there, but when slots exist and the world is steady you still pay ~9k iterations + alloc + sort per frame. Cache the frontier, or iterate shells outward and stop when slots are filled.
+- **[minor]** `chunk_has_uploaded_mesh` does `chunks.values().any(...)` — a linear scan where `chunks.get(&coord)` is O(1).
+- **[minor]** `invalidate_chunks` uses `coords.contains` (linear) inside four `retain`s — quadratic for large edits; use a `HashSet`.
+- **[minor]** `upload_chunk_meshes` double-sort (reverse-distance, then stable bool sort for spawn chunk) works but is fragile and undocumented at the call site; the `Collider::cuboid(0.1)` fallback branch is unreachable (empty meshes never enter the queue).
+- **[minor]** `reset_for_revision(_revision)` ignores its argument — misleading signature.
+- **[minor]** `horizon_skirt` is centered at world origin and sized from `render_radius` at spawn time only: it doesn't rebuild when `render_radius` changes, doesn't follow the player (wrong for the large world), and uses a flat-green `StandardMaterial` ring that will visibly mismatch the triplanar terrain at the seam.
+- **[design note]** `features.rs` hydrology is sea + one river; the module docs are honest about this. `update_camera_water_state` runs a full spline scan per frame per body — fine now, will matter with more bodies.
+
+## 6. Surface Classification & Terrain Rendering (`terrain_surface/*`, `environment/surface.rs`, `biomes.rs`, `biome_context.rs`, `materials.rs`, `terrain_material_bevy/*`, `procedural_textures/*`)
+
+**Works:** dual classifier system (data-driven `RuleSurfaceClassifier` + code `IslandSurfaceClassifier`) with a parity test between them; gate weights with ramps and fallback distribution; per-chunk column climate cache (good — avoids per-voxel `surface_height_at`); paint-override path that survives meshing; soft biome weights blended 70/30 with atlas biome weights; biome tint via vertex "tangent" channel; fingerprint-cached CPU texture-array bakes with disk cache.
+
+**Incorrect / suspicious:**
+- **[major]** `WETNESS_NORMALIZATION: 600` (surface.rs) and the duplicate hardcoded `/ 600.0` (biome_context.rs `sample_climate`): atlas wetness is resampled flow accumulation, whose maximum on the default 37×37 regional grid is ≈ land-cell count × rainfall ≈ 400. So `wetness/600` is ~0.005 on almost all land and ≤ 0.67 only on the trunk cell — yet it's mixed at 50–55% weight into moisture, roughly *halving* effective moisture island-wide and making forest/wetland thresholds (≥ 0.52 / ≥ 0.58) rarely reachable except on the river line. Normalize by the atlas's actual max accumulation (or log-scale), and de-duplicate the constant. This is probably why the island reads as uniformly scrub/grass.
+- **[moderate]** `resolve_geology` returns Limestone whenever *any* subtract op exists in the recipe and cave_exposure > 0.35 — since generated caves always add subtract ops, all caves are Limestone; Basalt cave surfaces are unreachable despite the volcanic setting.
+- **[moderate]** slot-0 overflow merge (see §4) surfaces here as visible material substitution.
+- **[minor]** `build_context` computes `wx = (wx_m / cell_size).round()` from a value it just multiplied by cell_size — redundant round-trip, and another place the cell_size≠1 assumption hides.
+- **[minor]** `fallback_material_id` and `material_id_to_biome_kind` hardcode the id↔biome table that YAML (`BiomeRuleDefinition.material_id`) is supposed to own — three sources of truth (YAML, fallback table, `terrain_material_key_from_paint_material`).
+- **[minor]** `bake.rs` averages `normal_strength` across all recipes into one global — per-layer strength authored in YAML is flattened.
+
+**Missing:** the WGSL shader isn't in the dump, so the vertex-attribute packing contract and height-blend behavior are unverified; no LOD path (every rendered chunk is full-res, which the horizon skirt only partially covers).
+
+## 7. Sky / Atmosphere / Lighting / Fog (`atmosphere.rs`, `celestial.rs`, `lighting_state.rs`, `lighting.rs`, `sky_config.rs`, `config_init.rs`, `fog.rs`, `tweaks.rs` helpers)
+
+**Works:** Bevy procedural atmosphere with LUT mode + environment-map ambient (ambient `GlobalAmbientLight` deliberately zeroed outdoors), volumetric sun, celestial state resource feeding sun/moon/exposure/fog tints, YAML-driven sky/fog/atmosphere init with per-world profiles, layered fog with smoothed underwater/cave transitions, cave dimming driven by density sampling.
+
+**Incorrect:**
+- **[major]** No night. `sun_angles_from_time_of_day` clamps `day_phase` to [0, π], so elevation is ≥ 0 for all 24 hours (exactly 0 from 18:00–06:00). `sun_illuminance_for_elevation` floors at 400 lux. Moon full-strength requires elevation < −2°: unreachable when time-of-day drives the sun. The whole night path (night sky colors, stars flag, moon light) is dead under the time-of-day control it was built for. Fix: let elevation go negative overnight (e.g., `sin` over the full 24 h phase, or a symmetric negative arc), and drive illuminance to ~0 below −6°.
+- **[moderate]** `sun_color_for_elevation` red channel: `1.0 * (1.0 - t*0.02) + t * 1.0` → ≈ 1.98 at horizon (vs. green 0.72, blue 0.45). Certainly meant `1.0*(1.0-t) + t*1.0`. Sunsets are currently blowing out red.
+- **[moderate]** In `apply_fog_stack`, the carefully computed `_start` (height fog, cave, local volumes all modify it) is **never applied** — `FogFalloff::from_visibility_colors` only consumes `end`. All start-distance fog behavior is dead code; the height-fog unit test only tests the arithmetic, not the application.
+- **[minor]** `bootstrap.rs` hardcodes a `CaveAmbientZone` point light at (26, −2, 12) and `config_init` injects a fallback fog volume at (26, 4, 12) — demo-slice leftovers that apply to every world.
+- **[minor]** `celestial.moon_direction` is only set at init/config; `update_celestial_state` never refreshes it from tweaks, so moon azimuth/elevation tweaks (if exposed) won't move the light.
+- **[minor]** `ambient_brightness_for_elevation` feeds `effective_ambient_brightness`, which is only ever applied *inside caves*; the YAML `ambient_brightness` has no outdoor effect (by design with the env-map, but the config field is then misleading).
+
+## 8. Water (`water_body.rs`, `features.rs`, `water_physics.rs`, missing `water/*` render module)
+
+**Works:** water body model with horizontal + spline-ribbon surfaces, nearest-segment ribbon sampling with flow velocity from discharge/area, deepest-sample… actually *shallowest*-sample selection (`best.depth > depth` keeps the smaller depth — that's "nearest surface above you", which is the right choice for a river under sea level), wading profile that's continuous across the shallow boundary (tested), buoyancy for crates, river-flow push, wetness accumulation.
+
+**Issues:**
+- **[moderate]** Tweaks that do nothing: `swim_up_speed_mps` and `buoyancy_surface_only` are defined, defaulted, presumably exposed in the options panel — and never read anywhere in the dump. Swimming up is not implemented (jump_held merely skips the jump-damp); the player genuinely cannot ascend in deep water except by walking up the seabed. If the missing `physics/mod.rs` doesn't consume them either, this is missing functionality masquerading as a setting.
+- **[moderate]** `WaterBodyRegistry::surface_height_at` returns `Some(sea_level)` for every XZ on the planet, including dry land — any caller using it for "is there water here" gets sea level as truth. It's only safe for rendering the global ocean plane.
+- **[minor]** The sea being a global unbounded horizontal body is documented as intentional, but combined with cave chambers below sea level it means flooded caves with no water rendering (the visual water is a single plane, per the missing water module's hot-reload hooks) — swim physics in visually dry caves.
+- **[minor]** `apply_river_flow` scans every spline segment per body per frame; cache per-entity nearest-segment or skip when far from the river's AABB.
+- **Unreviewable:** the entire water *rendering* pipeline (mesh, `WaterMaterial`, shore blending, underwater surface from below) — missing from the dump.
+
+## 9. Player / Physics (`physics_bridge/character.rs`, `body_spec.rs`, `collision_layers.rs`, `motor.rs`, `movement.rs`, `props.rs`)
+
+**Works:** kinematic capsule with `move_and_slide`, ground probe + snap with contact skin, jump speed derived from height/gravity, collision layers, moving platforms, crate demos snapped to terrain, intent/motor separation with facing-mode resolution (nicely tested).
+
+**Incorrect:**
+- **[major]** `move_character` hit callback: `let is_ceiling = is_ground && up.dot(normal) < 0.0` — `is_ground` requires `angle ≤ max_slope` (normal near +Y), so `is_ceiling` is unsatisfiable. Ceiling hits therefore never take the "preserve horizontal, cancel vertical" branch; instead the full projected velocity is adopted, and vertical velocity behavior on head-bonks is whatever `move_and_slide` projects (usually fine-ish, but the code's stated intent is broken). Meanwhile `if grounded && angle > max_slope → Ignore` instructs the solver to *ignore steep surfaces entirely while grounded* — walking into a cliff face while grounded means the capsule doesn't slide along it, it tunnels until the ground probe changes. This block needs a rewrite with the actual cases: walkable ground / steep wall (slide) / ceiling (kill upward velocity).
+- **[minor]** `apply_gravity` zeroes vertical velocity whenever grounded — jumps depend on jump being applied after gravity in the same tick (in the missing physics mod); ordering is unverifiable but fragile.
+- **[minor]** `snap_to_ground` runs *before* `probe_ground` in the chain, so grounding state used by gravity next tick is post-snap — probably intended, worth a comment.
+- `movement.rs` is two empty plugins — placeholders; fine but note the real systems live in missing `physics/mod.rs`.
+
+## 10. Camera (`camera/*` — fully present)
+
+**Works:** this is the most polished pipeline. Clean set ordering (Follow → Collision → Transform), exponential smoothing helpers, fixed-timestep interpolation of the player for focus, orbit with steer/look distinction and recenter, collision resolution with separate in/out sharpness, fly-cam capture from orbit, environment-aware interior distance scaling, debug snapshot + gizmos, real unit tests.
+
+**Issues:**
+- **[minor]** Several systems `.expect("camera config")` on `active_camera()` every frame — a hot-reload that briefly invalidates the registry panics the app; prefer a cached copy or graceful skip.
+- **[minor]** `update_camera_environment` and the debug drawer run without `run_if(in_state(Running))` on some registrations (they're inside sets that have the run condition, except `update_camera_environment` is added separately with only `.in_set(Follow)` — the set has the condition, so it's actually covered; fine).
+- **[minor]** `parse_recenter_key` supports only Home/End with silent fallback — config accepts any string.
+
+## 11. UI / Setup / Preview (`main_menu.rs`, `setup_options.rs`, `options_panel.rs`, `overlay_camera.rs`, `hud.rs`, `world/preview.rs`, `world/profile.rs`)
+
+**Works:** persistent egui overlay camera (with a great comment explaining the bevy_egui re-attach trap), async atlas preview with generation counters and prefs hashing (BTreeMap → deterministic), validation + spawn-validation surfaced to the setup screen, world-profile switch triggering full regen + presentation refresh, HUD with biome/water/pipeline readouts.
+
+**Issues:**
+- **[moderate]** Options panel exposes dead knobs: `swim_up_speed_mps`, `buoyancy_surface_only` (§8), `AtmosphereTweaks.zenith_color/mie_strength` (consumed only if the missing sky shader path uses them — the Bevy procedural atmosphere ignores them), `EcologyTweaks` (vegetation module missing), `LightingTweaks.fog_start_m` (dead via the fog `_start` bug). Users tweak, nothing happens. Each should either be wired or removed/greyed with the existing `STUB_FEATURES` mechanism.
+- **[minor]** `hud.rs` calls `classify_biome` (uncached `BiomeSampleContext::sample` → `terrain_surface_height_at` etc.) every frame on the main thread.
+- **[minor]** `regen_terrain_with_seed` resets state but `TerrainFeatureRegistry` hydrology is only rebuilt by the tweak-key system; after F8 regen with a new river the features update relies on `sync_hydrology_from_tweaks`'s key not changing → **stale river registry after seed regen** until a water/terrain tweak changes. `regen_terrain_with_seed` should rebuild hydrology (or bump a revision the features system watches). This one is easy to miss and worth verifying against the missing debug_tools bindings that call regen.
+
+---
+
+# Proposed Fix Order (holistic, dependency-aware)
+
+Each step is scoped to the files we'll touch when you say Continue; I won't chase a green build at the expense of doing these properly.
+
+1. **Terrain pipeline lifecycle** — `pipeline.rs` (+ `residency.rs`, ChunkState in the missing `terrain/mod.rs`, so I'll define the state enum change and you can merge it): add `DensityReady` prefetch state, gate meshing on render radius (kills the annulus churn), enforce `maximum_mesh_jobs`, move trimesh into the async stage and gate on physics radius, `Arc` the edit snapshot, Failed-state retry, O(1) lookups.
+2. **Erosion + beach + river trace** — `erosion.rs`, `coast.rs`, `hydrology.rs`: real iterative stream power (recompute slope per iteration), corrected beach profile direction, source-selection and monotonic-water fixes; keep `validate_atlas` in agreement.
+3. **Day/night + fog application** — `tweaks.rs` (sun angle/illuminance/color functions), `fog.rs` (apply start distance), `lighting_state.rs`/`celestial.rs` (moon activation, moon direction refresh).
+4. **Character controller contact handling** — `character.rs`: rewrite the hit-response cases.
+5. **Wetness normalization + geology + material-table dedup** — `surface.rs`, `biome_context.rs`, `materials.rs`.
+6. **Water swim-up + dead tweaks** — `water_physics.rs`, `options_panel.rs` (wire or stub-mark), plus `features.rs` regen-staleness fix.
+7. **Polish tier** — slot-overflow merge (`chunk_palette.rs`/`surface_nets.rs`), horizon skirt follow/rebuild, hardcoded demo lights/fog volumes, hot-reload no-op systems, `.expect` hardening in camera.

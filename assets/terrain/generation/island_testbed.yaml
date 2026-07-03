@@ -15,8 +15,9 @@ island:
   # Support extends to ~0.59 * diameter from center (lobe offsets + falloff),
   # plus warp_amplitude. 180 -> ~106 m + 6 m warp = 112 m < 128 m chunk half-extent.
   playable_diameter_m: 180
-  # Absolute elevation ceiling for validation; actual composed peak is ~48 m
-  # (shield 30 + summit 16 + rim 2) before +/-5.2 m of noise.
+  # Absolute elevation ceiling for validation; composed authorship peak is
+  # ~48 m (shield 30 + summit 16 + rim 2) before noise; baked atlas peak
+  # is ~37 m after stream-power carving.
   maximum_height_m: 50
   # Must equal the world's water def sea level (water.tropical_shallow -> 2.0);
   # generated cave placement reads this value.

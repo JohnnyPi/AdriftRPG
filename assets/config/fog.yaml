@@ -2,14 +2,15 @@
 id: fog.default
 
 distance:
-  color: [0.62, 0.74, 0.86]
-  start_m: 40.0
-  end_m: 220.0
+  color: [0.58, 0.72, 0.88]
+  inscattering_color: [0.72, 0.78, 0.88]
+  start_m: 60.0
+  end_m: 520.0
 
 height:
   base_height_m: 4.0
   density: 0.02
-  color: [0.7, 0.78, 0.85]
+  color: [0.65, 0.74, 0.82]
 
 underwater:
   density: 0.15

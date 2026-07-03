@@ -1,0 +1,23 @@
+﻿schema_version: 1
+id: routes.island_large
+
+# Recipe-space waypoints (volcano center [1344,1344], spawn [525,770] on the
+# 215 deg collapse flank). Traversal-smoke routes for route_validation.rs.
+routes:
+  - id: route_spawn_to_mid_flank
+    waypoints:
+      - [525.0, 770.0]
+      - [680.0, 920.0]
+      - [820.0, 1040.0]
+      - [960.0, 1140.0]
+  - id: route_mid_flank_to_upper_rim
+    waypoints:
+      - [960.0, 1140.0]
+      - [1080.0, 1200.0]
+      - [1180.0, 1260.0]
+  - id: route_upper_rim_to_coast
+    waypoints:
+      - [1180.0, 1260.0]
+      - [1380.0, 1380.0]
+      - [1580.0, 1480.0]
+      - [1780.0, 1580.0]

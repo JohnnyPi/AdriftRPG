@@ -85,9 +85,7 @@ impl RecipeDensitySource {
             "No valid terrain spawn within search radius (need walkable ground with clearance)"
                 .into(),
         );
-        let fallback_y = self
-            .terrain_surface_height_at(world_x, world_z)
-            + SPAWN_FLOOR_EPSILON_M;
+        let fallback_y = recipe.sea_level + min_clearance + 2.0;
         (world_x, fallback_y, world_z, report)
     }
 

@@ -1910,6 +1910,10 @@ All bindings should be data-driven.
 
 # 28. Example configuration
 
+> **Note:** The shipped asset tree uses `world.island_testbed` and
+> `world.island_large` (see `docs/terrain_yaml_authoring.md`). The
+> `world.vertical_slice` example below is historical reference only.
+
 ## World
 
 ```yaml

@@ -1,4 +1,5 @@
 // crates/terrain_generation/src/recipe.rs
+use crate::field_stack::FieldStackParams;
 use crate::density_ops::{capsule_sdf, ellipsoid_sdf, plane_density, solid_subtract, solid_union};
 use crate::island_atlas::IslandAtlas;
 use crate::island_gen::sample_atlas_surface;
@@ -154,6 +155,8 @@ pub struct RecipeDensitySource {
     river_carve: Option<RiverCarveContext>,
     atlas: Option<Arc<IslandAtlas>>,
     world_bounds: Option<WorldVolumeBounds>,
+    detail_noise: ValueNoise,
+    field_stack: FieldStackParams,
 }
 
 /// Coastal inland factor: 0 at the shore, 1 deep inland.
@@ -233,12 +236,20 @@ fn river_spline_to_recipe_space(spline: &RiverSpline, coord_offset: [f32; 3]) ->
 
 impl RecipeDensitySource {
     pub fn new(recipe: TerrainRecipe) -> Self {
+        let detail_noise = ValueNoise::new(recipe.seed);
         Self {
             recipe,
             river_carve: None,
             atlas: None,
             world_bounds: None,
+            detail_noise,
+            field_stack: FieldStackParams::default(),
         }
+    }
+
+    pub fn with_field_stack(mut self, stack: FieldStackParams) -> Self {
+        self.field_stack = stack;
+        self
     }
 
     pub fn with_world_bounds(mut self, bounds: WorldVolumeBounds) -> Self {
@@ -354,7 +365,7 @@ impl RecipeDensitySource {
     }
 
     fn density_at_recipe_without_atlas(&self, x: f32, y: f32, z: f32, include_union_objects: bool) -> f32 {
-        let noise = ValueNoise::new(self.recipe.seed);
+        let noise = &self.detail_noise;
         let island = self
             .recipe
             .ops
@@ -529,8 +540,9 @@ impl RecipeDensitySource {
                     density_min,
                     density_max,
                 } => {
+                    let scaled_amp = amplitude * self.field_stack.ridge_amplitude.max(0.01);
                     let perturb =
-                        (noise.sample(x * scale, y * scale, z * scale) - 0.5) * amplitude;
+                        (noise.sample(x * scale, y * scale, z * scale) - 0.5) * scaled_amp;
                     let band = perturb_band_weight(density, *density_min, *density_max);
                     density += perturb * band;
                 }
@@ -554,7 +566,7 @@ impl RecipeDensitySource {
         z: f32,
         include_union_objects: bool,
     ) -> f32 {
-        let noise = ValueNoise::new(self.recipe.seed);
+        let noise = &self.detail_noise;
         let wx = x - self.recipe.coord_offset[0];
         let wz = z - self.recipe.coord_offset[2];
         let surface = self.clamp_surface_for_world(sample_atlas_surface(atlas, wx, wz));
@@ -640,8 +652,9 @@ impl RecipeDensitySource {
                     density_min,
                     density_max,
                 } => {
+                    let scaled_amp = amplitude * self.field_stack.ridge_amplitude.max(0.01);
                     let perturb =
-                        (noise.sample(x * scale, y * scale, z * scale) - 0.5) * amplitude;
+                        (noise.sample(x * scale, y * scale, z * scale) - 0.5) * scaled_amp;
                     let band = perturb_band_weight(density, *density_min, *density_max);
                     density += perturb * band;
                 }
@@ -670,6 +683,23 @@ impl RecipeDensitySource {
             }
         }
         hi
+    }
+
+    /// Surface height used as the foundation seal reference at `(world_x, world_z)`.
+    ///
+    /// Atlas-backed sources use the clamped atlas elevation field (matching
+    /// [`Self::density_at`]); recipe-only sources use the coastal surface height.
+    /// Prefer this over [`Self::terrain_surface_height_at`] when probing bedrock
+    /// depth — binary search can sit one float ULP above the seal plane near
+    /// cave margins.
+    pub fn foundation_surface_at(&self, world_x: f32, world_z: f32) -> f32 {
+        if let Some(ref atlas) = self.atlas {
+            return self
+                .clamp_surface_for_world(sample_atlas_surface(atlas, world_x, world_z));
+        }
+        let rx = world_x + self.recipe.coord_offset[0];
+        let rz = world_z + self.recipe.coord_offset[2];
+        land_surface_height(&self.recipe, rx, rz)
     }
 
     /// Surface slope in degrees; uses the local-tier atlas slope field when available.
@@ -868,7 +898,7 @@ impl DensitySource for RecipeDensitySource {
                 let wz = world_z;
                 let land = atlas.island_mask.sample_bilinear(wx, wz);
                 if land > 0.01 && density.abs() < 2.0 {
-                    let noise = ValueNoise::new(self.recipe.seed);
+                    let noise = &self.detail_noise;
                     let micro = (noise.fbm_2d(wx * 0.35, wz * 0.35, 2) - 0.5)
                         * atlas.voxel_amplitude_m;
                     density += micro * land;

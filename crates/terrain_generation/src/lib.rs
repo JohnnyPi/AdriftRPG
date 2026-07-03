@@ -1,6 +1,7 @@
 // crates/terrain_generation/src/lib.rs
 //! Deterministic terrain density generation. No Bevy dependency.
 
+pub mod atlas_bake;
 mod chunk_gen;
 mod density_ops;
 pub mod field2d;
@@ -57,11 +58,17 @@ pub use spawn::{
 };
 pub use water_body::{
     RiverControlPoint, RiverSpline, WaterBody, WaterBodyId, WaterBodyKind, WaterBodyRegistry,
-    WaterQuery, WaterSample, WaterSurfaceDefinition,
+    WaterQuery, WaterSample, WaterSurfaceDefinition, HorizontalFootprint,
+};
+pub use atlas_bake::{
+    atlas_content_hash, load_baked_atlas, resolve_baked_atlas_path, try_load_baked_atlas,
+    write_baked_atlas, AtlasBakeError, AtlasBakeManifest, ATLAS_BAKE_SCHEMA_VERSION,
 };
 pub use world_setup::{
-    append_generated_island_caves, build_atlas_density_source, compile_terrain_recipe,
-    effective_ocean_extent_m, island_params_from_compiled, validate_island_world_budget,
+    append_generated_island_caves, build_atlas_density_source,
+    build_atlas_density_source_for_world, compile_terrain_recipe,
+    compile_terrain_recipe_with_island, effective_ocean_extent_m, effective_sea_level_m,
+    island_params_from_compiled, resolve_island_atlas, validate_island_world_budget,
     DERIVED_OCEAN_PADDING_M,
 };
 

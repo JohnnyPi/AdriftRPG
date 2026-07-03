@@ -6,11 +6,11 @@ use shared::StableId;
 
 use crate::data::{ConfigRegistryResource, UserSetupPrefs};
 use crate::environment::config_init::refresh_presentation_for_profile;
-use crate::environment::sky::SkyState;
+use crate::environment::{SkyEffectsRevision, SkyPresentationConfig};
 use crate::state::AppState;
 use crate::terrain::{
-    regen_terrain_with_seed, TerrainEditStore, TerrainPipelineState, TerrainRecipeRevision,
-    TerrainRegenPending, TerrainRevision, TerrainSpawnPoint, WorldSeedOverride,
+    regen_terrain_with_seed, TerrainEditStore, TerrainPipelineState, TerrainRecipeRevision, TerrainRegenPending, TerrainRevision, TerrainSpawnPoint,
+    WorldSeedOverride,
 };
 use crate::ui::{TerrainTweaks};
 
@@ -49,8 +49,9 @@ fn auto_regen_on_profile_switch(
     mut pending: ResMut<TerrainRegenPending>,
     mut edit_store: ResMut<TerrainEditStore>,
     mut runtime: ResMut<crate::terrain::TerrainWorldRuntime>,
-    mut sky_state: ResMut<SkyState>,
+    mut sky_config: ResMut<SkyPresentationConfig>,
     mut atmosphere: ResMut<crate::ui::AtmosphereTweaks>,
+    mut sky_effects_revision: ResMut<SkyEffectsRevision>,
     mut last: Local<Option<String>>,
 ) {
     let Some(ref previous) = *last else {
@@ -65,8 +66,9 @@ fn auto_regen_on_profile_switch(
     refresh_presentation_for_profile(
         &registry,
         &prefs,
-        &mut sky_state,
+        &mut sky_config,
         &mut atmosphere,
+        &mut sky_effects_revision,
     );
     regen_terrain_with_seed(
         &mut commands,

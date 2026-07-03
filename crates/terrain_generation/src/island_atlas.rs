@@ -170,6 +170,16 @@ impl IslandAtlas {
         self.wetness.sample_bilinear(wx, wz)
     }
 
+    /// Peak flow-accumulation-derived wetness for normalization at runtime.
+    pub fn max_wetness(&self) -> f32 {
+        self.wetness
+            .samples
+            .iter()
+            .copied()
+            .fold(0.0f32, f32::max)
+            .max(1.0)
+    }
+
     pub fn sample_soil_depth(&self, wx: f32, wz: f32) -> f32 {
         self.soil_depth.sample_bilinear(wx, wz)
     }

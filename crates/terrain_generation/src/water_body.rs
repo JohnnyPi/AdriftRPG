@@ -19,10 +19,41 @@ pub enum WaterBodyKind {
     CavePool,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum HorizontalFootprint {
+    Disc { center_xz: [f32; 2], radius_m: f32 },
+}
+
+impl HorizontalFootprint {
+    pub fn contains(&self, position_xz: [f32; 2]) -> bool {
+        match self {
+            Self::Disc { center_xz, radius_m } => {
+                let dx = position_xz[0] - center_xz[0];
+                let dz = position_xz[1] - center_xz[1];
+                dx * dx + dz * dz <= radius_m.max(0.1).powi(2)
+            }
+        }
+    }
+}
+
+/// Whether a horizontal surface applies at `position_xz`. Sea is unbounded when
+/// `footprint` is `None`; inland kinds require an explicit footprint.
+pub fn horizontal_surface_contains(
+    kind: WaterBodyKind,
+    footprint: &Option<HorizontalFootprint>,
+    position_xz: [f32; 2],
+) -> bool {
+    match footprint {
+        None => kind == WaterBodyKind::Sea,
+        Some(fp) => fp.contains(position_xz),
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum WaterSurfaceDefinition {
     Horizontal {
         elevation: f32,
+        footprint: Option<HorizontalFootprint>,
     },
     SplineRibbon {
         control_points: Vec<RiverControlPoint>,
@@ -86,6 +117,7 @@ impl WaterBodyRegistry {
                 kind: WaterBodyKind::Sea,
                 surface: WaterSurfaceDefinition::Horizontal {
                     elevation: sea_level,
+                    footprint: None,
                 },
                 material_id: StableId::new("water.tropical_shallow"),
             },
@@ -98,6 +130,10 @@ impl WaterBodyRegistry {
                 kind: WaterBodyKind::Lake,
                 surface: WaterSurfaceDefinition::Horizontal {
                     elevation: pool_elevation,
+                    footprint: Some(HorizontalFootprint::Disc {
+                        center_xz: [82.0, 196.0],
+                        radius_m: 18.0,
+                    }),
                 },
                 material_id: StableId::new("water.freshwater"),
             },
@@ -170,7 +206,13 @@ impl WaterQuery for WaterBodyRegistry {
         let mut best: Option<WaterSample> = None;
         for body in self.bodies.values() {
             match &body.surface {
-                WaterSurfaceDefinition::Horizontal { elevation } => {
+                WaterSurfaceDefinition::Horizontal {
+                    elevation,
+                    footprint,
+                } => {
+                    if !horizontal_surface_contains(body.kind, footprint, [point[0], point[2]]) {
+                        continue;
+                    }
                     if point[1] < *elevation {
                         let depth = *elevation - point[1];
                         let sample = WaterSample {
@@ -218,6 +260,15 @@ impl WaterQuery for WaterBodyRegistry {
     fn surface_height_at(&self, position_xz: [f32; 2]) -> Option<f32> {
         let mut best = Some(self.sea_level_m);
         for body in self.bodies.values() {
+            if let WaterSurfaceDefinition::Horizontal {
+                elevation,
+                footprint,
+            } = &body.surface
+            {
+                if horizontal_surface_contains(body.kind, footprint, position_xz) {
+                    best = Some(best.map_or(*elevation, |current| current.max(*elevation)));
+                }
+            }
             if let WaterSurfaceDefinition::SplineRibbon { control_points } = &body.surface {
                 let Some(ribbon) = spline_ribbon_sample(control_points, position_xz) else {
                     continue;
@@ -236,6 +287,17 @@ impl WaterQuery for WaterBodyRegistry {
 #[cfg(test)]
 mod water_tests {
     use super::*;
+
+    #[test]
+    fn bounded_lake_does_not_flood_outside_disc() {
+        let registry = WaterBodyRegistry::demo_registry(2.0, 31.5);
+        assert!(registry.water_at([200.0, 1.0, 200.0]).is_some());
+        let outside = registry.water_at([200.0, 29.0, 200.0]);
+        assert!(
+            outside.is_none_or(|s| s.kind == WaterBodyKind::Sea),
+            "elevated lake must not apply outside its disc"
+        );
+    }
 
     #[test]
     fn sea_overlaps_lake_prefers_deeper_sample() {

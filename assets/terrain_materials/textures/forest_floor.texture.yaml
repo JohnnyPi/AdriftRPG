@@ -1,0 +1,17 @@
+﻿schema_version: 1
+id: textures.forest_floor
+resolution: 512
+seed: 2003
+tileable: true
+generator:
+  Ground:
+    seed: 2003
+    macro_scale: 2.2
+    macro_octaves: 5
+    micro_scale: 12.0
+    micro_octaves: 4
+    micro_weight: 0.42
+    color_dry: [0.24, 0.44, 0.22]
+    color_moist: [0.14, 0.28, 0.12]
+    normal_strength: 1.9
+    roughness: 0.92

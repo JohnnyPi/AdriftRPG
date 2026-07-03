@@ -28,13 +28,44 @@ impl Plugin for VegetationPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            spawn_environment_when_ready.run_if(in_state(AppState::Running)),
+            (
+                respawn_ecology_on_density_change,
+                spawn_environment_when_ready,
+            )
+                .chain()
+                .run_if(in_state(AppState::Running)),
         );
     }
 }
 
 #[derive(Component)]
 struct EnvironmentSpawned;
+
+const ECOLOGY_DENSITY_RESPAWN_THRESHOLD: f32 = 0.05;
+
+fn respawn_ecology_on_density_change(
+    mut commands: Commands,
+    ecology: Res<EcologyTweaks>,
+    mut last_density: Local<f32>,
+    players: Query<Entity, (With<Player>, With<EnvironmentSpawned>)>,
+    vegetation: Query<Entity, With<VegetationInstance>>,
+    props: Query<Entity, With<PropInstance>>,
+) {
+    if players.is_empty() {
+        *last_density = ecology.vegetation_density;
+        return;
+    }
+    if (ecology.vegetation_density - *last_density).abs() <= ECOLOGY_DENSITY_RESPAWN_THRESHOLD {
+        return;
+    }
+    *last_density = ecology.vegetation_density;
+    for entity in vegetation.iter().chain(props.iter()) {
+        commands.entity(entity).despawn();
+    }
+    for player in &players {
+        commands.entity(player).remove::<EnvironmentSpawned>();
+    }
+}
 
 fn spawn_environment_when_ready(
     mut commands: Commands,
@@ -47,11 +78,12 @@ fn spawn_environment_when_ready(
     players: Query<(&Transform, Entity), (With<Player>, Without<NeedsGroundSnap>, Without<EnvironmentSpawned>)>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut last_density: Local<f32>,
 ) {
     let Ok((player_tf, player)) = players.single() else {
         return;
     };
-    let Some(source) = pipeline.density_source.clone() else {
+    let Some(source) = pipeline.density_source.as_ref().map(|s| s.as_ref().clone()) else {
         return;
     };
     let Some(spawn_chunk) = pipeline.spawn_chunk else {
@@ -65,6 +97,7 @@ fn spawn_environment_when_ready(
     }
 
     commands.entity(player).insert(EnvironmentSpawned);
+    *last_density = ecology.vegetation_density;
     spawn_vegetation_and_props(
         &mut commands,
         &registry,

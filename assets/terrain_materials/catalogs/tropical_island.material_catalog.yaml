@@ -1,0 +1,15 @@
+﻿schema_version: 1
+id: catalogs.tropical_island
+description: Tropical island procedural texture catalog
+region_chunks: 4
+textures:
+  - textures.rock
+  - textures.sand
+  - textures.grass
+  - textures.forest_floor
+surfaces:
+  - surfaces.rock
+  - surfaces.sand
+  - surfaces.grass
+overlays:
+  - overlays.wetness

@@ -56,13 +56,11 @@ worlds.
 
 **Never give an atlas world an op-based terrain def.** The ops do not know
 the atlas exists; you get two coastlines, two ocean floors, and coves carved
-into a volcano flank. `world.vs3_island` shipped in exactly this state
-(`terrain.expanded_slice` + `island_gen.vs3_volcanic` simultaneously). The
-correct shape is a minimal terrain def:
+into a volcano flank. The correct shape is a minimal terrain def:
 
 ```yaml
 schema_version: 1
-id: terrain.vs3_island
+id: terrain.island_testbed
 spawn: [70.0, 0.0, 160.0]
 ```
 
@@ -251,7 +249,13 @@ the hydrology grid and therefore the meaning of the cell-count thresholds.
 
 Biome rules (`biomes.*`) are absolute-threshold classifiers over elevation
 (m), slope (degrees), moisture, and distances (m). The island's relief must
-be authored *into* these bands or one rule eats the whole map. Current
+be authored *into* these bands or one rule eats the whole map.
+
+**`world.island_testbed`** uses `biomes.expanded_slice` (relief ~50 m).
+**`world.island_large`** uses `biomes.island_large` — the same rule set with
+elevation and distance thresholds scaled by relief ratio 7.2 and diameter
+ratio 12.2 (zero runtime cost; separate YAML files).
+
 `biomes.expanded_slice` land bands:
 
 | Rule | Elevation | Slope | Other |
@@ -281,7 +285,7 @@ declaration, shelf vs. floor, and sea-level checks. It runs:
 - at runtime, in `game_bevy` `build_density_source` /
   `build_density_source_from_prefs` (panics at startup with the message list);
 - in diagnostics/tests, in `build_atlas_density_source` (panics);
-- in the regression test `vs3_island_world_passes_budget_validation`, which
+- in the regression test `island_worlds_load_with_scale_appropriate_biomes`, which
   loads the shipped assets — so a YAML retune that breaks the budget fails CI
   before anyone sees a lumpy cone.
 
@@ -300,13 +304,19 @@ then look at it in-game.
 
 ## 10. Known sharp edges
 
-`Default` for `IslandGenParams` mirrors `vs3_volcanic_island.yaml`; keep them
-in sync when retuning or diagnostics drift from the shipped world. The atlas
+`Default` for `IslandGenParams` mirrors `island_gen.island_testbed`; keep them
+in sync when retuning or diagnostics drift from the shipped world. Inland lakes
+use `hydrology_bodies` on the world def plus matching `waterbody.*` render
+materials (`hydrology.upland_pool` → `waterbody.upland_pool`). Ocean render
+colors come from `waterbody.sea` (aligned with `water.tropical_shallow`);
+physics hydrology uses `water.sea` / `water.river.island` stable ids.
+Setup UI schemas follow `setup.{world_suffix}` (`setup.testbed`,
+`setup.large`). The atlas
 blend width in `game_bevy/terrain/recipe.rs` reuses the demo river's
 `bank_width_m` (3.5 m fallback) — a semantic borrow worth cleaning up
 eventually. Landmarks and structures are positioned in recipe coordinates
 against a *specific* terrain surface; re-derive their positions after any
-relief change (the vs3 world's fort and landmarks are parked until Stage 7
+relief change (landmarks for `world.island_testbed` are deferred until Stage 7
 for exactly this reason). And `island_gen/mod.rs` (atlas pass ordering)
 remains unaudited — if generation output contradicts this guide's model,
 suspect that file first and get it reviewed.

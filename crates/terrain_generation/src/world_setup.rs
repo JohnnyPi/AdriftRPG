@@ -9,6 +9,8 @@
 //! construct atlas worlds should surface these messages instead of letting the
 //! generator absorb a contradictory configuration.
 
+use std::path::Path;
+
 use game_data::{
     CompiledIslandGeneration, CompiledWater, CompiledWorld, ConfigRegistry,
     GenerationResolutionDefinition, TerrainOperationDefinition,
@@ -16,18 +18,45 @@ use game_data::{
 use shared::StableId;
 
 use crate::{
+    atlas_bake::try_load_baked_atlas,
     build_island_atlas, default_vertical_slice_recipe, BeachParams, CaveParams, CoastParams,
     CoastModifierKind, CombineOp, ErosionParams, GenerationResolution, HydrologyParams,
     IslandGenParams, IslandShapeParams, RecipeDensitySource, RecipeOp, SurfaceNoiseParams,
     TerrainRecipe, VolcanoParams, WorldVolumeBounds,
 };
+use crate::island_atlas::IslandAtlas;
+
+/// Build or load the island atlas for a world (procedural unless `island_atlas_baked` is set).
+pub fn resolve_island_atlas(
+    compiled: &CompiledIslandGeneration,
+    world: &CompiledWorld,
+    seed: u64,
+    sea_level_m: f32,
+    assets_root: Option<&Path>,
+) -> IslandAtlas {
+    if let (Some(root), Some(ref baked_path)) = (assets_root, world.island_atlas_baked.as_ref())
+    {
+        // Golden atlases are baked at the world's authored seed. User seed overrides
+        // affect procedural recipe ops (caves) only, not the committed terrain shape.
+        let atlas_seed = world.seed;
+        try_load_baked_atlas(root, baked_path, world.id.as_str(), atlas_seed).unwrap_or_else(
+            |e| {
+                panic!(
+                    "failed to load baked island atlas for '{}' at '{}': {e}",
+                    world.id.as_str(),
+                    baked_path
+                )
+            },
+        )
+    } else {
+        let params = island_params_from_compiled(compiled, world, seed, sea_level_m);
+        build_island_atlas(&params)
+    }
+}
 
 /// Convert authored recipe XZ to world XZ (atlas grid space).
 fn recipe_xz_to_world(recipe_x: f32, recipe_z: f32, world: &CompiledWorld) -> [f32; 2] {
-    [
-        recipe_x - world.coord_offset[0],
-        recipe_z - world.coord_offset[2],
-    ]
+    world.recipe_xz_to_world(recipe_x, recipe_z)
 }
 
 /// Padding kept between the island footprint and the atlas rim when deriving
@@ -44,12 +73,18 @@ fn merge_resolution(
     extent_m: f32,
 ) -> GenerationResolution {
     let defaults = GenerationResolution::for_extent(extent_m);
-    GenerationResolution {
+    let resolved = GenerationResolution {
         world_control_m: yaml.world_control_m.unwrap_or(defaults.world_control_m),
         regional_m: yaml.regional_m.unwrap_or(defaults.regional_m),
         local_m: yaml.local_m.unwrap_or(defaults.local_m),
         voxel_m: yaml.voxel_m.unwrap_or(defaults.voxel_m),
+    };
+    if let Err(error) = resolved.validate(extent_m) {
+        panic!(
+            "generation resolution failed validation for extent {extent_m:.0} m: {error}"
+        );
     }
+    resolved
 }
 
 fn resolve_generation_resolution(
@@ -64,6 +99,15 @@ fn resolve_generation_resolution(
         return merge_resolution(world_res, extent_m);
     }
     GenerationResolution::for_extent(extent_m)
+}
+
+pub fn effective_sea_level_m(
+    water: &CompiledWater,
+    island_gen: Option<&CompiledIslandGeneration>,
+) -> f32 {
+    island_gen
+        .map(|island| island.island.sea_level_m)
+        .unwrap_or(water.sea_level_m)
 }
 
 pub fn island_params_from_compiled(
@@ -120,12 +164,12 @@ pub fn island_params_from_compiled(
             m: compiled.erosion.m,
             n: compiled.erosion.n,
             maximum_step_m: compiled.erosion.maximum_step_m,
-            stream_power_erodibility: 0.00002,
+            stream_power_erodibility: compiled.erosion.stream_power_erodibility,
             thermal_iterations: compiled.erosion.thermal_iterations,
             thermal_transfer_rate: compiled.erosion.thermal_transfer_rate,
-            thermal_talus_deg: 38.0,
-            river_bank_width_m: 3.5,
-            river_carve_strength: 1.2,
+            thermal_talus_deg: compiled.erosion.thermal_talus_deg,
+            river_bank_width_m: compiled.erosion.river_bank_width_m,
+            river_carve_strength: compiled.erosion.river_carve_strength,
         },
         coast: CoastParams {
             shelf_width_min_m: compiled.coast.shelf_width_min_m,
@@ -334,18 +378,19 @@ pub fn compile_terrain_recipe_with_island(
 
     let mut ops = Vec::new();
     for op_def in &terrain.operations {
-        ops.push(convert_op(op_def));
+        ops.push(RecipeOp::from(op_def));
     }
     for include in &terrain.includes {
         if let Some(cave) = registry.caves.get(include) {
             for op_def in &cave.operations {
-                ops.push(convert_op(op_def));
+                ops.push(RecipeOp::from(op_def));
             }
         }
     }
     let island_gen = island_gen_override.or_else(|| registry.island_generation_for_world(world));
     if let Some(island_gen) = island_gen {
-        append_generated_island_caves(&mut ops, island_gen, seed_override.unwrap_or(world.seed));
+        let sea_level_m = effective_sea_level_m(water, Some(island_gen));
+        append_generated_island_caves(&mut ops, island_gen, seed_override.unwrap_or(world.seed), sea_level_m);
     }
 
     // The hardcoded fallback slice exists so op-based worlds without any
@@ -365,9 +410,11 @@ pub fn compile_terrain_recipe_with_island(
         .map(|s| (s[0], s[2]))
         .unwrap_or((-30.0, -25.0));
 
+    let sea_level_m = effective_sea_level_m(water, island_gen);
+
     TerrainRecipe {
         seed: seed_override.unwrap_or(world.seed),
-        sea_level: water.sea_level_m,
+        sea_level: sea_level_m,
         spawn_x,
         spawn_z,
         coord_offset: world.coord_offset,
@@ -380,41 +427,66 @@ pub fn compile_terrain_recipe_with_island(
 /// Panics with the full message list if [`validate_island_world_budget`] fails:
 /// diagnostics and tests must not run against a world/island configuration the
 /// generator would have to distort or clip to satisfy.
+///
+/// When `assets_root` is set and the world references `island_atlas_baked`, loads
+/// the golden atlas archive instead of procedural generation.
+///
+/// Pass `island_gen_override` when user setup prefs have merged island parameters
+/// (cave counts, sea level, etc.); otherwise the registry base definition is used.
 pub fn build_atlas_density_source(
     registry: &ConfigRegistry,
     world_id: &StableId,
     seed: u64,
+    assets_root: Option<&Path>,
+    island_gen_override: Option<&CompiledIslandGeneration>,
 ) -> RecipeDensitySource {
     let world = registry.world_by_id(world_id).expect("world");
+    build_atlas_density_source_for_world(registry, world, seed, assets_root, island_gen_override)
+}
+
+/// Like [`build_atlas_density_source`] but accepts an already-resolved world record.
+pub fn build_atlas_density_source_for_world(
+    registry: &ConfigRegistry,
+    world: &CompiledWorld,
+    seed: u64,
+    assets_root: Option<&Path>,
+    island_gen_override: Option<&CompiledIslandGeneration>,
+) -> RecipeDensitySource {
     let water = registry.water.get(&world.water).expect("water");
     let base = registry
         .island_generation_for_world(world)
         .expect("island gen");
-    let mut merged = base.clone();
+    let mut merged = island_gen_override
+        .cloned()
+        .unwrap_or_else(|| base.clone());
     merged.seed = seed;
 
-    let budget_messages = validate_island_world_budget(&merged, world, water.sea_level_m);
+    let sea_level_m = effective_sea_level_m(water, Some(&merged));
+    let budget_messages = validate_island_world_budget(&merged, world, sea_level_m);
     if !budget_messages.is_empty() {
         panic!(
-            "island/world budget validation failed for {world_id:?}:\n  - {}",
+            "island/world budget validation failed for '{}':\n  - {}",
+            world.id.as_str(),
             budget_messages.join("\n  - ")
         );
     }
 
-    let params = island_params_from_compiled(&merged, world, seed, water.sea_level_m);
-    let atlas = build_island_atlas(&params);
+    let params = island_params_from_compiled(&merged, world, seed, sea_level_m);
+    let bank_width_m = params.erosion.river_bank_width_m;
+    let atlas = resolve_island_atlas(&merged, world, seed, sea_level_m, assets_root);
     let recipe =
         compile_terrain_recipe_with_island(registry, world, water, Some(seed), Some(&merged));
     let bounds = WorldVolumeBounds::from_compiled_world(world);
     RecipeDensitySource::new(recipe)
         .with_world_bounds(bounds)
-        .with_atlas(atlas, 3.5)
+        .with_atlas(atlas, bank_width_m)
 }
 
 pub fn append_generated_island_caves(
     ops: &mut Vec<RecipeOp>,
     island_gen: &CompiledIslandGeneration,
     seed: u64,
+    sea_level_m: f32,
 ) {
     let caves = &island_gen.caves;
     if caves.chamber_count_max == 0 || caves.passage_radius_max_m <= 0.0 {
@@ -454,7 +526,7 @@ pub fn append_generated_island_caves(
         );
         let center = [
             island_gen.volcano.center[0] + radial * angle.cos(),
-            cave_center_height(island_gen, t),
+            cave_center_height(island_gen, t, sea_level_m),
             island_gen.volcano.center[1] + radial * angle.sin(),
         ];
         ops.push(RecipeOp::Ellipsoid {
@@ -478,8 +550,8 @@ pub fn append_generated_island_caves(
         let mouth_radius = min_passage * 1.15;
         let mouth = [
             island_gen.volcano.center[0] + (base_radius + radius_span * 1.15) * base_angle.cos(),
-            (island_gen.island.sea_level_m + caves.minimum_cover_m + mouth_radius)
-                .min(cave_center_height(island_gen, 0.1)),
+            (sea_level_m + caves.minimum_cover_m + mouth_radius)
+                .min(cave_center_height(island_gen, 0.1, sea_level_m)),
             island_gen.volcano.center[1] + (base_radius + radius_span * 1.15) * base_angle.sin(),
         ];
         if let Some(last_center) = previous {
@@ -493,11 +565,15 @@ pub fn append_generated_island_caves(
     }
 }
 
-fn cave_center_height(island_gen: &CompiledIslandGeneration, t: f32) -> f32 {
+fn cave_center_height(
+    island_gen: &CompiledIslandGeneration,
+    t: f32,
+    sea_level_m: f32,
+) -> f32 {
     let caves = &island_gen.caves;
-    let base = island_gen.island.sea_level_m + caves.minimum_cover_m + 6.0;
+    let base = sea_level_m + caves.minimum_cover_m + 6.0;
     let depth_span = caves.maximum_depth_m * (0.18 + 0.18 * t);
-    let floor = island_gen.island.sea_level_m + caves.minimum_cover_m + 1.0;
+    let floor = sea_level_m + caves.minimum_cover_m + 1.0;
     let ceiling_limit = island_gen.island.maximum_height_m * 0.28;
     (base - depth_span).clamp(floor, ceiling_limit.max(floor + 2.0))
 }
@@ -517,8 +593,9 @@ fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
 }
 
-fn convert_op(def: &TerrainOperationDefinition) -> RecipeOp {
-    match def {
+impl From<&TerrainOperationDefinition> for RecipeOp {
+    fn from(def: &TerrainOperationDefinition) -> Self {
+        match def {
         TerrainOperationDefinition::CoastalSurface {
             origin,
             scale,
@@ -660,6 +737,7 @@ fn convert_op(def: &TerrainOperationDefinition) -> RecipeOp {
                 width_m: *width_m,
             }
         }
+    }
     }
 }
 

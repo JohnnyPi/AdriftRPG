@@ -214,8 +214,8 @@ impl IslandGenParams {
 impl Default for IslandGenParams {
     /// Self-consistent defaults at the default `ocean_extent_m` (288 m atlas,
     /// 256 m chunk world, sea level 2.0). Mirrors
-    /// `assets/config/island_gen/vs3_volcanic_island.yaml`; keep the two in
-    /// sync when retuning.
+    /// `assets/terrain/generation/island_testbed.yaml`; keep the two in sync
+    /// when retuning.
     ///
     /// The previous defaults described a 2200 m / 360 m island inside the same
     /// 288 m atlas - a configuration `validate_island_world_budget` rejects -
@@ -268,9 +268,9 @@ impl Default for IslandGenParams {
                 rainfall_base: 1.0,
                 // Units: accumulation cells on the regional grid
                 // (288 / 8 = 36x36, ~400 land cells).
-                stream_threshold: 25.0,
-                permanent_river_threshold: 80.0,
-                minimum_stream_length_m: 24.0,
+                stream_threshold: 12.0,
+                permanent_river_threshold: 40.0,
+                minimum_stream_length_m: 20.0,
             },
             erosion: ErosionParams {
                 stream_power_iterations: 22,
@@ -303,13 +303,13 @@ impl Default for IslandGenParams {
                 berm_height_max_m: 1.0,
             },
             caves: CaveParams {
-                chamber_count_min: 3,
+                chamber_count_min: 4,
                 chamber_count_max: 5,
-                passage_radius_min_m: 1.4,
-                passage_radius_max_m: 3.0,
-                minimum_cover_m: 4.0,
-                // Relief is ~48 m; 24 m keeps chambers inside the edifice.
-                maximum_depth_m: 24.0,
+                passage_radius_min_m: 2.2,
+                passage_radius_max_m: 3.6,
+                minimum_cover_m: 3.0,
+                // Relief is ~48 m authored; baked peak ~37 m after erosion.
+                maximum_depth_m: 20.0,
                 overhang_enabled: true,
             },
         }

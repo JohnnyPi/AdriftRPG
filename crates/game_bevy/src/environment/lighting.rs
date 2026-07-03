@@ -43,17 +43,8 @@ fn apply_lighting_hot_reload(
     }
     *last_hash = Some(hash);
 
-    let Ok(lighting) = registry.0.active_lighting() else {
-        return;
-    };
-
-    let fog_color = if tweaks.override_fog {
-        tweaks.fog_color
-    } else {
-        lighting.fog_color
-    };
-
-    clear.0 = Color::srgb(fog_color[0] * 0.85, fog_color[1] * 0.9, fog_color[2] * 1.05);
+    let _ = registry.0.active_lighting();
+    clear.0 = Color::BLACK;
 }
 
 fn update_sky_visibility(
@@ -111,12 +102,16 @@ fn apply_cave_atmosphere(
     }
 
     let base = lighting_state.effective_ambient_brightness * sky_factor;
-    ambient.brightness = base * (1.0 - cave_factor * 0.55);
-    ambient.color = Color::srgb(
-        lighting_state.ambient_color[0] * (1.0 - cave_factor * 0.3),
-        lighting_state.ambient_color[1] * (1.0 - cave_factor * 0.2),
-        lighting_state.ambient_color[2] * (1.0 - cave_factor * 0.1) + cave_factor * 0.15,
-    );
+    if cave_factor > 0.05 {
+        ambient.brightness = base * (1.0 - cave_factor * 0.55).max(0.02);
+        ambient.color = Color::srgb(
+            lighting_state.ambient_color[0] * (1.0 - cave_factor * 0.3),
+            lighting_state.ambient_color[1] * (1.0 - cave_factor * 0.2),
+            lighting_state.ambient_color[2] * (1.0 - cave_factor * 0.1) + cave_factor * 0.15,
+        );
+    } else {
+        ambient.brightness = 0.0;
+    }
 }
 
 fn cave_depth_factor(source: &RecipeDensitySource, position: Vec3) -> f32 {

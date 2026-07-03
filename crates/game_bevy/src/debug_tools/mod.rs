@@ -26,7 +26,8 @@ use crate::terrain::{
 };
 use terrain_material_bevy::TerrainPbrMaterial;
 use crate::terrain::draw_residency_rings;
-use crate::world::effective_world_from_prefs;
+use crate::terrain::chunk_world_center;
+use crate::world::{effective_world_from_prefs, semantic_tag_color, WorldSemanticRegistry, WorldSemanticTag};
 use crate::environment::fog::FogStack;
 use crate::ui::{EcologyTweaks, RiverTweaks, TerrainTweaks, WorldTweaks};
 use terrain_generation::build_coast_mask;
@@ -80,6 +81,7 @@ impl Plugin for DebugToolsPlugin {
             .add_systems(Update, draw_terrain_masks.run_if(in_state(AppState::Running)))
             .add_systems(Update, draw_island_atlas_fields.run_if(in_state(AppState::Running)))
             .add_systems(Update, draw_fog_contributors.run_if(in_state(AppState::Running)))
+            .add_systems(Update, draw_semantic_landmarks.run_if(in_state(AppState::Running)))
             .add_systems(Update, update_debug_panel.run_if(in_state(AppState::Running)));
     }
 }
@@ -398,6 +400,9 @@ fn update_debug_panel(
     pending: Res<TerrainRegenPending>,
     registry: Res<ConfigRegistryResource>,
     prefs: Res<UserSetupPrefs>,
+    world_tweaks: Res<WorldTweaks>,
+    semantic: Res<WorldSemanticRegistry>,
+    runtime: Res<TerrainWorldRuntime>,
     time: Res<Time>,
     mut panel: Local<Option<Entity>>,
     mut commands: Commands,
@@ -425,6 +430,19 @@ fn update_debug_panel(
         String::from("Terrain regen: idle")
     };
     let budget_ok = metrics.within_vs_budget(ready.max(1));
+    let landmark_lines = if world_tweaks.show_semantic_landmarks {
+        let count = semantic.facts.len();
+        let focus = chunk_world_center(runtime.interest_center);
+        let nearest = semantic
+            .nearest_fact_any(focus)
+            .map(|(fact, dist)| format!("Nearest: {} ({dist:.0} m)", fact.label));
+        match nearest {
+            Some(line) => format!("Landmarks: {count}\n{line}\n"),
+            None => format!("Landmarks: {count}\n"),
+        }
+    } else {
+        String::new()
+    };
     let body = format!(
         "Debug Panel\n\
          Seed: {} (override)\n\
@@ -435,6 +453,7 @@ fn update_debug_panel(
          Last ms  density:{:.1} mesh:{:.1} upload:{:.1}\n\
          Colliders/frame: {}  Frozen: {}\n\
          Biome view: {:?} (Shift+F4 cycle)\n\
+         {landmark_lines}\
          FPS: {fps:.0}\n\
          N=normals  F8=regen  F9=next seed",
         seed_override.seed,
@@ -621,6 +640,35 @@ fn draw_fog_contributors(
         gizmos.cube(
             Transform::from_translation(volume.center).with_scale(volume.half_extents * 2.0),
             Color::srgba(volume.color[0], volume.color[1], volume.color[2], volume.density),
+        );
+    }
+}
+
+fn draw_semantic_landmarks(
+    world_tweaks: Res<WorldTweaks>,
+    semantic: Res<WorldSemanticRegistry>,
+    runtime: Res<TerrainWorldRuntime>,
+    mut gizmos: Gizmos,
+) {
+    if !world_tweaks.show_semantic_landmarks {
+        return;
+    }
+    let focus = chunk_world_center(runtime.interest_center);
+    let nearest = semantic.nearest_fact(focus, 200.0);
+    for fact in &semantic.facts {
+        let color = semantic_tag_color(fact.tag);
+        let marker = fact.position + Vec3::Y * 0.5;
+        let radius = if nearest.is_some_and(|n| n.label == fact.label && n.position == fact.position) {
+            0.55
+        } else {
+            0.35
+        };
+        let stem_height = if fact.tag == WorldSemanticTag::Shelter { 2.0 } else { 1.5 };
+        gizmos.sphere(Isometry3d::from_translation(marker), radius, color);
+        gizmos.line(
+            fact.position,
+            marker + Vec3::Y * stem_height,
+            color.with_alpha(0.85),
         );
     }
 }

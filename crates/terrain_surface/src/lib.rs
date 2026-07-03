@@ -4,7 +4,10 @@ mod chunk_palette;
 mod classifier;
 mod context;
 mod material_id;
+mod overlay;
+mod region_palette;
 mod registry;
+mod scoring;
 
 pub use blend::{
     remap_blend_to_local_slots, resolve_blend, validate_blend, MaterialVertex, SurfaceClassifier,
@@ -21,7 +24,18 @@ pub use context::{
     GeologyId, SoftBiomeWeights, SurfaceContext,
 };
 pub use material_id::MaterialKey;
+pub use overlay::{
+    compute_overlay_state, overlay_response_for_material_name, OverlayResponseParams,
+    SurfaceOverlayState,
+};
+pub use region_palette::{
+    MaterialRegionCoord, MaterialRegionPalette, MaterialRegionPaletteCache, SurfaceCoverage,
+    DEFAULT_REGION_CHUNKS, MAX_REGION_SURFACES,
+};
 pub use registry::MaterialLayerRegistry;
+pub use scoring::{
+    normalize_scores, ScoreCurve, ScoreCurveKind, ScoreField, SurfaceScoreRule,
+};
 
 #[cfg(test)]
 mod tests {

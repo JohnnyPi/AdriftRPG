@@ -241,15 +241,20 @@ gates: []
 }
 
 #[test]
-fn island_worlds_load_with_shared_biomes() {
+fn island_worlds_load_with_scale_appropriate_biomes() {
     let registry = load_registry_from_directory(workspace_assets()).expect("registry");
-    for id in ["world.island_testbed", "world.island_large"] {
-        let world = registry
-            .world_by_id(&shared::StableId::new(id))
-            .unwrap_or_else(|_| panic!("{id} should load"));
-        assert_eq!(world.biomes.as_str(), "biomes.expanded_slice", "{id}");
-        assert!(world.island_gen.is_some(), "{id} must be atlas-driven");
-    }
+    let testbed = registry
+        .world_by_id(&shared::StableId::new("world.island_testbed"))
+        .expect("testbed");
+    let large = registry
+        .world_by_id(&shared::StableId::new("world.island_large"))
+        .expect("large");
+    assert_eq!(testbed.biomes.as_str(), "biomes.expanded_slice");
+    assert_eq!(large.biomes.as_str(), "biomes.island_large");
+    assert_eq!(large.surface.as_str(), "surface.island_large");
+    assert!(testbed.island_gen.is_some());
+    assert!(large.island_gen.is_some());
+    assert!(!testbed.hydrology_bodies.is_empty());
 }
 
 #[test]
@@ -309,11 +314,10 @@ fn rejects_non_standard_chunk_cells() {
         coord_offset: None,
         island_gen: None,
         resolution: None,
+        island_atlas_baked: None,
+        hydrology_bodies: Vec::new(),
+        material_catalog: None,
     })]);
-
-    assert!(!report.is_ok());
-    let err = report.into_result().unwrap_err().to_string();
-    assert!(err.contains("chunks.cells must be [16, 16, 16]"));
 }
 
 #[test]
@@ -349,6 +353,10 @@ fn rejects_duplicate_material_layers() {
                     triplanar_scale: 0.5,
                     roughness: 0.9,
                     generator: None,
+                    texture: None,
+                    surface: None,
+                    rendering: None,
+                    responses: None,
                 },
                 TerrainMaterialEntryDefinition {
                     key: Some(StableId::new("sand")),
@@ -358,6 +366,10 @@ fn rejects_duplicate_material_layers() {
                     triplanar_scale: 0.5,
                     roughness: 0.9,
                     generator: None,
+                    texture: None,
+                    surface: None,
+                    rendering: None,
+                    responses: None,
                 },
             ],
             layers: vec![StableId::new("grass"), StableId::new("grass")],

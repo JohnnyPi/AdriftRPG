@@ -18,6 +18,7 @@ pub use validate::{min_peak_elevation_m, validate_atlas, ValidationReport};
 
 use crate::field2d::{residual_from_absolute, Field2D};
 use crate::island_atlas::IslandAtlas;
+use crate::noise::ValueNoise;
 use bathymetry::{bathymetry_height, compute_coast_distance};
 use biome_field::compute_biome_weights;
 use carving::{carve_river_channels, compute_slope};
@@ -25,7 +26,8 @@ use coast::{apply_beach_profiles, classify_coast};
 use erosion::{apply_stream_power_erosion, apply_thermal_erosion};
 use footprint::build_island_mask;
 use hydrology::{
-    compute_flow, extract_river_mask, priority_flood, trace_primary_river,
+    compute_flow, extract_river_mask, priority_flood, refresh_river_elevations_after_carve,
+    trace_primary_river,
 };
 use soil_field::compute_soil_depth;
 use volcano::{local_detail_at, regional_detail_at, volcanic_height};
@@ -55,8 +57,16 @@ pub fn build_island_atlas(params: &IslandGenParams) -> IslandAtlas {
         Field2D::<f32>::from_extent(extent, origin, regional_spacing);
     let mut bathymetry = Field2D::<f32>::from_extent(extent, origin, regional_spacing);
 
+    let mask_noise = ValueNoise::new(params.seed);
+    let regional_detail_noise = ValueNoise::new(params.seed.wrapping_add(17));
+    let local_detail_noise = ValueNoise::new(params.seed.wrapping_add(23));
+    let shelf_width_noise = ValueNoise::new(params.seed.wrapping_add(bathymetry::SALT_SHELF_WIDTH));
+    let shelf_depth_noise = ValueNoise::new(params.seed.wrapping_add(bathymetry::SALT_SHELF_DEPTH));
+    let deep_slope_noise = ValueNoise::new(params.seed.wrapping_add(bathymetry::SALT_DEEP_SLOPE));
+    let berm_noise = ValueNoise::new(params.seed.wrapping_add(coast::SALT_BERM_HEIGHT));
+
     island_mask.for_each_world(|wx, wz, m| {
-        *m = build_island_mask(params, wx, wz);
+        *m = build_island_mask(params, wx, wz, &mask_noise);
     });
 
     elevation_regional.for_each_world(|wx, wz, h| {
@@ -67,25 +77,32 @@ pub fn build_island_atlas(params: &IslandGenParams) -> IslandAtlas {
         } else {
             0.0
         };
-        *h = volcanic_height(params, wx, wz, mask) + regional_detail_at(params, wx, wz) * mask;
+        *h = volcanic_height(params, wx, wz, mask)
+            + regional_detail_at(params, wx, wz, &regional_detail_noise) * mask;
     });
 
     let coast_distance = compute_coast_distance(&island_mask, regional_spacing);
 
     bathymetry.for_each_world(|wx, wz, h| {
         let cd = coast_distance.sample_bilinear(wx, wz);
-        *h = bathymetry_height(params, wx, wz, cd);
+        *h = bathymetry_height(
+            params,
+            wx,
+            wz,
+            cd,
+            &shelf_width_noise,
+            &shelf_depth_noise,
+            &deep_slope_noise,
+        );
     });
 
     // Pre-erosion flow drives stream-power carving only.
     let filled_pre_erosion = priority_flood(&elevation_regional);
     let (_flow_direction_pre, flow_accumulation_pre) =
         compute_flow(&filled_pre_erosion, &island_mask, params);
-    let slope_pre_erosion = compute_slope(&elevation_regional);
     apply_stream_power_erosion(
         &mut elevation_regional,
         &flow_accumulation_pre,
-        &slope_pre_erosion,
         &island_mask,
         params,
     );
@@ -95,7 +112,7 @@ pub fn build_island_atlas(params: &IslandGenParams) -> IslandAtlas {
     let filled = priority_flood(&elevation_regional);
     let (flow_direction, flow_accumulation) = compute_flow(&filled, &island_mask, params);
     let river_mask = extract_river_mask(&flow_accumulation, &island_mask, params);
-    let river_graph = trace_primary_river(
+    let mut river_graph = trace_primary_river(
         &filled,
         &flow_accumulation,
         &flow_direction,
@@ -117,15 +134,21 @@ pub fn build_island_atlas(params: &IslandGenParams) -> IslandAtlas {
     let mut elevation_local_abs = elevation_regional.resample_to_spacing(local_spacing);
     elevation_local_abs.for_each_world(|wx, wz, h| {
         let mask = island_mask.sample_bilinear(wx, wz);
-        *h += local_detail_at(params, wx, wz) * mask;
+        *h += local_detail_at(params, wx, wz, &local_detail_noise) * mask;
     });
 
     let island_mask_local = island_mask.resample_to_spacing(local_spacing);
     let coast_distance_local = coast_distance.resample_to_spacing(local_spacing);
     let sediment_local = sediment.resample_to_spacing(local_spacing);
 
-    if let Some(ref river) = river_graph {
+    if let Some(ref mut river) = river_graph {
         carve_river_channels(&mut elevation_local_abs, river, params);
+        refresh_river_elevations_after_carve(
+            river,
+            &elevation_local_abs,
+            params.island.sea_level_m,
+            0.25,
+        );
     }
 
     let mut slope = compute_slope(&elevation_local_abs);
@@ -142,6 +165,7 @@ pub fn build_island_atlas(params: &IslandGenParams) -> IslandAtlas {
         &beach_mask,
         &coast_distance_local,
         params,
+        &berm_noise,
     );
     slope = compute_slope(&elevation_local_abs);
 

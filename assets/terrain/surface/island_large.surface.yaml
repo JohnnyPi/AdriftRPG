@@ -1,0 +1,116 @@
+﻿schema_version: 1
+id: surface.island_large
+description: >
+  Island-large surface blending — coast/river gate distances scaled from
+  surface.expanded_slice by diameter ratio 12.22 (2200/180 m). Slope gates
+  unchanged (degrees). Same materials.expanded_slice palette.
+
+classifiers:
+  - id: coast
+    blend:
+      - { material: sand, weight: 0.70 }
+      - { material: wet_rock, weight: 0.20 }
+      - { material: rock, weight: 0.35 }
+      - { material: grass, weight: 0.50 }
+  - id: river
+    blend:
+      - { material: sand, weight: 0.45 }
+      - { material: wet_rock, weight: 0.55 }
+      - { material: grass, weight: 0.30 }
+      - { material: forest_floor, weight: 0.20 }
+  - id: cliff
+    blend:
+      - { material: rock, weight: 0.70 }
+      - { material: rock, weight: 0.30 }
+      - { material: forest_floor, weight: 0.25 }
+      - { material: grass, weight: 0.10 }
+  - id: land_forest
+    blend:
+      - { material: forest_floor, weight: 0.55 }
+      - { material: forest_floor, weight: 0.30 }
+      - { material: grass, weight: 0.25 }
+      - { material: wet_rock, weight: 0.15 }
+  - id: land_scrub
+    blend:
+      - { material: grass, weight: 0.40 }
+      - { material: rock, weight: 0.35 }
+      - { material: forest_floor, weight: 0.20 }
+      - { material: sand, weight: 0.10 }
+  - id: land_alpine_rock
+    blend:
+      - { material: rock, weight: 0.65 }
+      - { material: rock, weight: 0.25 }
+      - { material: wet_rock, weight: 0.20 }
+      - { material: grass, weight: 0.05 }
+  - id: land_default
+    weighted_mix:
+      - { classifier: land_forest, weight: 1.0 }
+      - { classifier: land_scrub, weight: 0.85 }
+      - { classifier: land_alpine_rock, weight: 0.9 }
+      - { classifier: land_alpine, weight: 1.0 }
+      - { classifier: land_wetland, weight: 1.0 }
+      - { classifier: land_core, weight: 1.0 }
+  - id: land_core
+    blend:
+      - { material: grass, weight: 0.45 }
+      - { material: grass, weight: 0.35 }
+      - { material: forest_floor, weight: 0.35 }
+      - { material: rock, weight: 0.20 }
+  - id: land_alpine
+    blend:
+      - { material: rock, weight: 0.50 }
+      - { material: rock, weight: 0.35 }
+      - { material: forest_floor, weight: 0.20 }
+      - { material: grass, weight: 0.10 }
+  - id: land_wetland
+    blend:
+      - { material: wet_rock, weight: 0.55 }
+      - { material: forest_floor, weight: 0.25 }
+      - { material: sand, weight: 0.20 }
+      - { material: grass, weight: 0.15 }
+
+gates:
+  - id: cave
+    exclusive: true
+    when:
+      cave_exposure_min: 0.55
+    blend:
+      - { material: cave_stone, weight: 0.55 }
+      - { material: flowstone, weight: 0.25 }
+      - { material: forest_floor, weight: 0.10 }
+      - { material: limestone, weight: 0.10 }
+
+  - id: underwater
+    exclusive: true
+    when:
+      water_depth_min: 0.05
+    blend:
+      - { material: wet_rock, weight: 1.0 }
+
+  - id: coast
+    when:
+      coast_distance_max: 342.0
+      elevation_above_sea_max: 43.0
+    gate_weight:
+      coast_distance: { from: 171.0, to: 342.0, invert: true }
+      elevation_above_sea: { from: 11.0, to: 43.0, invert: true }
+    classifier: coast
+
+  - id: river
+    when:
+      river_distance_max: 110.0
+    gate_weight:
+      river_distance: { from: 24.0, to: 110.0, invert: true }
+    classifier: river
+
+  - id: cliff
+    when:
+      slope_min: 44.0
+    gate_weight:
+      slope: { from: 44.0, to: 52.0 }
+    classifier: cliff
+
+  - id: land
+    when:
+      fallback: true
+    classifier: land_default

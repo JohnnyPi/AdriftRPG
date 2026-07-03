@@ -5,10 +5,10 @@ use crate::field2d::{smoothstep, Field2D};
 use crate::island_gen::params::IslandGenParams;
 use crate::noise::ValueNoise;
 
-const SALT_BERM_HEIGHT: u64 = 0xBEAC_0001_0001;
+pub const SALT_BERM_HEIGHT: u64 = 0xBEAC_0001_0001;
 
-fn seeded_unit(params: &IslandGenParams, wx: f32, wz: f32, salt: u64) -> f32 {
-    ValueNoise::new(params.seed.wrapping_add(salt)).sample(wx * 0.0025, 0.0, wz * 0.0025)
+fn seeded_unit(noise: &ValueNoise, wx: f32, wz: f32) -> f32 {
+    noise.sample(wx * 0.0025, 0.0, wz * 0.0025)
 }
 
 fn range_mix(min: f32, max: f32, t: f32) -> f32 {
@@ -63,6 +63,7 @@ pub fn apply_beach_profiles(
     beach_mask: &Field2D<f32>,
     coast_distance: &Field2D<f32>,
     params: &IslandGenParams,
+    berm_noise: &ValueNoise,
 ) {
     let sea = params.island.sea_level_m;
     let width = elevation.width;
@@ -81,9 +82,15 @@ pub fn apply_beach_profiles(
             let berm = range_mix(
                 params.beaches.berm_height_min_m,
                 params.beaches.berm_height_max_m,
-                seeded_unit(params, wx, wz, SALT_BERM_HEIGHT),
+                seeded_unit(berm_noise, wx, wz),
             );
-            let target = sea + berm - coast * 0.08;
+            // Rise from waterline inland to berm crest, then hold berm elevation.
+            let berm_distance = params.beaches.width_max_m.max(spacing * 2.0);
+            let target = if coast <= berm_distance {
+                sea + berm * (coast / berm_distance)
+            } else {
+                sea + berm
+            };
             let idx = elevation.index(x, z);
             let h = &mut elevation.samples[idx];
             *h = *h + (target - *h) * (mask * 0.6);

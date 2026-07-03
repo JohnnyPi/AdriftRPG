@@ -6,12 +6,15 @@ use shared::{DataError, DataResult, StableId};
 
 use crate::compile::{
     CompiledApp, CompiledAtmosphere, CompiledBiomes, CompiledCamera, CompiledCave, CompiledDebug,
-    CompiledFog, CompiledHydrology, CompiledIslandGeneration, CompiledLandmarks, CompiledLighting,
-    CompiledOptions, CompiledPerformance, CompiledPhysics, CompiledPlayer, CompiledRiver,
+    CompiledFog, CompiledIslandGeneration, CompiledLandmarks, CompiledLighting,
+    CompiledOptions, CompiledPerformance, CompiledPhysics, CompiledPlayer,
     CompiledRoutes, CompiledSetupSchema, CompiledSky, CompiledStructure, CompiledTerrain, CompiledTerrainMaterials, CompiledSurfaceRules, CompiledVegetation,
-    CompiledWater, CompiledWaterBodyMaterial, CompiledWorld,
+    CompiledWater, CompiledWaterBodyMaterial, CompiledHydrologyBody, CompiledWorld,
 };
 use crate::definitions::RawDefinition;
+use crate::surface_registry::{
+    build_surface_registry, CompiledSurfaceRegistry, MaterialDependencyIndex,
+};
 use crate::hash::registry_hash;
 use crate::load::LoadedFile;
 use crate::validate::validate_definitions;
@@ -34,9 +37,8 @@ pub struct ConfigRegistry {
     pub debug: BTreeMap<StableId, CompiledDebug>,
     pub options: BTreeMap<StableId, CompiledOptions>,
     pub physics: BTreeMap<StableId, CompiledPhysics>,
-    pub rivers: BTreeMap<StableId, CompiledRiver>,
-    pub hydrology: BTreeMap<StableId, CompiledHydrology>,
     pub water_body_materials: BTreeMap<StableId, CompiledWaterBodyMaterial>,
+    pub hydrology: BTreeMap<StableId, CompiledHydrologyBody>,
     pub atmosphere: BTreeMap<StableId, CompiledAtmosphere>,
     pub fog: BTreeMap<StableId, CompiledFog>,
     pub sky: BTreeMap<StableId, CompiledSky>,
@@ -45,6 +47,8 @@ pub struct ConfigRegistry {
     pub structures: BTreeMap<StableId, CompiledStructure>,
     pub island_gen: BTreeMap<StableId, CompiledIslandGeneration>,
     pub setup_schemas: BTreeMap<StableId, CompiledSetupSchema>,
+    pub surface_registries: BTreeMap<StableId, CompiledSurfaceRegistry>,
+    pub material_dependencies: BTreeMap<StableId, MaterialDependencyIndex>,
     #[serde(skip)]
     pub hash: String,
 }
@@ -69,9 +73,8 @@ impl ConfigRegistry {
         let mut debug = BTreeMap::new();
         let mut options = BTreeMap::new();
         let mut physics = BTreeMap::new();
-        let mut rivers = BTreeMap::new();
-        let mut hydrology = BTreeMap::new();
         let mut water_body_materials = BTreeMap::new();
+        let mut hydrology = BTreeMap::new();
         let mut atmosphere = BTreeMap::new();
         let mut fog = BTreeMap::new();
         let mut sky = BTreeMap::new();
@@ -132,14 +135,11 @@ impl ConfigRegistry {
                 RawDefinition::Physics(def) => {
                     physics.insert(def.header.id.clone(), def.into());
                 }
-                RawDefinition::River(def) => {
-                    rivers.insert(def.header.id.clone(), def.into());
+                RawDefinition::WaterBodyMaterial(def) => {
+                    water_body_materials.insert(def.header.id.clone(), def.into());
                 }
                 RawDefinition::Hydrology(def) => {
                     hydrology.insert(def.header.id.clone(), def.into());
-                }
-                RawDefinition::WaterBodyMaterial(def) => {
-                    water_body_materials.insert(def.header.id.clone(), def.into());
                 }
                 RawDefinition::Atmosphere(def) => {
                     atmosphere.insert(def.header.id.clone(), def.into());
@@ -165,6 +165,11 @@ impl ConfigRegistry {
                 RawDefinition::SetupSchema(def) => {
                     setup_schemas.insert(def.header.id.clone(), def.into());
                 }
+                RawDefinition::River(_) => {}
+                RawDefinition::TextureRecipe(_)
+                | RawDefinition::SurfaceMaterial(_)
+                | RawDefinition::MaterialCatalog(_)
+                | RawDefinition::Overlay(_) => {}
             }
         }
 
@@ -174,6 +179,40 @@ impl ConfigRegistry {
         })?;
 
         resolve_app_references(&app, &performance, &player, &camera, &worlds)?;
+
+        let mut surface_registries = BTreeMap::new();
+        let mut material_dependencies = BTreeMap::new();
+        let mut catalog_ids: std::collections::BTreeSet<StableId> = std::collections::BTreeSet::new();
+        for def in &definitions {
+            if let RawDefinition::MaterialCatalog(cat) = def {
+                catalog_ids.insert(cat.header.id.clone());
+            }
+        }
+        for world in worlds.values() {
+            if let Some(ref cat_id) = world.material_catalog {
+                catalog_ids.insert(cat_id.clone());
+            }
+        }
+        for cat_id in catalog_ids {
+            let palette_def = worlds
+                .values()
+                .find(|w| w.material_catalog.as_ref() == Some(&cat_id))
+                .and_then(|w| materials.get(&w.materials));
+            let palette_yaml = palette_def.and_then(|compiled: &CompiledTerrainMaterials| {
+                definitions.iter().find_map(|d| {
+                    if let RawDefinition::TerrainMaterials(m) = d {
+                        if m.header.id == compiled.id {
+                            return Some(m);
+                        }
+                    }
+                    None
+                })
+            });
+            let (registry, deps) =
+                build_surface_registry(&definitions, Some(&cat_id), palette_yaml)?;
+            surface_registries.insert(cat_id.clone(), registry);
+            material_dependencies.insert(cat_id, deps);
+        }
 
         let mut registry = Self {
             app,
@@ -192,9 +231,8 @@ impl ConfigRegistry {
             debug,
             options,
             physics,
-            rivers,
-            hydrology,
             water_body_materials,
+            hydrology,
             atmosphere,
             fog,
             sky,
@@ -203,6 +241,8 @@ impl ConfigRegistry {
             structures,
             island_gen,
             setup_schemas,
+            surface_registries,
+            material_dependencies,
             hash: String::new(),
         };
         registry.hash = registry_hash(&registry);
@@ -243,12 +283,27 @@ impl ConfigRegistry {
 
     pub fn active_setup_schema(&self) -> DataResult<&CompiledSetupSchema> {
         self.setup_schemas
-            .get(&StableId::new("setup.default"))
+            .get(&StableId::new("setup.large"))
+            .or_else(|| self.setup_schemas.get(&StableId::new("setup.default")))
             .or_else(|| self.setup_schemas.values().next())
             .ok_or_else(|| DataError::UnknownReference {
-                reference: StableId::new("setup.default"),
+                reference: StableId::new("setup.large"),
                 context: "active setup schema".to_string(),
             })
+    }
+
+    /// Setup UI schema for a world profile (`setup.{world_suffix}` convention).
+    pub fn effective_setup_schema(&self, world: &CompiledWorld) -> Option<&CompiledSetupSchema> {
+        let suffix = world.id.as_str().strip_prefix("world.")?;
+        self.setup_schemas
+            .get(&StableId::new(format!("setup.{suffix}")))
+            .or_else(|| self.active_setup_schema().ok())
+    }
+
+    pub fn effective_setup_schema_for_id(&self, world_id: &StableId) -> Option<&CompiledSetupSchema> {
+        self.world_by_id(world_id)
+            .ok()
+            .and_then(|world| self.effective_setup_schema(world))
     }
 
     pub fn island_generation_for_world(&self, world: &CompiledWorld) -> Option<&CompiledIslandGeneration> {
@@ -445,7 +500,7 @@ mod tests {
         let sky = registry.active_sky().expect("sky");
         assert!(sky.shader.contains("sky.wgsl"));
         assert!(sky.night_zenith_color[2] > sky.night_zenith_color[0]);
-        assert!(!atmo.moon_enabled);
+        assert!(atmo.moon_enabled);
         assert!(atmo.moon_angular_radius > 0.0);
     }
 }
