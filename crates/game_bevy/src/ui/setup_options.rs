@@ -3,15 +3,13 @@
 
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
+use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 
-use crate::data::{
-    save_user_prefs, ConfigRegistryResource, UserSetupPrefs,
-};
+use crate::data::{ConfigRegistryResource, UserSetupPrefs, save_user_prefs};
 use crate::state::AppState;
 use crate::world::{
-    cancel_map_preview_build, hash_prefs, poll_map_preview_build, start_map_preview_build,
-    MapPreviewState,
+    MapPreviewState, cancel_map_preview_build, hash_prefs, poll_map_preview_build,
+    start_map_preview_build,
 };
 
 pub struct SetupOptionsPlugin;
@@ -46,7 +44,10 @@ impl Plugin for SetupOptionsPlugin {
     }
 }
 
-fn on_enter_setup_options(mut preview: ResMut<MapPreviewState>, mut ui_state: ResMut<SetupUiState>) {
+fn on_enter_setup_options(
+    mut preview: ResMut<MapPreviewState>,
+    mut ui_state: ResMut<SetupUiState>,
+) {
     preview.dirty = false;
     cancel_map_preview_build(&mut preview);
     preview.error = None;

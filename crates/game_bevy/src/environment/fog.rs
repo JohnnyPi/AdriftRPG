@@ -2,6 +2,7 @@
 //! Layered fog stack (VS2 §14).
 
 use bevy::prelude::*;
+use shared::lerp_rgb;
 
 use crate::camera::MainGameCamera;
 use crate::state::AppState;
@@ -78,7 +79,9 @@ impl Plugin for FogPlugin {
             .init_resource::<FogTransitionState>()
             .add_systems(
                 Update,
-                (update_fog_transitions, apply_fog_stack).chain().run_if(in_state(AppState::Running)),
+                (update_fog_transitions, apply_fog_stack)
+                    .chain()
+                    .run_if(in_state(AppState::Running)),
             );
     }
 }
@@ -98,9 +101,10 @@ fn update_fog_transitions(
     } else {
         0.0
     };
-    let in_cave = stack.local_volumes.iter().any(|vol| {
-        point_in_volume(camera_tf.translation, vol.center, vol.half_extents)
-    });
+    let in_cave = stack
+        .local_volumes
+        .iter()
+        .any(|vol| point_in_volume(camera_tf.translation, vol.center, vol.half_extents));
     let cave = if in_cave { stack.cave_density } else { 0.0 };
 
     transition.target_underwater = underwater;
@@ -131,12 +135,16 @@ fn apply_fog_stack(
     let mut extinction = if lighting_tweaks.override_fog {
         lighting_tweaks.fog_color
     } else {
-        lerp_color(distance.color, celestial.fog_extinction, 0.35)
+        lerp_rgb(distance.color, celestial.fog_extinction, 0.35)
     };
     let mut inscattering = if lighting_tweaks.override_fog {
         lighting_tweaks.fog_color
     } else {
-        lerp_color(distance.inscattering_color, celestial.fog_inscattering, 0.35)
+        lerp_rgb(
+            distance.inscattering_color,
+            celestial.fog_inscattering,
+            0.35,
+        )
     };
     let mut start = if lighting_tweaks.override_fog {
         lighting_tweaks.fog_start_m
@@ -150,27 +158,29 @@ fn apply_fog_stack(
     };
 
     if let Some(height) = &stack.height {
-        let height_factor = ((camera_tf.translation.y - height.base_height).max(0.0) * height.density)
+        let height_factor = ((camera_tf.translation.y - height.base_height).max(0.0)
+            * height.density)
             .clamp(0.0, 1.0);
         let height_blend = height_factor * atmosphere.height_fog_density * 50.0;
         start -= height_blend;
-        extinction = lerp_color(extinction, height.color, height_factor * 0.35);
-        inscattering = lerp_color(inscattering, height.color, height_factor * 0.25);
+        extinction = lerp_rgb(extinction, height.color, height_factor * 0.35);
+        inscattering = lerp_rgb(inscattering, height.color, height_factor * 0.25);
     }
 
     for volume in &stack.local_volumes {
         let local = point_in_obb(camera_tf.translation, volume.center, volume.half_extents);
         if local > 0.0 {
             start *= 1.0 - local * volume.density;
-            extinction = lerp_color(extinction, volume.color, local * 0.5);
-            inscattering = lerp_color(inscattering, volume.color, local * 0.35);
+            extinction = lerp_rgb(extinction, volume.color, local * 0.5);
+            inscattering = lerp_rgb(inscattering, volume.color, local * 0.35);
         }
     }
 
     if transition.current_underwater > 0.0 {
-        let u = (transition.current_underwater / stack.underwater_density.max(0.01)).clamp(0.0, 1.0);
-        extinction = lerp_color(extinction, stack.underwater_color, u);
-        inscattering = lerp_color(
+        let u =
+            (transition.current_underwater / stack.underwater_density.max(0.01)).clamp(0.0, 1.0);
+        extinction = lerp_rgb(extinction, stack.underwater_color, u);
+        inscattering = lerp_rgb(
             inscattering,
             [
                 stack.underwater_color[0] + 0.03,
@@ -183,8 +193,8 @@ fn apply_fog_stack(
     }
     if transition.current_cave > 0.0 {
         let c = (transition.current_cave / stack.cave_density.max(0.01)).clamp(0.0, 1.0);
-        extinction = lerp_color(extinction, stack.cave_color, c);
-        inscattering = lerp_color(
+        extinction = lerp_rgb(extinction, stack.cave_color, c);
+        inscattering = lerp_rgb(
             inscattering,
             [
                 stack.cave_color[0] + 0.04,
@@ -199,18 +209,13 @@ fn apply_fog_stack(
     if celestial.cloud_cover > 0.3 {
         let overcast = ((celestial.cloud_cover - 0.3) / 0.7).clamp(0.0, 1.0);
         let gray = [0.62, 0.65, 0.68];
-        inscattering = lerp_color(inscattering, gray, overcast * 0.45);
+        inscattering = lerp_rgb(inscattering, gray, overcast * 0.45);
     }
 
     start = start.max(0.0);
     end = end.max(start + 1.0);
 
-    let directional_color = Color::srgba(
-        inscattering[0],
-        inscattering[1],
-        inscattering[2],
-        0.45,
-    );
+    let directional_color = Color::srgba(inscattering[0], inscattering[1], inscattering[2], 0.45);
 
     let falloff = if lighting_tweaks.override_fog {
         FogFalloff::Linear { start, end }
@@ -246,14 +251,6 @@ fn approach(current: f32, target: f32, max_delta: f32) -> f32 {
     } else {
         current - max_delta
     }
-}
-
-fn lerp_color(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
-    [
-        a[0] + (b[0] - a[0]) * t,
-        a[1] + (b[1] - a[1]) * t,
-        a[2] + (b[2] - a[2]) * t,
-    ]
 }
 
 fn point_in_volume(point: Vec3, center: Vec3, half_extents: Vec3) -> bool {
@@ -294,8 +291,10 @@ mod fog_tests {
         let camera_low = 2.0;
         let camera_high = 20.0;
         let height = stack.height.as_ref().unwrap();
-        let low_factor = ((camera_low - height.base_height).max(0.0) * height.density).clamp(0.0, 1.0);
-        let high_factor = ((camera_high - height.base_height).max(0.0) * height.density).clamp(0.0, 1.0);
+        let low_factor =
+            ((camera_low - height.base_height).max(0.0) * height.density).clamp(0.0, 1.0);
+        let high_factor =
+            ((camera_high - height.base_height).max(0.0) * height.density).clamp(0.0, 1.0);
         assert!(low_factor < high_factor);
         let low_start = stack.global_distance.as_ref().unwrap().start_m - low_factor * 50.0;
         let high_start = stack.global_distance.as_ref().unwrap().start_m - high_factor * 50.0;
@@ -315,7 +314,7 @@ mod fog_tests {
     fn cave_transition_darkens_extinction() {
         let base = [0.6, 0.7, 0.8];
         let cave = [0.2, 0.22, 0.28];
-        let result = lerp_color(base, cave, 1.0);
+        let result = lerp_rgb(base, cave, 1.0);
         assert!(result[0] < base[0]);
         assert!(result[1] < base[1]);
         assert!(result[2] < base[2]);

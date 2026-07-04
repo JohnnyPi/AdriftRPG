@@ -27,8 +27,8 @@ impl YamlWatcher {
         }));
 
         let callback_state = Arc::clone(&inner);
-        let mut watcher = notify::recommended_watcher(
-            move |result: Result<Event, notify::Error>| {
+        let mut watcher =
+            notify::recommended_watcher(move |result: Result<Event, notify::Error>| {
                 let Ok(event) = result else {
                     return;
                 };
@@ -48,9 +48,8 @@ impl YamlWatcher {
                     state.pending = true;
                     state.last_event = Some(Instant::now());
                 }
-            },
-        )
-        .expect("yaml watcher");
+            })
+            .expect("yaml watcher");
 
         watcher
             .watch(assets_root, RecursiveMode::Recursive)

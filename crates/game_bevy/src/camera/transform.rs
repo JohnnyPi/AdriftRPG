@@ -3,7 +3,7 @@ use bevy::prelude::*;
 
 use super::components::{CameraDebugSnapshot, MainGameCamera, MmoCamera};
 use super::desired_camera_position;
-use super::fly_cam::{fly_cam_active, FlyCamState};
+use super::fly_cam::{FlyCamState, fly_cam_active};
 use crate::ui::CameraTweaks;
 
 pub fn apply_camera_transform(

@@ -1,10 +1,11 @@
 // crates/terrain_generation/src/river.rs
 //! Small river routing and carving (VS2 §6).
 
+use crate::TerrainRecipe;
 use crate::field_stack::FieldStackParams;
 use crate::surface_height::land_surface_height;
-use crate::TerrainRecipe;
 use crate::water_body::{RiverControlPoint, RiverSpline};
+use shared::smoothstep;
 
 #[derive(Clone, Debug)]
 pub struct RiverGenConfig {
@@ -79,7 +80,9 @@ pub fn generate_river_spline(config: &RiverGenConfig, sea_level: f32) -> Option<
         if points[i].water_elevation > points[i - 1].water_elevation {
             points[i].water_elevation = points[i - 1].water_elevation;
         }
-        points[i].water_elevation = points[i].water_elevation.max(points[i].bed_elevation + config.minimum_depth_m);
+        points[i].water_elevation = points[i]
+            .water_elevation
+            .max(points[i].bed_elevation + config.minimum_depth_m);
     }
     Some(RiverSpline { points })
 }
@@ -211,14 +214,6 @@ pub fn river_carve_offset(distance: f32, half_width: f32, bank_width: f32, depth
     bed_factor * depth + bank_factor * depth * 0.35
 }
 
-fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
-    if edge0 >= edge1 {
-        return 0.0;
-    }
-    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
-}
-
 pub fn distance_to_river_centerline(spline: &RiverSpline, x: f32, z: f32) -> f32 {
     let mut min_dist = f32::MAX;
     for i in 0..spline.points.len().saturating_sub(1) {
@@ -344,7 +339,9 @@ mod tests {
 
     #[test]
     fn river_carve_lowers_surface_near_channel() {
-        use crate::recipe::{default_vertical_slice_recipe, RecipeDensitySource, RiverCarveContext};
+        use crate::recipe::{
+            RecipeDensitySource, RiverCarveContext, default_vertical_slice_recipe,
+        };
 
         let config = RiverGenConfig::default();
         let spline = generate_river_spline(&config, 0.0).expect("river");
@@ -352,7 +349,10 @@ mod tests {
         let (x, z) = (mid.position_xz[0], mid.position_xz[1]);
         let (dist, half_w, depth) = river_channel_at(&spline, x, z);
         let carve = river_carve_offset(dist, half_w, config.bank_width_m, depth);
-        assert!(carve > 0.05, "expected meaningful carve at river centerline");
+        assert!(
+            carve > 0.05,
+            "expected meaningful carve at river centerline"
+        );
 
         let base = RecipeDensitySource::new(default_vertical_slice_recipe(42, 0.0));
         let carved = base.clone().with_river_carve(RiverCarveContext {

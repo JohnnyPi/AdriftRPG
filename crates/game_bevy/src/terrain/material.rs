@@ -1,27 +1,27 @@
 // crates/game_bevy/src/terrain/material.rs
 use bevy::prelude::*;
 use game_data::{
-    resolve_entry_generator, CompiledSurfaceRegistry, CompiledTerrainMaterials,
-    TerrainMaterialEntryDefinition,
+    CompiledSurfaceRegistry, CompiledTerrainMaterials, TerrainMaterialEntryDefinition,
+    resolve_entry_generator,
 };
 use procedural_textures::{
-    texture_recipe_from_definition, texture_recipe_from_yaml_value, CobblestoneConfig, GroundConfig,
-    RockConfig, SandConfig, TerrainMaterialRecipe, TextureRecipe,
+    CobblestoneConfig, GroundConfig, RockConfig, SandConfig, TerrainMaterialRecipe, TextureRecipe,
+    texture_recipe_from_definition, texture_recipe_from_yaml_value,
 };
 use terrain_material_bevy::{
     FallbackTerrainMaterialSet, PendingTextureBake, ProceduralMaterialRecipeOverride,
     ProceduralTerrainMaterialPlugin, TerrainProceduralMaterialState,
 };
 
+use crate::camera::MainGameCamera;
 use crate::data::ConfigRegistryResource;
 use crate::data::UserSetupPrefs;
-use crate::lod::{render_lod_tier_for_distance, LodPolicy};
+use crate::lod::{LodPolicy, render_lod_tier_for_distance};
 use crate::state::AppState;
 use crate::terrain::TerrainWorldRuntime;
 use crate::terrain::{TerrainChunkEntity, TerrainChunkPalette};
 use crate::ui::TerrainMaterialTweaks;
 use crate::world::requested_world_id;
-use crate::camera::MainGameCamera;
 
 pub use terrain_material_bevy::TerrainPbrMaterial;
 
@@ -90,7 +90,10 @@ fn refresh_chunk_terrain_materials(
     mut materials: ResMut<Assets<TerrainPbrMaterial>>,
     mut last_fingerprint: Local<Option<[u8; 32]>>,
     mut last_chunk_count: Local<usize>,
-    chunks: Query<(&MeshMaterial3d<TerrainPbrMaterial>, &TerrainChunkPalette), With<TerrainChunkEntity>>,
+    chunks: Query<
+        (&MeshMaterial3d<TerrainPbrMaterial>, &TerrainChunkPalette),
+        With<TerrainChunkEntity>,
+    >,
 ) {
     if !state.ready {
         *last_fingerprint = None;
@@ -256,8 +259,7 @@ fn recipe_from_entry(
     let legacy_id = entry.resolved_legacy_id();
     let generator = resolve_texture_recipe(entry, surface_registry, legacy_id, albedo, roughness);
 
-    let mut meters_per_repeat =
-        (1.0 / entry.triplanar_scale.max(0.12)).clamp(0.8, 8.0);
+    let mut meters_per_repeat = (1.0 / entry.triplanar_scale.max(0.12)).clamp(0.8, 8.0);
     let mut normal_strength = normal_strength_for_name(&entry.name);
 
     if let Some(ref rendering) = entry.rendering {
@@ -315,10 +317,9 @@ fn resolve_texture_recipe(
     }
     if let Some(generator_yaml) = resolve_entry_generator(entry, surface_registry) {
         if generator_yaml.get("nodes").is_some() {
-            if let Ok(recipe) = procedural_textures::texture_graph_from_yaml_value(
-                &generator_yaml,
-                seed,
-            ) {
+            if let Ok(recipe) =
+                procedural_textures::texture_graph_from_yaml_value(&generator_yaml, seed)
+            {
                 return TextureRecipe::Graph(recipe);
             }
         }

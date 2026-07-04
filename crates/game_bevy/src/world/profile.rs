@@ -9,10 +9,10 @@ use crate::environment::config_init::refresh_presentation_for_profile;
 use crate::environment::{SkyEffectsRevision, SkyPresentationConfig};
 use crate::state::AppState;
 use crate::terrain::{
-    regen_terrain_with_seed, TerrainEditStore, TerrainPipelineState, TerrainRecipeRevision, TerrainRegenPending, TerrainRevision, TerrainSpawnPoint,
-    WorldSeedOverride,
+    TerrainEditStore, TerrainPipelineState, TerrainRecipeRevision, TerrainRegenPending,
+    TerrainRevision, TerrainSpawnPoint, WorldSeedOverride, regen_terrain_with_seed,
 };
-use crate::ui::{TerrainTweaks};
+use crate::ui::TerrainTweaks;
 
 pub struct WorldProfilePlugin;
 

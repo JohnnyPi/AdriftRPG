@@ -32,3 +32,4 @@ dev_hot_reload = ["bevy/file_watcher"]
 
 [dev-dependencies]
 tempfile = "3"
+terrain_surface = { path = "../terrain_surface", features = ["test-oracle"] }

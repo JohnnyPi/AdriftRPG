@@ -1,6 +1,6 @@
 // crates/game_bevy/src/water/mod.rs
-use bevy::prelude::*;
 use bevy::pbr::Material;
+use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, ShaderType};
 use bevy::shader::ShaderRef;
 use std::collections::HashSet;
@@ -9,10 +9,12 @@ use terrain_generation::water_body::{
 };
 
 use crate::data::ConfigRegistryResource;
-use crate::state::AppState;
-use crate::terrain::{TerrainFeatureRegistry, TerrainPipelineState, TerrainWorldInitSet, TerrainWorldRuntime};
-use crate::ui::WaterTweaks;
 use crate::data::UserSetupPrefs;
+use crate::state::AppState;
+use crate::terrain::{
+    TerrainFeatureRegistry, TerrainPipelineState, TerrainWorldInitSet, TerrainWorldRuntime,
+};
+use crate::ui::WaterTweaks;
 use crate::world::requested_world_id;
 
 #[derive(ShaderType, Clone, Copy, Debug)]
@@ -114,7 +116,10 @@ impl Plugin for WaterPlugin {
             .init_resource::<InlandWaterSync>()
             .init_resource::<OceanTileGrid>()
             .init_resource::<OceanLayout>()
-            .add_systems(OnEnter(AppState::Running), spawn_water_bodies.after(TerrainWorldInitSet))
+            .add_systems(
+                OnEnter(AppState::Running),
+                spawn_water_bodies.after(TerrainWorldInitSet),
+            )
             .add_systems(
                 Update,
                 (
@@ -144,10 +149,7 @@ fn spawn_water_bodies(
     mut ocean_layout: ResMut<OceanLayout>,
 ) {
     let world_id = requested_world_id(&prefs);
-    let world = registry
-        .0
-        .effective_world(Some(&world_id))
-        .expect("world");
+    let world = registry.0.effective_world(Some(&world_id)).expect("world");
     let water_def = registry.0.water.get(&world.water).expect("water");
     let wave_count = match registry
         .0
@@ -179,13 +181,17 @@ fn spawn_water_bodies(
     let sea_mat = make_water_material(
         &mut materials,
         water_def,
-        registry.0.water_body_material(&shared::StableId::new("waterbody.sea")),
+        registry
+            .0
+            .water_body_material(&shared::StableId::new("waterbody.sea")),
         sea_level,
         &tweaks,
         &ocean_layout,
     );
     let tile_mesh = meshes.add(
-        Plane3d::default().mesh().size(ocean_layout.tile_size_m, ocean_layout.tile_size_m),
+        Plane3d::default()
+            .mesh()
+            .size(ocean_layout.tile_size_m, ocean_layout.tile_size_m),
     );
     let (snap_x, snap_z) = ocean_snap_indices(&runtime, &ocean_layout);
     spawn_ocean_tile_grid(
@@ -214,7 +220,9 @@ fn spawn_water_bodies(
             let river_mat = make_water_material(
                 &mut materials,
                 water_def,
-                registry.0.water_body_material(&shared::StableId::new("waterbody.river")),
+                registry
+                    .0
+                    .water_body_material(&shared::StableId::new("waterbody.river")),
                 sea_level,
                 &tweaks,
                 &ocean_layout,
@@ -255,7 +263,11 @@ fn sync_inland_lakes_on_hydrology_change(
     ocean_layout: Res<OceanLayout>,
     lakes: Query<(Entity, &LakeWaterSurface)>,
 ) {
-    let current_ids: HashSet<u32> = features.water_bodies.values().map(|body| body.id.0).collect();
+    let current_ids: HashSet<u32> = features
+        .water_bodies
+        .values()
+        .map(|body| body.id.0)
+        .collect();
     let mut existing_ids = HashSet::new();
     for (entity, lake) in &lakes {
         if current_ids.contains(&lake.body_id) {
@@ -272,10 +284,7 @@ fn sync_inland_lakes_on_hydrology_change(
     }
 
     let world_id = requested_world_id(&prefs);
-    let world = registry
-        .0
-        .effective_world(Some(&world_id))
-        .expect("world");
+    let world = registry.0.effective_world(Some(&world_id)).expect("world");
     let water_def = registry.0.water.get(&world.water).expect("water");
     spawn_inland_lake_surfaces(
         &mut commands,
@@ -303,10 +312,11 @@ fn sync_lake_surface_transforms(
         };
         let WaterSurfaceDefinition::Horizontal {
             elevation,
-            footprint: Some(HorizontalFootprint::Disc {
-                center_xz,
-                radius_m,
-            }),
+            footprint:
+                Some(HorizontalFootprint::Disc {
+                    center_xz,
+                    radius_m,
+                }),
         } = &body.surface
         else {
             continue;
@@ -336,17 +346,21 @@ fn spawn_inland_lake_surfaces(
         }
         let WaterSurfaceDefinition::Horizontal {
             elevation,
-            footprint: Some(HorizontalFootprint::Disc {
-                center_xz,
-                radius_m,
-            }),
+            footprint:
+                Some(HorizontalFootprint::Disc {
+                    center_xz,
+                    radius_m,
+                }),
         } = &body.surface
         else {
             continue;
         };
         if !matches!(
             body.kind,
-            WaterBodyKind::Lake | WaterBodyKind::Pond | WaterBodyKind::Spring | WaterBodyKind::CavePool
+            WaterBodyKind::Lake
+                | WaterBodyKind::Pond
+                | WaterBodyKind::Spring
+                | WaterBodyKind::CavePool
         ) {
             continue;
         }
@@ -365,12 +379,14 @@ fn spawn_inland_lake_surfaces(
             layout,
         );
         commands.spawn((
-            LakeWaterSurface {
-                body_id: body.id.0,
-            },
+            LakeWaterSurface { body_id: body.id.0 },
             Mesh3d(meshes.add(Plane3d::default().mesh().size(diameter, diameter))),
             MeshMaterial3d(lake_mat),
-            Transform::from_xyz(center_xz[0], *elevation + layout.surface_z_offset_m, center_xz[1]),
+            Transform::from_xyz(
+                center_xz[0],
+                *elevation + layout.surface_z_offset_m,
+                center_xz[1],
+            ),
         ));
     }
 }
@@ -403,10 +419,7 @@ fn spawn_ocean_tile_grid(
             commands.spawn((
                 WaterSurface,
                 OceanSurface,
-                OceanTile {
-                    grid_x,
-                    grid_z,
-                },
+                OceanTile { grid_x, grid_z },
                 Mesh3d(tile_mesh.clone()),
                 MeshMaterial3d(sea_mat.clone()),
                 Transform::from_xyz(x, sea_level + layout.surface_z_offset_m, z),
@@ -432,10 +445,7 @@ fn sync_ocean_tiles(
         return;
     }
     let world_id = requested_world_id(&prefs);
-    let world = registry
-        .0
-        .effective_world(Some(&world_id))
-        .expect("world");
+    let world = registry.0.effective_world(Some(&world_id)).expect("world");
     let water_def = registry.0.water.get(&world.water).expect("water");
     let sea_level = if tweaks.use_overrides {
         tweaks.sea_level_m
@@ -463,13 +473,17 @@ fn sync_ocean_tiles(
     let sea_mat = make_water_material(
         &mut materials,
         water_def,
-        registry.0.water_body_material(&shared::StableId::new("waterbody.sea")),
+        registry
+            .0
+            .water_body_material(&shared::StableId::new("waterbody.sea")),
         sea_level,
         &tweaks,
         &ocean_layout,
     );
     let tile_mesh = meshes.add(
-        Plane3d::default().mesh().size(ocean_layout.tile_size_m, ocean_layout.tile_size_m),
+        Plane3d::default()
+            .mesh()
+            .size(ocean_layout.tile_size_m, ocean_layout.tile_size_m),
     );
     spawn_ocean_tile_grid(
         &mut commands,
@@ -500,10 +514,7 @@ fn sync_ocean_plane_with_profile(
     *last = Some(prefs.world_id.clone());
 
     let world_id = requested_world_id(&prefs);
-    let world = registry
-        .0
-        .effective_world(Some(&world_id))
-        .expect("world");
+    let world = registry.0.effective_world(Some(&world_id)).expect("world");
     let water_def = registry.0.water.get(&world.water).expect("water");
     let sea_level = if tweaks.use_overrides {
         tweaks.sea_level_m
@@ -548,20 +559,13 @@ fn make_water_material(
         params: WaterParams {
             shallow_color: Vec4::new(shallow[0], shallow[1], shallow[2], transparency),
             deep_color: Vec4::new(deep[0], deep[1], deep[2], 1.0),
-            wave: Vec4::new(
-                elevation,
-                wave_speed,
-                wave_amplitude * 0.6,
-                transparency,
-            ),
+            wave: Vec4::new(elevation, wave_speed, wave_amplitude * 0.6, transparency),
             animation: Vec4::new(0.0, layout.foam_strength, layout.wave_count as f32, 0.0),
         },
     })
 }
 
-fn build_river_ribbon_mesh(
-    river: &terrain_generation::RiverSpline,
-) -> Option<Mesh> {
+fn build_river_ribbon_mesh(river: &terrain_generation::RiverSpline) -> Option<Mesh> {
     if river.points.len() < 2 {
         return None;
     }

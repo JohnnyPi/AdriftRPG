@@ -3,9 +3,9 @@
 
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
+use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 
-use crate::data::{save_user_prefs, UserSetupPrefs};
+use crate::data::{UserSetupPrefs, save_user_prefs};
 use crate::state::AppState;
 use crate::world::requested_world_id;
 
@@ -14,21 +14,19 @@ pub struct MainMenuPlugin;
 impl Plugin for MainMenuPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
-                Update,
-                (
-                    main_menu_keyboard,
-                    release_cursor_on_main_menu,
-                )
-                    .run_if(in_state(AppState::MainMenu)),
-            )
-            .add_systems(
-                EguiPrimaryContextPass,
-                draw_main_menu.run_if(in_state(AppState::MainMenu)),
-            );
+            Update,
+            (main_menu_keyboard, release_cursor_on_main_menu).run_if(in_state(AppState::MainMenu)),
+        )
+        .add_systems(
+            EguiPrimaryContextPass,
+            draw_main_menu.run_if(in_state(AppState::MainMenu)),
+        );
     }
 }
 
-fn release_cursor_on_main_menu(mut windows: Query<&mut bevy::window::CursorOptions, With<PrimaryWindow>>) {
+fn release_cursor_on_main_menu(
+    mut windows: Query<&mut bevy::window::CursorOptions, With<PrimaryWindow>>,
+) {
     let Ok(mut cursor) = windows.single_mut() else {
         return;
     };
@@ -77,11 +75,17 @@ fn draw_main_menu(
                 ui.label("VS3 Island Generator Vertical Slice");
                 ui.add_space(24.0);
 
-                if ui.button(egui::RichText::new("Start Game").size(18.0)).clicked() {
+                if ui
+                    .button(egui::RichText::new("Start Game").size(18.0))
+                    .clicked()
+                {
                     let _ = save_user_prefs(&prefs);
                     next_state.set(AppState::Running);
                 }
-                if ui.button(egui::RichText::new("Options").size(18.0)).clicked() {
+                if ui
+                    .button(egui::RichText::new("Options").size(18.0))
+                    .clicked()
+                {
                     next_state.set(AppState::SetupOptions);
                 }
                 if ui.button(egui::RichText::new("Quit").size(18.0)).clicked() {

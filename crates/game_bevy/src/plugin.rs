@@ -4,16 +4,16 @@ use bevy::prelude::*;
 use tracing::info;
 
 use crate::camera::ThirdPersonCameraPlugin;
-use crate::data::{assets_root, DataAssetPlugin};
+use crate::data::{DataAssetPlugin, assets_root};
 use crate::debug_tools::DebugToolsPlugin;
+use crate::environment::volumetric_scatter::VolumetricScatterPlugin;
 use crate::environment::{
     AtmosphereScenePlugin, BiomePlugin, CelestialPlugin, CloudPlugin, EnvironmentAudioStubPlugin,
     EnvironmentConfigPlugin, EnvironmentLightingPlugin, FogPlugin, LightingPlugin,
     SimulationTimePlugin, StarfieldPlugin, WeatherPlugin,
 };
-use crate::environment::volumetric_scatter::VolumetricScatterPlugin;
-use crate::physics::GamePhysicsPlugin;
 use crate::performance::PerformanceValidationPlugin;
+use crate::physics::GamePhysicsPlugin;
 use crate::player::{CharacterMotorPlugin, PlayerPlugin};
 use crate::scene::BootstrapScenePlugin;
 use crate::state::AppState;
@@ -22,8 +22,8 @@ use crate::terrain::{
     TerrainPlugin,
 };
 use crate::ui::{
-    configure_ui_overlay_for_game, sync_camera_viewports_to_window, HudPlugin, MainMenuPlugin,
-    OptionsPanelPlugin, SetupOptionsPlugin, UiOverlayPlugin,
+    HudPlugin, MainMenuPlugin, OptionsPanelPlugin, SetupOptionsPlugin, UiOverlayPlugin,
+    configure_ui_overlay_for_game, sync_camera_viewports_to_window,
 };
 use crate::vegetation::VegetationPlugin;
 use crate::water::WaterPlugin;
@@ -82,6 +82,7 @@ pub fn configure_vertical_slice_app(app: &mut App, window_title: &str) {
     ))
     .add_plugins((
         LightingPlugin,
+        SimulationTimePlugin,
         EnvironmentConfigPlugin,
         EnvironmentLightingPlugin,
         CelestialPlugin,
@@ -90,7 +91,6 @@ pub fn configure_vertical_slice_app(app: &mut App, window_title: &str) {
         CloudPlugin,
         FogPlugin,
         StarfieldPlugin,
-        SimulationTimePlugin,
         WeatherPlugin,
     ))
     .add_plugins((

@@ -8,8 +8,7 @@ use crate::collision_layers::CollisionLayer;
 pub struct CharacterCollisionQuery;
 
 pub fn terrain_ground_filter(excluded: Entity) -> SpatialQueryFilter {
-    SpatialQueryFilter::from_excluded_entities([excluded])
-        .with_mask(CollisionLayer::Terrain)
+    SpatialQueryFilter::from_excluded_entities([excluded]).with_mask(CollisionLayer::Terrain)
 }
 
 pub struct GroundHit {

@@ -1,14 +1,14 @@
 // crates/game_bevy/src/camera/plugin.rs
-use bevy::prelude::*;
 use bevy::input::InputSystems;
+use bevy::prelude::*;
 
 use crate::state::AppState;
 
-use super::environment;
 use super::collision::{resolve_camera_collision, update_camera_debug_input};
 use super::components::{CameraDebugSnapshot, CameraInputState};
 use super::debug::draw_camera_debug;
-use super::fly_cam::{capture_fly_cam_from_orbit, update_fly_cam, FlyCamState};
+use super::environment;
+use super::fly_cam::{FlyCamState, capture_fly_cam_from_orbit, update_fly_cam};
 use super::follow::update_camera_focus;
 use super::input::update_cursor_capture;
 use super::orbit::{read_camera_orbit_input, read_camera_zoom_input};
@@ -71,10 +71,7 @@ impl Plugin for ThirdPersonCameraPlugin {
             )
             .add_systems(
                 Update,
-                (
-                    update_camera_debug_input,
-                    resolve_camera_collision,
-                )
+                (update_camera_debug_input, resolve_camera_collision)
                     .chain()
                     .in_set(CameraSystemSet::Collision),
             )

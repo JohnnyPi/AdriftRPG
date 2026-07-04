@@ -3,7 +3,7 @@
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
-use physics_bridge::{layers_for_profile, water_sensor_layers, PhysicsBodySpec, PhysicsBodyType};
+use physics_bridge::{PhysicsBodySpec, PhysicsBodyType, layers_for_profile, water_sensor_layers};
 use terrain_generation::RecipeDensitySource;
 
 use crate::data::{ConfigRegistryResource, UserSetupPrefs};
@@ -22,10 +22,10 @@ impl Plugin for DynamicPropPlugin {
             OnEnter(AppState::Running),
             spawn_physics_demos.after(TerrainWorldInitSet),
         )
-            .add_systems(
-                Update,
-                apply_physics_tweaks.run_if(in_state(AppState::Running)),
-            );
+        .add_systems(
+            Update,
+            apply_physics_tweaks.run_if(in_state(AppState::Running)),
+        );
     }
 }
 
@@ -42,10 +42,7 @@ fn spawn_physics_demos(
         return;
     };
     let world_id = crate::world::requested_world_id(&prefs);
-    let world = registry
-        .0
-        .effective_world(Some(&world_id))
-        .expect("world");
+    let world = registry.0.effective_world(Some(&world_id)).expect("world");
     let pool = Vec3::from_array(world.recipe_to_world([82.0, 33.0, 196.0]));
     let pool_sensor = Vec3::from_array(world.recipe_to_world([82.0, 30.0, 196.0]));
     let sea_sensor = Vec3::from_array(world.recipe_to_world([128.0, 0.0, 128.0]));

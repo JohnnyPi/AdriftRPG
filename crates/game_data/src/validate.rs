@@ -50,7 +50,9 @@ pub fn validate_definitions(definitions: &[RawDefinition]) -> ValidationReport {
             RawDefinition::Water(def) => validate_water(def, &mut report),
             RawDefinition::World(def) => validate_world(def, &ids, &mut report),
             RawDefinition::IslandGeneration(def) => validate_island_generation(def, &mut report),
-            RawDefinition::TerrainGeneration(def) => validate_terrain_generation(def, &ids, &mut report),
+            RawDefinition::TerrainGeneration(def) => {
+                validate_terrain_generation(def, &ids, &mut report)
+            }
             RawDefinition::TerrainMaterials(def) => validate_terrain_materials(def, &mut report),
             RawDefinition::SurfaceRules(def) => validate_surface_rules(def, &mut report),
             RawDefinition::Cave(def) => validate_cave(def, &mut report),
@@ -92,11 +94,7 @@ fn validate_cross_definition_links(definitions: &[RawDefinition], report: &mut V
                 let _ = &entry.material;
             }
             if let Some(ref classifier_id) = gate.classifier {
-                if !rules
-                    .classifiers
-                    .iter()
-                    .any(|c| c.id == *classifier_id)
-                {
+                if !rules.classifiers.iter().any(|c| c.id == *classifier_id) {
                     report.push(DataError::InvalidValue {
                         context: context.clone(),
                         message: format!(
@@ -112,11 +110,7 @@ fn validate_cross_definition_links(definitions: &[RawDefinition], report: &mut V
                 let _ = &entry.material;
             }
             for mix in &classifier.weighted_mix {
-                if !rules
-                    .classifiers
-                    .iter()
-                    .any(|c| c.id == mix.classifier)
-                {
+                if !rules.classifiers.iter().any(|c| c.id == mix.classifier) {
                     report.push(DataError::InvalidValue {
                         context: context.clone(),
                         message: format!(
@@ -246,9 +240,7 @@ fn validate_cross_definition_links(definitions: &[RawDefinition], report: &mut V
         definitions
             .iter()
             .filter_map(|def| match def {
-                RawDefinition::IslandGeneration(island) => {
-                    Some((island.header.id.clone(), island))
-                }
+                RawDefinition::IslandGeneration(island) => Some((island.header.id.clone(), island)),
                 _ => None,
             })
             .collect();
@@ -281,7 +273,10 @@ fn validate_cross_definition_links(definitions: &[RawDefinition], report: &mut V
                 validate_generation_resolution(
                     resolution,
                     world.effective_ocean_extent_m(),
-                    &format!("island generation `{island_id}` (world `{}`)", world.header.id),
+                    &format!(
+                        "island generation `{island_id}` (world `{}`)",
+                        world.header.id
+                    ),
                     report,
                 );
             }
@@ -388,7 +383,10 @@ fn default_surface_for_materials(materials: &StableId) -> StableId {
     StableId::new(&format!("surface.{suffix}"))
 }
 
-fn validate_terrain_materials(materials: &TerrainMaterialsDefinition, report: &mut ValidationReport) {
+fn validate_terrain_materials(
+    materials: &TerrainMaterialsDefinition,
+    report: &mut ValidationReport,
+) {
     let context = format!("materials `{}`", materials.header.id);
     let material_keys: std::collections::BTreeSet<StableId> = materials
         .materials
@@ -441,11 +439,7 @@ fn collect_ids(definitions: &[RawDefinition]) -> Vec<StableId> {
     definitions.iter().map(|def| def.id().clone()).collect()
 }
 
-fn validate_references(
-    app: &AppDefinition,
-    ids: &[StableId],
-    report: &mut ValidationReport,
-) {
+fn validate_references(app: &AppDefinition, ids: &[StableId], report: &mut ValidationReport) {
     for reference in [&app.world, &app.player, &app.camera, &app.performance] {
         require_reference(reference, "app.yaml", ids, report);
     }
@@ -581,8 +575,9 @@ fn validate_camera(camera: &CameraDefinition, report: &mut ValidationReport) {
     if orbit.minimum_distance <= 0.0 || orbit.maximum_distance <= orbit.minimum_distance {
         report.push(DataError::InvalidValue {
             context: format!("camera `{}`", camera.header.id),
-            message: "orbit.minimum_distance and orbit.maximum_distance must define a positive range"
-                .to_string(),
+            message:
+                "orbit.minimum_distance and orbit.maximum_distance must define a positive range"
+                    .to_string(),
         });
     }
 
@@ -787,9 +782,7 @@ fn validate_combine(value: &str, context: &str, report: &mut ValidationReport) {
         "union" | "subtract" => {}
         other => report.push(DataError::InvalidValue {
             context: context.to_string(),
-            message: format!(
-                "combine must be 'union' or 'subtract', got '{other}'"
-            ),
+            message: format!("combine must be 'union' or 'subtract', got '{other}'"),
         }),
     }
 }
@@ -803,14 +796,16 @@ fn validate_coast_modifier_kind(kind: &str, context: &str, report: &mut Validati
         }),
         other => report.push(DataError::InvalidValue {
             context: context.to_string(),
-            message: format!(
-                "unknown coast modifier kind '{other}' (expected cove or harbor)"
-            ),
+            message: format!("unknown coast modifier kind '{other}' (expected cove or harbor)"),
         }),
     }
 }
 
-fn validate_terrain_operation(op: &TerrainOperationDefinition, context: &str, report: &mut ValidationReport) {
+fn validate_terrain_operation(
+    op: &TerrainOperationDefinition,
+    context: &str,
+    report: &mut ValidationReport,
+) {
     match op {
         TerrainOperationDefinition::CoastModifier { kind, .. } => {
             validate_coast_modifier_kind(kind, context, report);

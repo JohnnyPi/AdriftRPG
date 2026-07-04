@@ -8,21 +8,21 @@ mod error;
 mod generators;
 mod maps;
 mod material_recipe;
-mod normal;
 mod noise;
+mod normal;
 mod recipe;
 mod seam;
 mod texture_graph;
 
 pub use arrays::{
-    arrays_fingerprint, build_cpu_arrays, build_cpu_arrays_for_palette, build_cpu_arrays_in_core_order,
-    CpuTextureArrays,
+    CpuTextureArrays, arrays_fingerprint, build_cpu_arrays, build_cpu_arrays_for_palette,
+    build_cpu_arrays_in_core_order,
 };
 pub use cache::{
     bake_recipe_with_cache, cache_root, texture_cache_key, try_load_texture_cache,
     write_texture_cache,
 };
-pub use curves::{remap, sample_color_ramp, smoothstep, ColorStop};
+pub use curves::{ColorStop, remap, sample_color_ramp, smoothstep};
 pub use error::TextureGenerationError;
 pub use generators::{
     CobblestoneConfig, CobblestoneGenerator, GroundConfig, GroundGenerator, RockConfig,
@@ -30,17 +30,17 @@ pub use generators::{
 };
 pub use maps::{GeneratedPbrMaps, encode_height_u8, pack_ormh};
 pub use material_recipe::{
-    default_island_recipes, document_fingerprint, order_recipes_for_core_layers,
-    order_recipes_for_palette, strip_utf8_bom, ProceduralMaterialsDocument, TerrainMaterialIdName,
-    TerrainMaterialRecipe, CORE_ISLAND_LAYER_ORDER,
+    CORE_ISLAND_LAYER_ORDER, ProceduralMaterialsDocument, TerrainMaterialIdName,
+    TerrainMaterialRecipe, default_island_recipes, document_fingerprint,
+    order_recipes_for_core_layers, order_recipes_for_palette, strip_utf8_bom,
 };
 pub use recipe::{
-    texture_recipe_from_definition, texture_recipe_from_yaml_value, ProceduralTextureGenerator,
-    TextureRecipe,
+    ProceduralTextureGenerator, TextureRecipe, texture_recipe_from_definition,
+    texture_recipe_from_yaml_value,
 };
-pub use seam::{assert_seamless, maximum_texture_seam_error, DEFAULT_SEAM_TOLERANCE};
+pub use seam::{DEFAULT_SEAM_TOLERANCE, assert_seamless, maximum_texture_seam_error};
 pub use texture_graph::{
-    texture_graph_from_yaml_value, TextureGraphDefinition, TextureGraphRecipe, GENERATOR_VERSION,
+    GENERATOR_VERSION, TextureGraphDefinition, TextureGraphRecipe, texture_graph_from_yaml_value,
 };
 
 #[cfg(test)]
@@ -95,10 +95,7 @@ mod tests {
         let recipes = default_island_recipes();
         let arrays = build_cpu_arrays(&recipes).expect("arrays");
         assert_eq!(arrays.layers, 8);
-        assert_eq!(
-            arrays.albedo.len(),
-            512 * 512 * 4 * 8
-        );
+        assert_eq!(arrays.albedo.len(), 512 * 512 * 4 * 8);
     }
 
     #[test]
@@ -149,10 +146,7 @@ mod tests {
 
         fn graph_with_constant(value: f32) -> TextureGraphRecipe {
             let mut nodes = std::collections::BTreeMap::new();
-            nodes.insert(
-                "src".to_string(),
-                GraphNodeDefinition::Constant { value },
-            );
+            nodes.insert("src".to_string(), GraphNodeDefinition::Constant { value });
             nodes.insert(
                 "filtered".to_string(),
                 GraphNodeDefinition::SlopeFilter {

@@ -32,13 +32,19 @@ impl fmt::Display for ResolutionError {
         match self {
             Self::VoxelMustBeOneMeter => write!(f, "voxel_m must equal 1.0"),
             Self::TiersNotCoarseToFine => {
-                write!(f, "resolution tiers must be coarse to fine: world >= regional >= local >= voxel")
+                write!(
+                    f,
+                    "resolution tiers must be coarse to fine: world >= regional >= local >= voxel"
+                )
             }
             Self::TiersNotIntegerRatio => {
                 write!(f, "each resolution tier must divide evenly into the next")
             }
             Self::GridTooLarge { tier, cells } => {
-                write!(f, "grid for {tier} exceeds maximum ({cells} cells per axis)")
+                write!(
+                    f,
+                    "grid for {tier} exceeds maximum ({cells} cells per axis)"
+                )
             }
             Self::WorldControlBelowMinimum => {
                 write!(f, "world_control_m must be at least 250 m when enabled")
@@ -152,7 +158,11 @@ fn integer_ratio(coarse: f32, fine: f32) -> bool {
     (ratio - ratio.round()).abs() < 0.001 && ratio >= 1.0
 }
 
-fn check_grid_size(extent_m: f32, spacing_m: f32, tier: &'static str) -> Result<(), ResolutionError> {
+fn check_grid_size(
+    extent_m: f32,
+    spacing_m: f32,
+    tier: &'static str,
+) -> Result<(), ResolutionError> {
     let dims = grid_dims(extent_m, spacing_m);
     let cells = dims.0.max(dims.1);
     if cells > MAX_GRID_AXIS {
@@ -187,7 +197,10 @@ mod tests {
             local_m: 3.0,
             voxel_m: 1.0,
         };
-        assert_eq!(res.validate(288.0), Err(ResolutionError::TiersNotIntegerRatio));
+        assert_eq!(
+            res.validate(288.0),
+            Err(ResolutionError::TiersNotIntegerRatio)
+        );
     }
 
     #[test]
@@ -198,6 +211,9 @@ mod tests {
             local_m: 4.0,
             voxel_m: 0.5,
         };
-        assert_eq!(res.validate(288.0), Err(ResolutionError::VoxelMustBeOneMeter));
+        assert_eq!(
+            res.validate(288.0),
+            Err(ResolutionError::VoxelMustBeOneMeter)
+        );
     }
 }

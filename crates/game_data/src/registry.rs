@@ -6,18 +6,18 @@ use shared::{DataError, DataResult, StableId};
 
 use crate::compile::{
     CompiledApp, CompiledAtmosphere, CompiledBiomes, CompiledCamera, CompiledCave, CompiledDebug,
-    CompiledFog, CompiledIslandGeneration, CompiledLandmarks, CompiledLighting,
-    CompiledOptions, CompiledPerformance, CompiledPhysics, CompiledPlayer,
-    CompiledRoutes, CompiledSetupSchema, CompiledSky, CompiledStructure, CompiledTerrain, CompiledTerrainMaterials, CompiledSurfaceRules, CompiledVegetation,
-    CompiledWater, CompiledWaterBodyMaterial, CompiledHydrologyBody, CompiledWorld,
-    CompiledRenderProfile, CompiledWeatherProfile,
+    CompiledFog, CompiledHydrologyBody, CompiledIslandGeneration, CompiledLandmarks,
+    CompiledLighting, CompiledOptions, CompiledPerformance, CompiledPhysics, CompiledPlayer,
+    CompiledRenderProfile, CompiledRoutes, CompiledSetupSchema, CompiledSky, CompiledStructure,
+    CompiledSurfaceRules, CompiledTerrain, CompiledTerrainMaterials, CompiledVegetation,
+    CompiledWater, CompiledWaterBodyMaterial, CompiledWeatherProfile, CompiledWorld,
 };
 use crate::definitions::RawDefinition;
-use crate::surface_registry::{
-    build_surface_registry, CompiledSurfaceRegistry, MaterialDependencyIndex,
-};
 use crate::hash::registry_hash;
 use crate::load::LoadedFile;
+use crate::surface_registry::{
+    CompiledSurfaceRegistry, MaterialDependencyIndex, build_surface_registry,
+};
 use crate::validate::validate_definitions;
 
 #[derive(Clone, Debug, Serialize)]
@@ -58,7 +58,8 @@ pub struct ConfigRegistry {
 
 impl ConfigRegistry {
     pub fn from_loaded_files(files: &[LoadedFile]) -> DataResult<Self> {
-        let definitions: Vec<RawDefinition> = files.iter().map(|file| file.definition.clone()).collect();
+        let definitions: Vec<RawDefinition> =
+            files.iter().map(|file| file.definition.clone()).collect();
         validate_definitions(&definitions).into_result()?;
 
         let mut performance = BTreeMap::new();
@@ -193,7 +194,8 @@ impl ConfigRegistry {
 
         let mut surface_registries = BTreeMap::new();
         let mut material_dependencies = BTreeMap::new();
-        let mut catalog_ids: std::collections::BTreeSet<StableId> = std::collections::BTreeSet::new();
+        let mut catalog_ids: std::collections::BTreeSet<StableId> =
+            std::collections::BTreeSet::new();
         for def in &definitions {
             if let RawDefinition::MaterialCatalog(cat) = def {
                 catalog_ids.insert(cat.header.id.clone());
@@ -263,20 +265,27 @@ impl ConfigRegistry {
     }
 
     pub fn active_world(&self) -> DataResult<&CompiledWorld> {
-        self.worlds.get(&self.app.world).ok_or_else(|| DataError::UnknownReference {
-            reference: self.app.world.clone(),
-            context: "active world".to_string(),
-        })
+        self.worlds
+            .get(&self.app.world)
+            .ok_or_else(|| DataError::UnknownReference {
+                reference: self.app.world.clone(),
+                context: "active world".to_string(),
+            })
     }
 
     pub fn world_by_id(&self, id: &StableId) -> DataResult<&CompiledWorld> {
-        self.worlds.get(id).ok_or_else(|| DataError::UnknownReference {
-            reference: id.clone(),
-            context: "world profile".to_string(),
-        })
+        self.worlds
+            .get(id)
+            .ok_or_else(|| DataError::UnknownReference {
+                reference: id.clone(),
+                context: "world profile".to_string(),
+            })
     }
 
-    pub fn effective_world<'a>(&'a self, override_id: Option<&StableId>) -> DataResult<&'a CompiledWorld> {
+    pub fn effective_world<'a>(
+        &'a self,
+        override_id: Option<&StableId>,
+    ) -> DataResult<&'a CompiledWorld> {
         if let Some(id) = override_id {
             self.world_by_id(id)
         } else {
@@ -313,13 +322,19 @@ impl ConfigRegistry {
             .or_else(|| self.active_setup_schema().ok())
     }
 
-    pub fn effective_setup_schema_for_id(&self, world_id: &StableId) -> Option<&CompiledSetupSchema> {
+    pub fn effective_setup_schema_for_id(
+        &self,
+        world_id: &StableId,
+    ) -> Option<&CompiledSetupSchema> {
         self.world_by_id(world_id)
             .ok()
             .and_then(|world| self.effective_setup_schema(world))
     }
 
-    pub fn island_generation_for_world(&self, world: &CompiledWorld) -> Option<&CompiledIslandGeneration> {
+    pub fn island_generation_for_world(
+        &self,
+        world: &CompiledWorld,
+    ) -> Option<&CompiledIslandGeneration> {
         world
             .island_gen
             .as_ref()
@@ -400,17 +415,21 @@ impl ConfigRegistry {
     }
 
     pub fn active_player(&self) -> DataResult<&CompiledPlayer> {
-        self.player.get(&self.app.player).ok_or_else(|| DataError::UnknownReference {
-            reference: self.app.player.clone(),
-            context: "active player".to_string(),
-        })
+        self.player
+            .get(&self.app.player)
+            .ok_or_else(|| DataError::UnknownReference {
+                reference: self.app.player.clone(),
+                context: "active player".to_string(),
+            })
     }
 
     pub fn active_camera(&self) -> DataResult<&CompiledCamera> {
-        self.camera.get(&self.app.camera).ok_or_else(|| DataError::UnknownReference {
-            reference: self.app.camera.clone(),
-            context: "active camera".to_string(),
-        })
+        self.camera
+            .get(&self.app.camera)
+            .ok_or_else(|| DataError::UnknownReference {
+                reference: self.app.camera.clone(),
+                context: "active camera".to_string(),
+            })
     }
 
     pub fn active_performance(&self) -> DataResult<&CompiledPerformance> {
@@ -424,21 +443,28 @@ impl ConfigRegistry {
 
     pub fn active_lighting(&self) -> DataResult<&CompiledLighting> {
         let world = self.active_world()?;
-        self.lighting.get(&world.lighting).ok_or_else(|| DataError::UnknownReference {
-            reference: world.lighting.clone(),
-            context: "active lighting".to_string(),
-        })
+        self.lighting
+            .get(&world.lighting)
+            .ok_or_else(|| DataError::UnknownReference {
+                reference: world.lighting.clone(),
+                context: "active lighting".to_string(),
+            })
     }
 
     pub fn active_water(&self) -> DataResult<&CompiledWater> {
         let world = self.active_world()?;
-        self.water.get(&world.water).ok_or_else(|| DataError::UnknownReference {
-            reference: world.water.clone(),
-            context: "active water".to_string(),
-        })
+        self.water
+            .get(&world.water)
+            .ok_or_else(|| DataError::UnknownReference {
+                reference: world.water.clone(),
+                context: "active water".to_string(),
+            })
     }
 
-    pub fn effective_render_profile(&self, world: &CompiledWorld) -> Option<&CompiledRenderProfile> {
+    pub fn effective_render_profile(
+        &self,
+        world: &CompiledWorld,
+    ) -> Option<&CompiledRenderProfile> {
         self.render_profiles
             .get(&world.lod.materials.render_profile)
     }

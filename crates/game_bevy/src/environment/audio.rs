@@ -18,7 +18,10 @@ impl Plugin for EnvironmentAudioStubPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<EnvironmentAudioState>()
             .add_systems(OnEnter(AppState::Running), spawn_audio_stubs)
-            .add_systems(Update, update_audio_state.run_if(in_state(AppState::Running)));
+            .add_systems(
+                Update,
+                update_audio_state.run_if(in_state(AppState::Running)),
+            );
     }
 }
 
@@ -29,11 +32,15 @@ pub struct EnvironmentAudioState {
 
 fn spawn_audio_stubs(mut commands: Commands) {
     commands.spawn((
-        AudioEmitterStub { label: "coast_waves" },
+        AudioEmitterStub {
+            label: "coast_waves",
+        },
         Transform::from_xyz(-30.0, 2.0, -25.0),
     ));
     commands.spawn((
-        AudioEmitterStub { label: "river_flow" },
+        AudioEmitterStub {
+            label: "river_flow",
+        },
         Transform::from_xyz(100.0, 4.0, 150.0),
     ));
     commands.spawn((

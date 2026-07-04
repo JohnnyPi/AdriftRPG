@@ -6,11 +6,13 @@ use bevy::mesh::SphereKind;
 use bevy::pbr::{Material, MaterialPipeline, MaterialPipelineKey};
 use bevy::prelude::*;
 use bevy::render::mesh::MeshVertexBufferLayoutRef;
-use bevy::render::render_resource::{AsBindGroup, Face, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError};
+use bevy::render::render_resource::{
+    AsBindGroup, Face, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError,
+};
 use bevy::shader::ShaderRef;
 
 use super::celestial::CelestialState;
-use super::config_init::{sea_level_for_prefs, EnvironmentInitSet};
+use super::config_init::{EnvironmentInitSet, sea_level_for_prefs};
 use super::sky_config::{SkyEffectsRevision, SkyPresentationConfig};
 use crate::camera::MainGameCamera;
 use crate::data::{ConfigRegistryResource, UserSetupPrefs};
@@ -160,15 +162,7 @@ fn sync_cloud_layer_on_revision(
     }
     *last = Some(revision.0);
     spawn_cloud_layer(
-        commands,
-        meshes,
-        materials,
-        registry,
-        prefs,
-        sky,
-        celestial,
-        spawned,
-        existing,
+        commands, meshes, materials, registry, prefs, sky, celestial, spawned, existing,
     );
 }
 
@@ -185,7 +179,8 @@ fn follow_cloud_layer(
     let sea_level = sea_level_for_prefs(&registry, &prefs);
     let shell_y = cloud_shell_world_y(sea_level, sky.clouds_altitude, sky.cloud_base_height_m);
     for mut transform in &mut clouds {
-        transform.translation = Vec3::new(camera_tf.translation.x, shell_y, camera_tf.translation.z);
+        transform.translation =
+            Vec3::new(camera_tf.translation.x, shell_y, camera_tf.translation.z);
     }
 }
 
@@ -226,12 +221,7 @@ fn cloud_material_from_state(
     CloudMaterial {
         params: CloudParams {
             coverage,
-            wind: Vec4::new(
-                wind_dir.x,
-                wind_dir.y,
-                sky.clouds_speed,
-                elapsed,
-            ),
+            wind: Vec4::new(wind_dir.x, wind_dir.y, sky.clouds_speed, elapsed),
             sun_dir: Vec4::new(sun.x, sun.y, sun.z, 0.0),
             sun_color: Vec4::new(sun_c[0], sun_c[1], sun_c[2], 1.0),
             horizon_color: Vec4::new(horizon[0], horizon[1], horizon[2], 1.0),

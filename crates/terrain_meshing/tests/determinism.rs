@@ -1,7 +1,11 @@
 // crates/terrain_meshing/tests/determinism.rs
-use terrain_generation::{default_vertical_slice_recipe, generate_padded_samples, RecipeDensitySource};
+use terrain_generation::{
+    RecipeDensitySource, default_vertical_slice_recipe, generate_padded_samples,
+};
 use terrain_meshing::{ChunkMeshingInput, SurfaceNetsMesher, TerrainMesher};
-use voxel_core::{fnv1a_update, quantize_density_mm, ChunkCoord, MaterialId, FNV_OFFSET, CHUNK_CELLS};
+use voxel_core::{
+    CHUNK_CELLS, ChunkCoord, FNV_OFFSET, MaterialId, fnv1a_update, quantize_density_mm,
+};
 
 fn test_density_source(seed: u64) -> RecipeDensitySource {
     RecipeDensitySource::new(default_vertical_slice_recipe(seed, 2.0))
@@ -46,5 +50,8 @@ fn different_seeds_may_differ() {
     let coord = ChunkCoord::new(0, 1, 0);
     let ha = mesh_topology_hash(&a, coord);
     let hb = mesh_topology_hash(&b, coord);
-    assert_ne!(ha, hb, "different seeds should produce different topology hashes");
+    assert_ne!(
+        ha, hb,
+        "different seeds should produce different topology hashes"
+    );
 }

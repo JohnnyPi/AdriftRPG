@@ -7,7 +7,7 @@ use crate::ui::CameraTweaks;
 
 use super::components::{CameraInputState, MmoCamera};
 use super::fly_cam::fly_cam_active;
-use super::{parse_recenter_key, components::wrap_angle};
+use super::{components::wrap_angle, parse_recenter_key};
 
 pub fn read_camera_orbit_input(
     registry: Res<ConfigRegistryResource>,
@@ -42,8 +42,7 @@ pub fn read_camera_orbit_input(
         }
 
         let pitch_sign = if config.invert_y { -1.0 } else { 1.0 };
-        camera.pitch = (camera.pitch
-            + delta.y * config.mouse_sensitivity_y * pitch_sign)
+        camera.pitch = (camera.pitch + delta.y * config.mouse_sensitivity_y * pitch_sign)
             .clamp(config.pitch_minimum_rad, config.pitch_maximum_rad);
     }
 

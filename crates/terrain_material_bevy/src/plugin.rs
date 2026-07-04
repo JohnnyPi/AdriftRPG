@@ -94,25 +94,22 @@ fn start_texture_bake(
         return;
     }
 
-    let Some(recipes) = recipe_override
-        .recipes
-        .clone()
-        .or_else(|| {
-            yaml_path
-                .0
-                .as_ref()
-                .map(|path| recipes_for_world(Some(path)))
-        })
-    else {
+    let Some(recipes) = recipe_override.recipes.clone().or_else(|| {
+        yaml_path
+            .0
+            .as_ref()
+            .map(|path| recipes_for_world(Some(path)))
+    }) else {
         return;
     };
     let layer_order = recipe_override.layer_order.clone();
     let fingerprint = recipe_fingerprint_for(&recipes);
 
     if let Some(cached) = try_load_cache(fingerprint) {
-        pending.task = Some(AsyncComputeTaskPool::get().spawn(async move {
-            (cached, fingerprint, recipes, layer_order)
-        }));
+        pending.task = Some(
+            AsyncComputeTaskPool::get()
+                .spawn(async move { (cached, fingerprint, recipes, layer_order) }),
+        );
         return;
     }
 

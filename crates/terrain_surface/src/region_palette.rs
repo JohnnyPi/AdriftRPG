@@ -1,9 +1,12 @@
 // crates/terrain_surface/src/region_palette.rs
 //! Material-region palette selection shared across neighboring chunks.
+//!
+//! Region palettes sit between the world [`MaterialLayerRegistry`](crate::MaterialLayerRegistry)
+//! and per-chunk [`ChunkSlotPalette`](crate::chunk_palette::ChunkSlotPalette).
 
 use std::collections::BTreeMap;
 
-use crate::chunk_palette::{ChunkSlotPalette, CHUNK_LOCAL_SLOT_COUNT};
+use crate::chunk_palette::{CHUNK_LOCAL_SLOT_COUNT, ChunkSlotPalette};
 use crate::material_id::MaterialKey;
 
 pub const DEFAULT_REGION_CHUNKS: u32 = 4;

@@ -1,17 +1,17 @@
 // crates/game_bevy/src/scene/bootstrap.rs
-use bevy::light::{light_consts::lux, CascadeShadowConfig, CascadeShadowConfigBuilder};
+use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder, light_consts::lux};
 use bevy::prelude::*;
 use tracing::info;
 
 use crate::data::ConfigRegistryResource;
+use crate::environment::SunLight;
 use crate::environment::atmosphere::{atmosphere_clear_color, attach_volumetric_sun};
-use crate::environment::celestial::MoonLight;
+use crate::environment::celestial::{MoonLight, moon_direction_from_sun};
+use crate::environment::config_init::EnvironmentInitSet;
 use crate::environment::lighting_state::sun_direction_from_angles;
-use crate::environment::{SunLight};
 use crate::player::spawn_player;
 use crate::state::AppState;
 use crate::terrain::{TerrainSpawnPoint, TerrainWorldInitSet};
-use crate::environment::config_init::EnvironmentInitSet;
 
 pub struct BootstrapScenePlugin;
 
@@ -84,7 +84,7 @@ fn spawn_bootstrap_scene(
 
     if let Some(atmo) = atmo {
         if atmo.moon_enabled {
-            let moon_dir = sun_direction_from_angles(atmo.moon_azimuth_deg, atmo.moon_elevation_deg);
+            let moon_dir = moon_direction_from_sun(atmo.sun_azimuth_deg, atmo.sun_elevation_deg);
             commands.spawn((
                 MoonLight,
                 DirectionalLight {

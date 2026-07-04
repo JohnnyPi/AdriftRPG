@@ -31,8 +31,7 @@ pub fn update_camera_environment(
     let in_cave = players
         .single()
         .map(|tf| {
-            tf.translation.y < 6.0
-                && tf.translation.distance(Vec3::new(26.0, 2.0, 12.0)) < 12.0
+            tf.translation.y < 6.0 && tf.translation.distance(Vec3::new(26.0, 2.0, 12.0)) < 12.0
         })
         .unwrap_or(false);
 

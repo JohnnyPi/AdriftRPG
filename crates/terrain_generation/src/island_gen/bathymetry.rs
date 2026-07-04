@@ -1,17 +1,14 @@
 // crates/terrain_generation/src/island_gen/bathymetry.rs
 //! Bathymetry and shelf profiles (VS3 §10).
 
-use crate::field2d::{smoothstep, Field2D};
+use crate::field2d::{Field2D, smoothstep};
 use crate::island_gen::params::IslandGenParams;
+use crate::island_gen::util::seeded_unit;
 use crate::noise::ValueNoise;
 
 pub const SALT_SHELF_WIDTH: u64 = 0xC04A_7D15_5E1F_0001;
 pub const SALT_SHELF_DEPTH: u64 = 0xC04A_7D15_5E1F_0002;
 pub const SALT_DEEP_SLOPE: u64 = 0xC04A_7D15_D33F_0003;
-
-fn seeded_unit(noise: &ValueNoise, wx: f32, wz: f32) -> f32 {
-    noise.sample(wx * 0.0025, 0.0, wz * 0.0025)
-}
 
 fn range_mix(min: f32, max: f32, t: f32) -> f32 {
     min + (max - min) * t.clamp(0.0, 1.0)

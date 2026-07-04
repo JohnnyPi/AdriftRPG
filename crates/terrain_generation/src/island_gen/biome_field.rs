@@ -1,13 +1,10 @@
 // crates/terrain_generation/src/island_gen/biome_field.rs
 //! Biome suitability weights (VS3 §15).
 
-use crate::field2d::{smoothstep, Field2D};
+use crate::field2d::{Field2D, smoothstep};
 use crate::island_atlas::BiomeWeights;
 use crate::island_gen::params::IslandGenParams;
-
-fn range_weight(value: f32, min: f32, max: f32, fade: f32) -> f32 {
-    smoothstep(min - fade, min, value) * (1.0 - smoothstep(max, max + fade, value))
-}
+use shared::range_weight;
 
 pub fn compute_biome_weights(
     elevation: &Field2D<f32>,
@@ -36,12 +33,12 @@ pub fn compute_biome_weights(
             let beach = beach_mask.get(x, z);
 
             let rainforest = range_weight(wet, 0.5, 1.0, 0.15)
-                * range_weight(elev, 10.0, 180.0, 30.0)
+                * range_weight(elev, 8.0, 45.0, 8.0)
                 * range_weight(sl, 0.0, 38.0, 10.0);
-            let grassland = range_weight(elev, 5.0, 120.0, 25.0)
+            let grassland = range_weight(elev, 3.0, 40.0, 10.0)
                 * range_weight(sl, 0.0, 30.0, 8.0)
                 * (1.0 - wet * 0.4);
-            let volcanic_rock = smoothstep(30.0, 55.0, sl).max(range_weight(elev, 140.0, 360.0, 40.0));
+            let volcanic_rock = smoothstep(30.0, 55.0, sl).max(range_weight(elev, 28.0, 55.0, 8.0));
             let wetland = range_weight(wet, 0.7, 1.0, 0.1) * range_weight(sl, 0.0, 12.0, 5.0);
 
             biomes.set(

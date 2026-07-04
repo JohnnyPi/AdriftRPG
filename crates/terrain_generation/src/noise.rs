@@ -11,8 +11,7 @@ impl ValueNoise {
     }
 
     fn hash(&self, x: i32, y: i32, z: i32) -> f32 {
-        let mut h = self
-            .seed
+        let mut h = self.seed
             ^ (x as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
             ^ (y as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
             ^ (z as u64).wrapping_mul(0x1656_67B1_9E37_79F9);
@@ -66,11 +65,7 @@ impl ValueNoise {
             amp *= gain;
             freq *= lacunarity;
         }
-        if norm > 0.0 {
-            sum / norm
-        } else {
-            0.0
-        }
+        if norm > 0.0 { sum / norm } else { 0.0 }
     }
 
     /// 2D fractal sum in **[-1, 1]** (fbm at y = 0, remapped).

@@ -4,12 +4,12 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use shared::StableId;
 use terrain_generation::{
+    RecipeDensitySource, RiverCarveContext, RiverGenConfig, WorldVolumeBounds,
     build_atlas_density_source_for_world, compile_terrain_recipe,
-    compile_terrain_recipe_with_island, generate_river_spline, RecipeDensitySource,
-    RiverCarveContext, RiverGenConfig, WorldVolumeBounds,
+    compile_terrain_recipe_with_island, generate_river_spline,
 };
 
-use crate::data::{assets_root, UserSetupPrefs};
+use crate::data::{UserSetupPrefs, assets_root};
 
 pub fn build_density_source(
     registry: &ConfigRegistry,
@@ -42,9 +42,7 @@ pub fn build_density_source_from_prefs(
     field_stack: terrain_generation::FieldStackParams,
 ) -> RecipeDensitySource {
     let world_id = prefs.world_stable_id();
-    let world = registry
-        .effective_world(Some(&world_id))
-        .expect("world");
+    let world = registry.effective_world(Some(&world_id)).expect("world");
     match registry.island_generation_for_world(world) {
         Some(base) => {
             let merged = prefs.apply_overrides(base);
@@ -74,7 +72,8 @@ fn build_legacy_density_source(
     field_stack: terrain_generation::FieldStackParams,
 ) -> RecipeDensitySource {
     let water = registry.water.get(&world.water).expect("water");
-    let recipe = compile_terrain_recipe(registry, world, water, seed_override);
+    let recipe =
+        compile_terrain_recipe(registry, world, water, seed_override).expect("terrain recipe");
     let bounds = WorldVolumeBounds::from_compiled_world(world);
     let mut source = RecipeDensitySource::new(recipe.clone())
         .with_field_stack(field_stack)
@@ -110,7 +109,8 @@ pub fn terrain_recipe_hash(
     prefs: Option<&UserSetupPrefs>,
     field_stack: Option<&terrain_generation::FieldStackParams>,
 ) -> String {
-    let payload = terrain_recipe_hash_payload(registry, world_id, seed_override, prefs, field_stack);
+    let payload =
+        terrain_recipe_hash_payload(registry, world_id, seed_override, prefs, field_stack);
     let bytes = serde_json::to_vec(&payload).expect("terrain recipe hash serialization");
     hex::encode(Sha256::digest(bytes))
 }
@@ -157,7 +157,8 @@ fn terrain_recipe_hash_payload(
         water,
         Some(seed),
         island_generation.as_ref(),
-    );
+    )
+    .expect("terrain recipe");
     let terrain = registry.terrain.get(&world.terrain).expect("terrain");
     let cave_operations = terrain
         .includes
@@ -169,19 +170,20 @@ fn terrain_recipe_hash_payload(
                 .map(|cave| (cave_id.as_str().to_string(), cave.operations.clone()))
         })
         .collect();
-    let (prefs_world_id, prefs_preview_color_mode, prefs_island_overrides) = if let Some(prefs) = prefs {
-        (
-            Some(prefs.world_id.clone()),
-            Some(prefs.preview_color_mode.clone()),
-            prefs
-                .island_overrides
-                .iter()
-                .map(|(k, v)| (k.clone(), *v))
-                .collect(),
-        )
-    } else {
-        (None, None, Vec::new())
-    };
+    let (prefs_world_id, prefs_preview_color_mode, prefs_island_overrides) =
+        if let Some(prefs) = prefs {
+            (
+                Some(prefs.world_id.clone()),
+                Some(prefs.preview_color_mode.clone()),
+                prefs
+                    .island_overrides
+                    .iter()
+                    .map(|(k, v)| (k.clone(), *v))
+                    .collect(),
+            )
+        } else {
+            (None, None, Vec::new())
+        };
     let effective_field_stack = if world.island_gen.is_some() {
         None
     } else {
@@ -218,21 +220,29 @@ mod tests {
     }
 
     #[test]
-    fn authored_testbed_terrain_compiles_with_river_carve() {
+    fn island_testbed_atlas_has_peak_and_chunk_coverage() {
         let registry = load_registry_from_directory(workspace_assets()).expect("registry");
         let world = registry
             .world_by_id(&StableId::new("world.island_testbed"))
             .expect("world");
         assert!(
-            world.island_gen.is_none(),
-            "testbed must be an op-based authored world"
+            world.island_gen.is_some(),
+            "testbed is an island-atlas world"
         );
-        let source = build_density_source(&registry, Some(&StableId::new("world.island_testbed")), None, terrain_generation::FieldStackParams::default());
+        let source = build_density_source(
+            &registry,
+            Some(&StableId::new("world.island_testbed")),
+            None,
+            terrain_generation::FieldStackParams::default(),
+        );
+        assert!(
+            source.atlas().is_some(),
+            "island testbed should resolve a procedural atlas"
+        );
         assert!(
             source.river_carve().is_some(),
-            "authored testbed should generate a carved primary river"
+            "island atlas should include a carved primary river"
         );
-        assert!(source.atlas().is_none());
     }
 
     #[test]
@@ -241,9 +251,7 @@ mod tests {
         let world = registry
             .world_by_id(&StableId::new("world.island_large"))
             .expect("world");
-        let base = registry
-            .island_generation_for_world(world)
-            .expect("island");
+        let base = registry.island_generation_for_world(world).expect("island");
         let water = registry.water.get(&world.water).expect("water");
         let messages =
             terrain_generation::validate_island_world_budget(base, world, water.sea_level_m);
@@ -267,20 +275,9 @@ mod tests {
         let default_stack = terrain_generation::FieldStackParams::default();
         let mut tweaked = default_stack.clone();
         tweaked.ridge_amplitude = default_stack.ridge_amplitude + 1.0;
-        let hash_a = terrain_recipe_hash(
-            &registry,
-            Some(world_id),
-            None,
-            None,
-            Some(&default_stack),
-        );
-        let hash_b = terrain_recipe_hash(
-            &registry,
-            Some(world_id),
-            None,
-            None,
-            Some(&tweaked),
-        );
+        let hash_a =
+            terrain_recipe_hash(&registry, Some(world_id), None, None, Some(&default_stack));
+        let hash_b = terrain_recipe_hash(&registry, Some(world_id), None, None, Some(&tweaked));
         assert_ne!(hash_a, hash_b);
     }
 }

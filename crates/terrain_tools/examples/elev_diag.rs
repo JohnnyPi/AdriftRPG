@@ -1,4 +1,5 @@
-use terrain_generation::{build_island_atlas, IslandGenParams, RecipeDensitySource, TerrainRecipe};
+//! Offline elevation probe for the default island atlas (run with `cargo run -p terrain_tools --example elev_diag`).
+use terrain_generation::{IslandGenParams, RecipeDensitySource, TerrainRecipe, build_island_atlas};
 
 fn main() {
     let params = IslandGenParams::default();
@@ -33,7 +34,12 @@ fn main() {
     let source = RecipeDensitySource::new(recipe).with_atlas(atlas, 3.5);
     let peak = source.terrain_surface_height_at(0.0, 0.0);
     let spawn_h = source.terrain_surface_height_at(-58.0, 32.0);
-    println!("land_cells={land_cells} max_comp={max_comp:.2} max_reg={max_reg:.2} min_comp={min_comp:.2}");
+    println!(
+        "land_cells={land_cells} max_comp={max_comp:.2} max_reg={max_reg:.2} min_comp={min_comp:.2}"
+    );
     println!("peak_center={peak:.2} spawn_h={spawn_h:.2}");
-    println!("resolution regional={} local={}", params.resolution.regional_m, params.resolution.local_m);
+    println!(
+        "resolution regional={} local={}",
+        params.resolution.regional_m, params.resolution.local_m
+    );
 }

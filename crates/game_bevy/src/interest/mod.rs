@@ -2,13 +2,11 @@
 
 use bevy::prelude::*;
 use std::collections::BTreeSet;
-use voxel_core::{
-    ChunkCoord, ChunkInterestProvider, SimulationLodProvider,
-};
+use voxel_core::{ChunkCoord, ChunkInterestProvider, SimulationLodProvider};
 
 use crate::lod::LodPolicy;
 use crate::staging::InterestVelocity;
-use crate::terrain::{residency::chunk_chebyshev_distance, TerrainWorldRuntime};
+use crate::terrain::{TerrainWorldRuntime, residency::chunk_chebyshev_distance};
 
 pub struct ChunkInterestPlugin;
 

@@ -3,7 +3,7 @@
 
 use crate::field_stack::valley_field;
 use crate::noise::ValueNoise;
-use crate::recipe::{coastal_inland_factor, island_land_factor, RecipeOp, TerrainRecipe};
+use crate::recipe::{RecipeOp, TerrainRecipe, coastal_inland_factor, island_land_factor};
 
 #[derive(Clone, Copy, Debug)]
 pub struct CoastalSurfaceParams {
@@ -87,8 +87,7 @@ pub fn sample_coastal_surface(
     let broad = params.base_height + coast * params.height_range;
     let ridge_bump = ((wx - params.ridge_origin[0]) / params.ridge_scale[0].max(f32::EPSILON))
         .clamp(0.0, 1.0)
-        * ((wz - params.ridge_origin[1]) / params.ridge_scale[1].max(f32::EPSILON))
-            .clamp(0.0, 1.0)
+        * ((wz - params.ridge_origin[1]) / params.ridge_scale[1].max(f32::EPSILON)).clamp(0.0, 1.0)
         * params.ridge_amplitude;
 
     let regional = if params.regional_amplitude > 0.0 && params.regional_frequency > 0.0 {
@@ -218,15 +217,9 @@ pub fn land_surface_height(recipe: &TerrainRecipe, x: f32, z: f32) -> f32 {
                         CoastModifierKind::Cove => {
                             cove_depression(x, z, *center, *radius_m, *depth_m)
                         }
-                        CoastModifierKind::Harbor => harbor_depression(
-                            &noise,
-                            x,
-                            z,
-                            *center,
-                            *radius_m,
-                            *depth_m,
-                            2.5,
-                        ),
+                        CoastModifierKind::Harbor => {
+                            harbor_depression(&noise, x, z, *center, *radius_m, *depth_m, 2.5)
+                        }
                         CoastModifierKind::CliffShelf => 0.0,
                     };
                     height -= depression;

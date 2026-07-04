@@ -1,4 +1,22 @@
 // crates/terrain_surface/src/lib.rs
+//! Surface classification, material blending, and chunk palette resolution.
+//!
+//! # Material palette hierarchy
+//!
+//! Terrain materials flow through four representations (outer → inner):
+//!
+//! 1. **World catalog** — [`MaterialLayerRegistry`] maps stable [`MaterialKey`] names
+//!    (from YAML `terrain_materials`) to global texture-array layer indices.
+//! 2. **Region palette** — [`MaterialRegionPalette`] picks up to eight dominant
+//!    [`MaterialKey`] surfaces across a [`MaterialRegionCoord`] (default 4×4 chunks),
+//!    cached in [`MaterialRegionPaletteCache`].
+//! 3. **Chunk slot palette** — [`ChunkSlotRemapper`] / [`ChunkSlotPalette`] compress
+//!    the globals used by one chunk into eight local slots (`0..7`) for the shader.
+//! 4. **Vertex indices** — [`MaterialVertex::local_indices`] + weight vectors uploaded
+//!    per mesh corner; [`remap_blend_to_local_slots`] performs the final mapping.
+//!
+//! [`RuleSurfaceClassifier`] produces a four-material [`SurfaceMaterialBlend`] in
+//! material-key space; [`resolve_blend`] converts keys to global layers before remapping.
 mod blend;
 mod chunk_palette;
 mod classifier;
@@ -10,32 +28,33 @@ mod registry;
 mod scoring;
 
 pub use blend::{
-    remap_blend_to_local_slots, resolve_blend, validate_blend, MaterialVertex, SurfaceClassifier,
-    SurfaceMaterialBlend, SurfaceMeshResolver,
+    MaterialVertex, SurfaceClassifier, SurfaceMaterialBlend, SurfaceMeshResolver,
+    remap_blend_to_local_slots, resolve_blend, validate_blend,
 };
-pub use chunk_palette::{ChunkSlotPalette, ChunkSlotRemapper, CHUNK_LOCAL_SLOT_COUNT, UNUSED_SLOT};
+pub use chunk_palette::{CHUNK_LOCAL_SLOT_COUNT, ChunkSlotPalette, ChunkSlotRemapper, UNUSED_SLOT};
+#[cfg(any(test, feature = "test-oracle"))]
+pub use classifier::IslandSurfaceClassifier;
 pub use classifier::{
-    IslandSurfaceClassifier, RuleSurfaceClassifier, SurfaceBlendEntry, SurfaceClassifierPreset,
-    SurfaceConditions, SurfaceGate, SurfaceGateWeights, SurfaceRamp, SurfaceRuleSet,
-    SurfaceWeightedMix,
+    RuleSurfaceClassifier, SurfaceBlendEntry, SurfaceClassifierPreset, SurfaceConditions,
+    SurfaceGate, SurfaceGateWeights, SurfaceRamp, SurfaceRuleSet, SurfaceWeightedMix,
 };
 pub use context::{
-    compute_soft_biome_weights, saturate, smoothstep, slope_degrees, BiomeId, EnvironmentSample,
-    GeologyId, SoftBiomeWeights, SurfaceContext,
+    BiomeId, EnvironmentSample, GeologyId, SoftBiomeWeights, SurfaceContext,
+    compute_soft_biome_weights, default_wetness_normalization, merge_soft_with_atlas,
+    normalize_wetness, saturate, slope_degrees, smoothstep,
 };
 pub use material_id::MaterialKey;
 pub use overlay::{
-    compute_overlay_state, overlay_response_for_material_name, OverlayResponseParams,
-    SurfaceOverlayState,
+    OverlayResponseParams, SurfaceOverlayState, compute_overlay_state,
+    overlay_response_for_material_name,
 };
 pub use region_palette::{
-    MaterialRegionCoord, MaterialRegionPalette, MaterialRegionPaletteCache, SurfaceCoverage,
-    DEFAULT_REGION_CHUNKS, MAX_REGION_SURFACES,
+    DEFAULT_REGION_CHUNKS, MAX_REGION_SURFACES, MaterialRegionCoord, MaterialRegionPalette,
+    MaterialRegionPaletteCache, SurfaceCoverage,
 };
 pub use registry::MaterialLayerRegistry;
-pub use scoring::{
-    normalize_scores, ScoreCurve, ScoreCurveKind, ScoreField, SurfaceScoreRule,
-};
+#[doc(hidden)]
+pub use scoring::{ScoreCurve, ScoreCurveKind, ScoreField, SurfaceScoreRule, normalize_scores};
 
 #[cfg(test)]
 mod tests {

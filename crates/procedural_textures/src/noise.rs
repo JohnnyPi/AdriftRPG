@@ -7,9 +7,7 @@ pub struct SeamlessNoise {
 
 impl SeamlessNoise {
     pub fn new(seed: u32) -> Self {
-        Self {
-            seed: seed as u64,
-        }
+        Self { seed: seed as u64 }
     }
 
     fn hash(x: i32, y: i32, seed: u64) -> f32 {
@@ -63,11 +61,7 @@ impl SeamlessNoise {
             amp *= gain;
             freq *= lacunarity;
         }
-        if norm > f32::EPSILON {
-            sum / norm
-        } else {
-            0.0
-        }
+        if norm > f32::EPSILON { sum / norm } else { 0.0 }
     }
 
     pub fn ridged(&self, u: f32, v: f32, octaves: u32, lacunarity: f32, gain: f32) -> f32 {
@@ -83,11 +77,7 @@ impl SeamlessNoise {
             amp *= gain;
             freq *= lacunarity;
         }
-        if norm > f32::EPSILON {
-            sum / norm
-        } else {
-            0.0
-        }
+        if norm > f32::EPSILON { sum / norm } else { 0.0 }
     }
 }
 

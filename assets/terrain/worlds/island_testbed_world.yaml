@@ -39,7 +39,8 @@ chunks:
     preload_atlas: true
     preload_material_arrays: true
 
-terrain: terrain.island_testbed
+terrain: terrain.island_testbed_objects
+island_gen: island_gen.island_testbed
 biomes: biomes.expanded_slice
 materials: materials.expanded_slice
 surface: surface.expanded_slice

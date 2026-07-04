@@ -5199,6 +5199,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "shared",
  "tempfile",
  "thiserror 2.0.18",
 ]
@@ -6017,6 +6018,7 @@ dependencies = [
  "sha2",
  "shared",
  "terrain_meshing",
+ "terrain_surface",
  "voxel_core",
  "zstd",
 ]
@@ -6052,8 +6054,11 @@ dependencies = [
 name = "terrain_surface"
 version = "0.1.0"
 dependencies = [
+ "game_data",
  "procedural_textures",
  "serde",
+ "shared",
+ "terrain_generation",
 ]
 
 [[package]]
@@ -6068,6 +6073,7 @@ dependencies = [
  "serde_yaml",
  "shared",
  "terrain_generation",
+ "terrain_material_bevy",
 ]
 
 [[package]]

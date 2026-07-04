@@ -391,7 +391,10 @@ mod tests {
         // Last mip is the final 4 bytes; flat color must round-trip within 1.
         let tail = &data[data.len() - 4..];
         for (got, want) in tail.iter().zip([86u8, 132, 70, 255]) {
-            assert!((*got as i16 - want as i16).abs() <= 1, "got {got}, want {want}");
+            assert!(
+                (*got as i16 - want as i16).abs() <= 1,
+                "got {got}, want {want}"
+            );
         }
     }
 

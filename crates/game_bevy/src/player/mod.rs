@@ -1,13 +1,13 @@
 // crates/game_bevy/src/player/mod.rs
-mod movement;
 mod motor;
+mod movement;
 mod spawn;
 
-pub use movement::{CharacterMotorPlugin, PlayerPlugin};
 pub use motor::{
-    classify_locomotion, resolve_facing_yaw, CharacterMotorState, MovementIntent, MovementSpeed,
-    PlayerFacingMode,
+    CharacterMotorState, MovementIntent, MovementSpeed, PlayerFacingMode, classify_locomotion,
+    resolve_facing_yaw,
 };
+pub use movement::{CharacterMotorPlugin, PlayerPlugin};
 pub use spawn::spawn_player;
 
 use bevy::prelude::*;

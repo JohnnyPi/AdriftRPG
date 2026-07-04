@@ -1,7 +1,7 @@
 // crates/terrain_generation/src/island_atlas.rs
 //! Aligned island-scale field products (VS3 §2).
 
-use crate::field2d::{smoothstep, Field2D};
+use crate::field2d::{Field2D, smoothstep};
 use crate::resolution::GenerationResolution;
 use crate::water_body::RiverSpline;
 
@@ -241,7 +241,10 @@ mod extrapolation_tests {
         let atlas = minimal_atlas(2.0, -8.0);
         let inside = atlas.surface_height_at(0.0, 0.0);
         let outside = atlas.surface_height_at(80.0, 0.0);
-        assert!(outside < inside, "outside {outside} should be deeper than inside {inside}");
+        assert!(
+            outside < inside,
+            "outside {outside} should be deeper than inside {inside}"
+        );
     }
 }
 

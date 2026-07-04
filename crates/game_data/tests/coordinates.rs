@@ -1,7 +1,7 @@
 // crates/game_data/tests/coordinates.rs
 use game_data::{
-    validate_definitions, CompiledChunkResidency, CompiledChunkStaging, CompiledWorld,
-    CompiledWorldLod, RawDefinition, WorldChunksDefinition, WorldDefinition, WorldVoxelDefinition,
+    CompiledChunkResidency, CompiledChunkStaging, CompiledWorld, CompiledWorldLod, RawDefinition,
+    WorldChunksDefinition, WorldDefinition, WorldVoxelDefinition, validate_definitions,
 };
 use shared::{DataError, DefinitionHeader, StableId};
 

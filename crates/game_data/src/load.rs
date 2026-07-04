@@ -25,10 +25,7 @@ fn load_yaml_files(assets_root: &Path) -> DataResult<Vec<LoadedFile>> {
     if !assets_root.is_dir() {
         return Err(DataError::Io {
             path: assets_root.display().to_string(),
-            source: std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "assets directory not found",
-            ),
+            source: std::io::Error::new(std::io::ErrorKind::NotFound, "assets directory not found"),
         });
     }
 
@@ -71,10 +68,11 @@ fn load_yaml_files(assets_root: &Path) -> DataResult<Vec<LoadedFile>> {
 }
 
 fn parse_yaml_file(path: &Path, text: &str) -> DataResult<RawDefinition> {
-    let value: serde_yaml::Value = serde_yaml::from_str(text).map_err(|error| DataError::Parse {
-        path: path.display().to_string(),
-        message: error.to_string(),
-    })?;
+    let value: serde_yaml::Value =
+        serde_yaml::from_str(text).map_err(|error| DataError::Parse {
+            path: path.display().to_string(),
+            message: error.to_string(),
+        })?;
 
     let id = value
         .get("id")
@@ -182,9 +180,7 @@ fn strip_utf8_bom(text: &str) -> &str {
 fn should_skip_config_file(path: &Path) -> bool {
     path.components().any(|component| {
         let s = component.as_os_str();
-        s == "procedural"
-            || s == "baked"
-            || s.to_string_lossy().ends_with(".atlas")
+        s == "procedural" || s == "baked" || s.to_string_lossy().ends_with(".atlas")
     })
 }
 

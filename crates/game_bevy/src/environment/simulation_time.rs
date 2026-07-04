@@ -1,10 +1,9 @@
-//! Automatic day/night cycle advancing simulation clock.
+//! Authoritative simulation clock for day/night presentation.
 
 use bevy::prelude::*;
 
-use super::celestial::CelestialState;
+use super::celestial::UpdateCelestialSet;
 use crate::state::AppState;
-use crate::ui::AtmosphereTweaks;
 
 #[derive(Resource, Clone, Debug)]
 pub struct SimulationTime {
@@ -17,7 +16,7 @@ pub struct SimulationTime {
 impl Default for SimulationTime {
     fn default() -> Self {
         Self {
-            time_of_day_hours: 10.5,
+            time_of_day_hours: 10.0,
             day_length_minutes: 24.0,
             time_scale: 1.0,
             auto_advance: true,
@@ -25,21 +24,25 @@ impl Default for SimulationTime {
     }
 }
 
+#[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
+pub struct SimulationClockSet;
+
 pub struct SimulationTimePlugin;
 
 impl Plugin for SimulationTimePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SimulationTime>()
+            .configure_sets(Update, SimulationClockSet.before(UpdateCelestialSet))
             .add_systems(
                 Update,
-                (advance_simulation_time, apply_simulation_time_to_lighting)
-                    .chain()
+                advance_simulation_clock
+                    .in_set(SimulationClockSet)
                     .run_if(in_state(AppState::Running)),
             );
     }
 }
 
-fn advance_simulation_time(time: Res<Time>, mut sim: ResMut<SimulationTime>) {
+fn advance_simulation_clock(time: Res<Time>, mut sim: ResMut<SimulationTime>) {
     if !sim.auto_advance {
         return;
     }
@@ -52,29 +55,12 @@ fn advance_simulation_time(time: Res<Time>, mut sim: ResMut<SimulationTime>) {
         (sim.time_of_day_hours + time.delta_secs() * hours_per_second * sim.time_scale) % 24.0;
 }
 
-fn apply_simulation_time_to_lighting(
-    sim: Res<SimulationTime>,
-    mut atmosphere: ResMut<AtmosphereTweaks>,
-    mut celestial: ResMut<CelestialState>,
-) {
-    if !sim.auto_advance {
-        return;
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_clock_starts_at_morning() {
+        assert_eq!(SimulationTime::default().time_of_day_hours, 10.0);
     }
-    atmosphere.time_of_day_hours = sim.time_of_day_hours;
-    let (azimuth, elevation) = crate::ui::sun_angles_from_time_of_day(sim.time_of_day_hours);
-    atmosphere.sun_azimuth_deg = azimuth;
-    atmosphere.sun_elevation_deg = elevation;
-    celestial.sun_azimuth_deg = azimuth;
-    celestial.sun_elevation_deg = elevation;
-    celestial.sun_direction = crate::environment::lighting_state::sun_direction_from_angles(
-        azimuth,
-        elevation,
-    );
-    celestial.sun_color = crate::ui::sun_color_for_elevation(elevation);
-    celestial.exposure_ev100 = crate::ui::exposure_ev_for_elevation(
-        elevation,
-        atmosphere.exposure_ev_min,
-        atmosphere.exposure_ev_max,
-        atmosphere.exposure_bias,
-    );
 }

@@ -3,10 +3,10 @@ mod preview;
 mod profile;
 
 pub use preview::{
-    cancel_map_preview_build, hash_prefs, poll_map_preview_build, start_map_preview_build,
-    MapPreviewState,
+    MapPreviewState, cancel_map_preview_build, hash_prefs, poll_map_preview_build,
+    start_map_preview_build,
 };
-pub use profile::{effective_world_from_prefs, requested_world_id, WorldProfilePlugin};
+pub use profile::{WorldProfilePlugin, effective_world_from_prefs, requested_world_id};
 
 use bevy::prelude::*;
 
@@ -41,7 +41,10 @@ pub struct WorldSemanticRegistry {
 impl WorldSemanticRegistry {
     /// Query entry point for quest/AI systems filtering by tag.
     #[allow(dead_code)]
-    pub fn facts_with_tag(&self, tag: WorldSemanticTag) -> impl Iterator<Item = &WorldSemanticFact> {
+    pub fn facts_with_tag(
+        &self,
+        tag: WorldSemanticTag,
+    ) -> impl Iterator<Item = &WorldSemanticFact> {
         self.facts.iter().filter(move |f| f.tag == tag)
     }
 
@@ -82,8 +85,10 @@ pub struct WorldSemanticPlugin;
 
 impl Plugin for WorldSemanticPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<WorldSemanticRegistry>()
-            .add_systems(OnEnter(crate::state::AppState::Running), register_world_facts);
+        app.init_resource::<WorldSemanticRegistry>().add_systems(
+            OnEnter(crate::state::AppState::Running),
+            register_world_facts,
+        );
     }
 }
 
@@ -157,7 +162,11 @@ mod tests {
                 .label,
             "A"
         );
-        assert!(registry.nearest_fact(Vec3::new(11.0, 0.0, 11.0), 1.0).is_none());
+        assert!(
+            registry
+                .nearest_fact(Vec3::new(11.0, 0.0, 11.0), 1.0)
+                .is_none()
+        );
     }
 
     #[test]
@@ -176,6 +185,9 @@ mod tests {
                 },
             ],
         };
-        assert_eq!(registry.facts_with_tag(WorldSemanticTag::Shelter).count(), 1);
+        assert_eq!(
+            registry.facts_with_tag(WorldSemanticTag::Shelter).count(),
+            1
+        );
     }
 }

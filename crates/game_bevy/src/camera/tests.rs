@@ -52,7 +52,8 @@ fn resolve_collision_distance_contracts_faster_than_release() {
 }
 
 #[test]
-fn intent_yaw_combines_character_and_offset() {    let camera = components::MmoCamera {
+fn intent_yaw_combines_character_and_offset() {
+    let camera = components::MmoCamera {
         target: Entity::PLACEHOLDER,
         player: Entity::PLACEHOLDER,
         character_yaw: 1.0,

@@ -3,7 +3,9 @@
 
 #[cfg(test)]
 mod traversal_tests {
-    use crate::{default_vertical_slice_recipe, generate_river_spline, land_surface_height, RiverGenConfig};
+    use crate::{
+        RiverGenConfig, default_vertical_slice_recipe, generate_river_spline, land_surface_height,
+    };
 
     #[test]
     fn drainage_basin_has_traversable_elevation_range() {
@@ -16,7 +18,10 @@ mod traversal_tests {
         ];
         for (x, z) in samples {
             let h = land_surface_height(&recipe, x, z);
-            assert!(h > -2.0 && h < 40.0, "landmark ({x},{z}) height {h} out of range");
+            assert!(
+                h > -2.0 && h < 40.0,
+                "landmark ({x},{z}) height {h} out of range"
+            );
         }
     }
 

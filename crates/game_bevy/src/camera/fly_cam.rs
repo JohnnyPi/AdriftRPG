@@ -6,7 +6,9 @@ use crate::data::ConfigRegistryResource;
 use crate::ui::CameraTweaks;
 
 use super::components::{CameraInputState, MainGameCamera, MmoCamera};
-use super::{camera_view_direction, clamp_visual_delta, components::wrap_angle, desired_camera_position};
+use super::{
+    camera_view_direction, clamp_visual_delta, components::wrap_angle, desired_camera_position,
+};
 
 #[derive(Resource, Debug, Default)]
 pub struct FlyCamState {
@@ -81,8 +83,8 @@ pub fn update_fly_cam(
         let delta = mouse_motion.delta;
         fly.yaw = wrap_angle(fly.yaw - delta.x * config.mouse_sensitivity_x);
         let pitch_sign = if config.invert_y { -1.0 } else { 1.0 };
-        fly.pitch = (fly.pitch + delta.y * config.mouse_sensitivity_y * pitch_sign)
-            .clamp(-1.45, 1.45);
+        fly.pitch =
+            (fly.pitch + delta.y * config.mouse_sensitivity_y * pitch_sign).clamp(-1.45, 1.45);
     }
 
     let view_forward = camera_view_direction(fly.yaw, fly.pitch);

@@ -69,21 +69,22 @@ pub fn compute_overlay_state(
     let wetness = (field_wetness + persistence_wetness).clamp(0.0, 1.0);
 
     let shade = (1.0 - context.cave_exposure).clamp(0.0, 1.0);
-    let moss = (context.moisture * responses.moss_affinity
+    let moss = (context.moisture
+        * responses.moss_affinity
         * shade
         * (1.0 - context.slope_degrees / 55.0).clamp(0.0, 1.0))
-        .clamp(0.0, 1.0);
+    .clamp(0.0, 1.0);
 
     let upward = (context.world_normal[1] * 0.5 + 0.5).clamp(0.0, 1.0);
     let cold = (1.0 - context.moisture * 0.35 - context.elevation_m / 400.0).clamp(0.0, 1.0);
-    let snow = (upward * cold * responses.snow_retention
+    let snow = (upward
+        * cold
+        * responses.snow_retention
         * (1.0 - context.slope_degrees / 50.0).clamp(0.0, 1.0))
-        .clamp(0.0, 1.0);
+    .clamp(0.0, 1.0);
 
     let river_mask = (1.0 - (context.river_distance_m / 40.0).clamp(0.0, 1.0)).clamp(0.0, 1.0);
-    let mud = (context.soft.wetland * responses.mud_affinity
-        + river_mask * 0.4
-        + wetness * 0.2)
+    let mud = (context.soft.wetland * responses.mud_affinity + river_mask * 0.4 + wetness * 0.2)
         .clamp(0.0, 1.0);
 
     SurfaceOverlayState {

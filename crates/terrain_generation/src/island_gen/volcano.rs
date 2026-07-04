@@ -72,8 +72,7 @@ pub fn volcanic_height(params: &IslandGenParams, wx: f32, wz: f32, land_mask: f3
     let ridges = v.radial_ridge_count.max(1);
     let ridge_amplitude_m =
         (v.shield_height_m + v.summit_height_m).max(0.0) * RIDGE_RELIEF_FRACTION;
-    let ridge_radial =
-        cone_profile(r, 1.2) * smoothstep(RIDGE_INNER_FADE.0, RIDGE_INNER_FADE.1, r);
+    let ridge_radial = cone_profile(r, 1.2) * smoothstep(RIDGE_INNER_FADE.0, RIDGE_INNER_FADE.1, r);
     for i in 0..ridges {
         let ridge_angle = (i as f32 / ridges as f32) * TAU;
         let angle_diff = wrapped_angle_diff(theta, ridge_angle);
@@ -138,8 +137,7 @@ mod tests {
         let heights = sample_ring(&params, radius, 72);
         let half = heights.len() / 2;
         let spread = |s: &[f32]| {
-            s.iter().cloned().fold(f32::MIN, f32::max)
-                - s.iter().cloned().fold(f32::MAX, f32::min)
+            s.iter().cloned().fold(f32::MIN, f32::max) - s.iter().cloned().fold(f32::MAX, f32::min)
         };
         let pos_spread = spread(&heights[..half]);
         let neg_spread = spread(&heights[half..]);
@@ -191,7 +189,10 @@ mod tests {
             }
             z += step;
         }
-        assert!(checked > 100, "expected to check interior columns, got {checked}");
+        assert!(
+            checked > 100,
+            "expected to check interior columns, got {checked}"
+        );
     }
 
     #[test]

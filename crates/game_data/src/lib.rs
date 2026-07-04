@@ -12,26 +12,27 @@ mod surface_registry;
 mod validate;
 
 pub use compile::{
-    CompiledApp, CompiledAtmosphere, CompiledBiomes, CompiledCamera, CompiledCave, CompiledDebug,
-    CompiledFog, CompiledFogLocalVolume, CompiledIslandGeneration,
-    CompiledLandmarkFact, CompiledLandmarks, CompiledLandmarkSign, CompiledLighting,
-    CompiledOptions, CompiledPerformance, CompiledPhysics, CompiledPlayer,
-    CompiledRoute, CompiledRoutes, CompiledSetupGroup, CompiledSetupParameter,
-    CompiledSetupPreviewMode, CompiledSetupSchema, CompiledSky, CompiledStructure, CompiledStructurePart, CompiledTerrain, CompiledTerrainMaterials, CompiledSurfaceRules,
-    CompiledVegetation, CompiledWater, CompiledWaterBodyMaterial, CompiledHydrologyBody, CompiledWorld,
-    CompiledChunkResidency, CompiledWorldLod, CompiledTerrainLodTier, CompiledMaterialLod,
-    CompiledContentLod, CompiledDistantLod, CompiledChunkStaging, CompiledRenderProfile,
-    CompiledRenderDistanceLodTier, CompiledWeatherProfile,
+    CompiledApp, CompiledAtmosphere, CompiledBiomes, CompiledCamera, CompiledCave,
+    CompiledChunkResidency, CompiledChunkStaging, CompiledContentLod, CompiledDebug,
+    CompiledDistantLod, CompiledFog, CompiledFogLocalVolume, CompiledHydrologyBody,
+    CompiledIslandGeneration, CompiledLandmarkFact, CompiledLandmarkSign, CompiledLandmarks,
+    CompiledLighting, CompiledMaterialLod, CompiledOptions, CompiledPerformance, CompiledPhysics,
+    CompiledPlayer, CompiledRenderDistanceLodTier, CompiledRenderProfile, CompiledRoute,
+    CompiledRoutes, CompiledSetupGroup, CompiledSetupParameter, CompiledSetupPreviewMode,
+    CompiledSetupSchema, CompiledSky, CompiledStructure, CompiledStructurePart,
+    CompiledSurfaceRules, CompiledTerrain, CompiledTerrainLodTier, CompiledTerrainMaterials,
+    CompiledVegetation, CompiledWater, CompiledWaterBodyMaterial, CompiledWeatherProfile,
+    CompiledWorld, CompiledWorldLod,
 };
 pub use definitions::*;
 pub use hash::registry_hash;
-pub use load::{load_registry_from_directory, LoadedFile};
+pub use load::{LoadedFile, load_registry_from_directory};
 pub use material_catalog::*;
 pub use material_overrides::{LayeredScalar, MaterialInvalidation, OverrideLayer};
 pub use registry::ConfigRegistry;
 pub use surface_registry::{
+    CompiledSurfaceRegistry, CompiledTextureRecipe, MaterialDependencyIndex,
     build_surface_registry, deprecated_overlay_warnings, is_deprecated_overlay_material,
-    resolve_entry_generator, CompiledSurfaceRegistry, CompiledTextureRecipe,
-    MaterialDependencyIndex,
+    resolve_entry_generator,
 };
-pub use validate::{validate_definitions, ValidationReport};
+pub use validate::{ValidationReport, validate_definitions};

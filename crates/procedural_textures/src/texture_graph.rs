@@ -6,12 +6,12 @@ use std::collections::BTreeMap;
 use blake3::Hasher;
 use serde::{Deserialize, Serialize};
 
-use crate::curves::{parse_hex_color, remap, sample_color_ramp, smoothstep, ColorStop};
+use crate::curves::{ColorStop, parse_hex_color, remap, sample_color_ramp, smoothstep};
 use crate::error::TextureGenerationError;
-use crate::maps::{encode_height_u8, linear_to_srgb_u8, pack_ormh, GeneratedPbrMaps};
+use crate::maps::{GeneratedPbrMaps, encode_height_u8, linear_to_srgb_u8, pack_ormh};
 use crate::noise::SeamlessNoise;
 use crate::normal::normals_from_height_field;
-use crate::seam::{assert_seamless, DEFAULT_SEAM_TOLERANCE};
+use crate::seam::{DEFAULT_SEAM_TOLERANCE, assert_seamless};
 
 pub const GENERATOR_VERSION: u32 = 1;
 
@@ -24,7 +24,9 @@ pub struct TextureGraphDefinition {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum GraphNodeDefinition {
-    Constant { value: f32 },
+    Constant {
+        value: f32,
+    },
     Fbm {
         frequency: f32,
         octaves: u32,
@@ -50,11 +52,27 @@ pub enum GraphNodeDefinition {
         #[serde(default)]
         inputs: Vec<WeightedInput>,
     },
-    Subtract { a: String, b: String },
-    Multiply { a: String, b: String },
-    Min { a: String, b: String },
-    Max { a: String, b: String },
-    Clamp { input: String, min: f32, max: f32 },
+    Subtract {
+        a: String,
+        b: String,
+    },
+    Multiply {
+        a: String,
+        b: String,
+    },
+    Min {
+        a: String,
+        b: String,
+    },
+    Max {
+        a: String,
+        b: String,
+    },
+    Clamp {
+        input: String,
+        min: f32,
+        max: f32,
+    },
     Remap {
         input: String,
         from: [f32; 2],
@@ -71,8 +89,13 @@ pub enum GraphNodeDefinition {
         lower: f32,
         upper: f32,
     },
-    Invert { input: String },
-    Power { input: String, exponent: f32 },
+    Invert {
+        input: String,
+    },
+    Power {
+        input: String,
+        exponent: f32,
+    },
     ColorRamp {
         input: String,
         stops: Vec<ColorStopYaml>,
@@ -135,9 +158,8 @@ impl TextureGraphRecipe {
         value: &serde_yaml::Value,
         seed: u32,
     ) -> Result<Self, TextureGenerationError> {
-        let graph: TextureGraphDefinition = serde_yaml::from_value(value.clone()).map_err(|e| {
-            TextureGenerationError::InvalidConfig(format!("texture graph: {e}"))
-        })?;
+        let graph: TextureGraphDefinition = serde_yaml::from_value(value.clone())
+            .map_err(|e| TextureGenerationError::InvalidConfig(format!("texture graph: {e}")))?;
         validate_graph(&graph)?;
         Ok(Self {
             seed,
@@ -161,9 +183,8 @@ impl TextureGraphRecipe {
     ) -> Result<GeneratedPbrMaps, TextureGenerationError> {
         let mut executor = GraphExecutor::new(&self.graph, self.seed, width, height)?;
         let maps = executor.execute(self)?;
-        assert_seamless(&maps, self.seam_tolerance).map_err(|e| {
-            TextureGenerationError::InvalidConfig(e)
-        })?;
+        assert_seamless(&maps, self.seam_tolerance)
+            .map_err(|e| TextureGenerationError::InvalidConfig(e))?;
         Ok(maps)
     }
 }
@@ -210,9 +231,7 @@ fn validate_node_refs(
         | GraphNodeDefinition::ColorRamp { input, .. }
         | GraphNodeDefinition::Cavity { input, .. } => check(input)?,
         GraphNodeDefinition::DomainWarp {
-            input,
-            warp_source,
-            ..
+            input, warp_source, ..
         } => {
             check(input)?;
             check(warp_source)?;
@@ -258,7 +277,10 @@ impl GraphExecutor {
         self.width as usize * self.height as usize
     }
 
-    fn execute(&mut self, recipe: &TextureGraphRecipe) -> Result<GeneratedPbrMaps, TextureGenerationError> {
+    fn execute(
+        &mut self,
+        recipe: &TextureGraphRecipe,
+    ) -> Result<GeneratedPbrMaps, TextureGenerationError> {
         let mut height = vec![0.5f32; self.pixel_count()];
         let mut base_color = vec![[0.5, 0.5, 0.5]; self.pixel_count()];
         let mut roughness = vec![recipe.roughness; self.pixel_count()];
@@ -356,9 +378,7 @@ impl GraphExecutor {
                 let v = constant.unwrap_or(0.0);
                 Ok(Some(vec![v; self.pixel_count()]))
             }
-            GraphOutputDefinition::Typed { source, .. } => {
-                Ok(Some(self.eval_scalar_node(source)?))
-            }
+            GraphOutputDefinition::Typed { source, .. } => Ok(Some(self.eval_scalar_node(source)?)),
         }
     }
 
@@ -401,10 +421,7 @@ impl GraphExecutor {
                 } else {
                     let scalar = self.eval_scalar_node(source)?;
                     Ok(Some(
-                        scalar
-                            .iter()
-                            .map(|t| [t.clamp(0.0, 1.0); 3])
-                            .collect(),
+                        scalar.iter().map(|t| [t.clamp(0.0, 1.0); 3]).collect(),
                     ))
                 }
             }
@@ -424,7 +441,10 @@ impl GraphExecutor {
         Ok(values)
     }
 
-    fn eval_node(&mut self, node: &GraphNodeDefinition) -> Result<Vec<f32>, TextureGenerationError> {
+    fn eval_node(
+        &mut self,
+        node: &GraphNodeDefinition,
+    ) -> Result<Vec<f32>, TextureGenerationError> {
         let count = self.pixel_count();
         match node {
             GraphNodeDefinition::Constant { value } => Ok(vec![*value; count]),
@@ -512,19 +532,21 @@ impl GraphExecutor {
                     .map(|v| remap(*v, from[0], from[1], to[0], to[1]))
                     .collect())
             }
-            GraphNodeDefinition::SmoothStep { input, edge0, edge1 } => {
+            GraphNodeDefinition::SmoothStep {
+                input,
+                edge0,
+                edge1,
+            } => {
                 let src = self.eval_scalar_node(input)?;
-                Ok(src
-                    .iter()
-                    .map(|v| smoothstep(*edge0, *edge1, *v))
-                    .collect())
+                Ok(src.iter().map(|v| smoothstep(*edge0, *edge1, *v)).collect())
             }
-            GraphNodeDefinition::SlopeFilter { input, lower, upper } => {
+            GraphNodeDefinition::SlopeFilter {
+                input,
+                lower,
+                upper,
+            } => {
                 let src = self.eval_scalar_node(input)?;
-                Ok(src
-                    .iter()
-                    .map(|v| smoothstep(*lower, *upper, *v))
-                    .collect())
+                Ok(src.iter().map(|v| smoothstep(*lower, *upper, *v)).collect())
             }
             GraphNodeDefinition::Invert { input } => {
                 let src = self.eval_scalar_node(input)?;
@@ -535,7 +557,11 @@ impl GraphExecutor {
                 Ok(src.iter().map(|v| v.powf(*exponent)).collect())
             }
             GraphNodeDefinition::ColorRamp { input, .. } => self.eval_scalar_node(input),
-            GraphNodeDefinition::DomainWarp { input, warp_source, strength } => {
+            GraphNodeDefinition::DomainWarp {
+                input,
+                warp_source,
+                strength,
+            } => {
                 let base = self.eval_scalar_node(input)?;
                 let warp = self.eval_scalar_node(warp_source)?;
                 Ok(base
@@ -589,7 +615,8 @@ fn sample_fbm(
                 amp *= persistence;
                 freq *= lacunarity;
             }
-            out[y as usize * width as usize + x as usize] = (sum / norm.max(f32::EPSILON)).clamp(0.0, 1.0);
+            out[y as usize * width as usize + x as usize] =
+                (sum / norm.max(f32::EPSILON)).clamp(0.0, 1.0);
         }
     }
     out
@@ -626,13 +653,7 @@ fn sample_ridged(
     out
 }
 
-fn sample_voronoi(
-    width: u32,
-    height: u32,
-    frequency: f32,
-    jitter: f32,
-    seed: u32,
-) -> Vec<f32> {
+fn sample_voronoi(width: u32, height: u32, frequency: f32, jitter: f32, seed: u32) -> Vec<f32> {
     let count = width as usize * height as usize;
     let mut out = vec![0.0f32; count];
     let cells = frequency.max(1.0) as i32;

@@ -8,8 +8,8 @@ use crate::data::{ConfigRegistryResource, UserSetupPrefs};
 use crate::lod::LodPolicy;
 use crate::state::AppState;
 use crate::terrain::{
-    residency::{chunk_chebyshev_distance, spawn_terrain_collider_ready, spawn_terrain_uploaded},
     TerrainPipelineState, TerrainSpawnPoint,
+    residency::{chunk_chebyshev_distance, spawn_terrain_collider_ready, spawn_terrain_uploaded},
 };
 
 pub struct StagingPlugin;
@@ -70,7 +70,11 @@ pub struct AssetStagingQueue {
 
 impl AssetStagingQueue {
     pub fn enqueue(&mut self, job: StagingJob) {
-        if self.pending.iter().any(|existing| existing.kind == job.kind) {
+        if self
+            .pending
+            .iter()
+            .any(|existing| existing.kind == job.kind)
+        {
             return;
         }
         let insert_idx = self
@@ -109,11 +113,7 @@ fn track_interest_velocity(
 ) {
     let center = runtime.interest_center;
     if let Some(last) = velocity.last_center {
-        velocity.chunk_delta = IVec3::new(
-            center.x - last.x,
-            center.y - last.y,
-            center.z - last.z,
-        );
+        velocity.chunk_delta = IVec3::new(center.x - last.x, center.y - last.y, center.z - last.z);
     }
     velocity.last_center = Some(center);
 }
@@ -140,17 +140,13 @@ fn update_staging_queue(
         if !pipeline.has_density_cached(spawn_chunk) {
             queue.enqueue(StagingJob {
                 priority: StagingPriority::Critical,
-                kind: StagingJobKind::DensityJob {
-                    coord: spawn_chunk,
-                },
+                kind: StagingJobKind::DensityJob { coord: spawn_chunk },
             });
         }
         if !spawn_terrain_uploaded(&pipeline, spawn_chunk) {
             queue.enqueue(StagingJob {
                 priority: StagingPriority::Critical,
-                kind: StagingJobKind::MeshJob {
-                    coord: spawn_chunk,
-                },
+                kind: StagingJobKind::MeshJob { coord: spawn_chunk },
             });
         }
     }

@@ -30,11 +30,7 @@ pub fn draw_camera_debug(
     gizmos.sphere(final_pos, 0.1, Color::srgb(0.95, 0.9, 0.2));
 
     let (forward, _) = camera_planar_basis(snapshot.intent_yaw);
-    gizmos.line(
-        focus,
-        focus + forward * 2.0,
-        Color::srgb(0.95, 0.95, 0.95),
-    );
+    gizmos.line(focus, focus + forward * 2.0, Color::srgb(0.95, 0.95, 0.95));
 
     let character_forward = camera_forward_xz(snapshot.character_yaw);
     gizmos.line(

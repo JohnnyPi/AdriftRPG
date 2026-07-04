@@ -20,7 +20,7 @@ use bevy::tasks::{AsyncComputeTaskPool, Task};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use terrain_generation::{fill_padded_samples, DensitySource, RecipeDensitySource};
+use terrain_generation::{DensitySource, RecipeDensitySource, fill_padded_samples};
 use terrain_meshing::{ChunkMeshingInput, SurfaceNetsMesher, TerrainMeshData, TerrainMesher};
 use tracing::{info, warn};
 use voxel_core::{CHUNK_CELLS, ChunkCoord, WorldCell};
@@ -32,22 +32,35 @@ use crate::environment::biome_context::ChunkColumnCache;
 use crate::environment::materials::material_for_world_with_cache;
 use crate::environment::surface::ChunkSurfaceResolver;
 use crate::environment::{BiomeCatalog, BiomeInitSet};
+use crate::interest::WorldSimulationLodProvider;
+use crate::lod::{LodPolicy, LodRuntimeState, mesh_cell_stride, terrain_lod_with_hysteresis};
 use crate::state::AppState;
 use crate::terrain::material::TerrainMaterialHandle;
 use crate::terrain::mesh_convert::{chunk_world_transform, mesh_from_terrain_data};
 use crate::terrain::metrics::{TerrainPipelineMetrics, WorldSeedOverride};
 use crate::terrain::recipe::terrain_recipe_hash;
-use crate::terrain::{build_density_source_from_prefs, validate_density_source_buildable};
 use crate::terrain::residency::{
-    chunk_chebyshev_distance, TerrainWorldRuntime, within_density_radius, within_physics_radius,
+    TerrainWorldRuntime, chunk_chebyshev_distance, within_density_radius, within_physics_radius,
     within_render_radius,
 };
-use crate::terrain::{ChunkState, TerrainChunkEntity, TerrainChunkMaterial, TerrainChunkPalette, TerrainEditStore, TerrainRevision};
-use crate::interest::WorldSimulationLodProvider;
-use crate::lod::{mesh_cell_stride, terrain_lod_with_hysteresis, LodPolicy, LodRuntimeState};
+use crate::terrain::{
+    ChunkState, TerrainChunkEntity, TerrainChunkMaterial, TerrainChunkPalette, TerrainEditStore,
+    TerrainRevision,
+};
+use crate::terrain::{build_density_source_from_prefs, validate_density_source_buildable};
 use crate::ui::{TerrainTweaks, WorldTweaks};
 use game_data::TerrainColliderLodDefinition;
 use physics_bridge::terrain_layers;
+use terrain_surface::{
+    DEFAULT_REGION_CHUNKS, MaterialKey, MaterialRegionCoord, MaterialRegionPaletteCache,
+    SurfaceCoverage,
+};
+
+const MAX_TASK_POLLS_PER_FRAME: usize = 64;
+
+fn try_poll_task<T>(task: &mut Task<T>) -> Option<T> {
+    bevy::tasks::block_on(bevy::tasks::futures_lite::future::poll_once(task))
+}
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TerrainWorldInitSet;
@@ -63,8 +76,32 @@ struct ProceduralAtlasBuildResult {
     source: RecipeDensitySource,
     spawn: Vec3,
     spawn_chunk: ChunkCoord,
+    spawn_report: terrain_generation::SpawnValidationReport,
     recipe_hash: String,
     world_extent: [i32; 3],
+}
+
+struct ResolvedSpawn {
+    position: Vec3,
+    chunk: ChunkCoord,
+    report: terrain_generation::SpawnValidationReport,
+}
+
+/// Cached edit-store snapshot; rebuilt when [`TerrainRevision`] changes.
+#[derive(Resource, Default)]
+struct TerrainEditSnapshot {
+    revision: u64,
+    store: Arc<TerrainEditStore>,
+}
+
+impl TerrainEditSnapshot {
+    fn get(&mut self, revision: u64, edit_store: &TerrainEditStore) -> Arc<TerrainEditStore> {
+        if self.revision != revision {
+            self.store = Arc::new(edit_store.clone());
+            self.revision = revision;
+        }
+        Arc::clone(&self.store)
+    }
 }
 
 impl Plugin for TerrainPlugin {
@@ -78,6 +115,9 @@ impl Plugin for TerrainPlugin {
             .init_resource::<TerrainPipelineMetrics>()
             .init_resource::<WorldSeedOverride>()
             .init_resource::<ProceduralAtlasInit>()
+            .init_resource::<TerrainEditSnapshot>()
+            .init_resource::<TerrainRegionPaletteCache>()
+            .init_resource::<TerrainMaterialUploadTemplate>()
             .add_plugins(super::horizon_skirt::HorizonSkirtPlugin)
             .configure_sets(OnEnter(AppState::Running), TerrainWorldInitSet)
             .add_systems(
@@ -155,7 +195,7 @@ impl TerrainPipelineState {
     /// Clears pending work and returns chunk entities that should be
     /// despawned. All records are dropped; they re-materialize lazily at the
     /// new revision as the scheduler touches them.
-    pub fn reset_for_revision(&mut self, _revision: u64) -> Vec<Entity> {
+    pub fn reset_for_revision(&mut self) -> Vec<Entity> {
         let mut to_despawn = Vec::new();
         for chunk in self.chunks.values_mut() {
             if let Some(entity) = chunk.entity.take() {
@@ -204,7 +244,8 @@ impl TerrainPipelineState {
         }
         self.pending_density
             .retain(|job| !coord_set.contains(&job.coord));
-        self.pending_mesh.retain(|job| !coord_set.contains(&job.coord));
+        self.pending_mesh
+            .retain(|job| !coord_set.contains(&job.coord));
         self.upload_queue
             .retain(|item| !coord_set.contains(&item.coord));
         self.collider_queue
@@ -226,8 +267,8 @@ pub struct ChunkRecord {
 
 struct CachedDensity {
     revision: u64,
-    samples: Vec<voxel_core::TerrainSample>,
-    column_cache: ChunkColumnCache,
+    samples: Arc<[voxel_core::TerrainSample]>,
+    column_cache: Arc<ChunkColumnCache>,
     edit_snapshot: Arc<TerrainEditStore>,
 }
 
@@ -239,8 +280,8 @@ struct PendingDensityJob {
 }
 
 struct DensityJobResult {
-    samples: Vec<voxel_core::TerrainSample>,
-    column_cache: ChunkColumnCache,
+    samples: Arc<[voxel_core::TerrainSample]>,
+    column_cache: Arc<ChunkColumnCache>,
 }
 
 struct PendingMeshJob {
@@ -257,11 +298,31 @@ struct MeshJobResult {
 
 struct MeshPromoteJob {
     coord: ChunkCoord,
-    samples: Vec<voxel_core::TerrainSample>,
-    column_cache: ChunkColumnCache,
+    samples: Arc<[voxel_core::TerrainSample]>,
+    column_cache: Arc<ChunkColumnCache>,
     edit_snapshot: Arc<TerrainEditStore>,
     needs_collider: bool,
     cell_stride: u32,
+}
+
+#[derive(Resource)]
+struct TerrainRegionPaletteCache {
+    cache: MaterialRegionPaletteCache,
+    coverage: HashMap<MaterialRegionCoord, SurfaceCoverage>,
+}
+
+impl Default for TerrainRegionPaletteCache {
+    fn default() -> Self {
+        Self {
+            cache: MaterialRegionPaletteCache::new(DEFAULT_REGION_CHUNKS),
+            coverage: HashMap::new(),
+        }
+    }
+}
+
+#[derive(Resource, Default, Clone)]
+struct TerrainMaterialUploadTemplate {
+    template: Option<terrain_material_bevy::TerrainPbrMaterial>,
 }
 
 struct UploadItem {
@@ -320,13 +381,19 @@ fn finish_terrain_world_init(
     recipe_revision: &mut TerrainRecipeRevision,
     runtime: &mut TerrainWorldRuntime,
     recipe_hash: String,
+    resolved_spawn: Option<ResolvedSpawn>,
 ) {
-    let (sx, sy, sz, spawn_report) =
-        source.resolve_player_spawn(terrain_generation::PLAYER_SPAWN_MIN_CLEARANCE_M, 48.0);
-    spawn_point.0 = Vec3::new(sx, sy, sz);
-    let spawn_cell = WorldCell::new(sx.floor() as i32, sy.floor() as i32, sz.floor() as i32);
-    pipeline.spawn_chunk = Some(spawn_cell.chunk_coord());
-    runtime.interest_center = spawn_cell.chunk_coord();
+    let (spawn_pos, spawn_chunk, spawn_report) = if let Some(resolved) = resolved_spawn {
+        (resolved.position, resolved.chunk, resolved.report)
+    } else {
+        let (sx, sy, sz, report) =
+            source.resolve_player_spawn(terrain_generation::PLAYER_SPAWN_MIN_CLEARANCE_M, 48.0);
+        let spawn_cell = WorldCell::new(sx.floor() as i32, sy.floor() as i32, sz.floor() as i32);
+        (Vec3::new(sx, sy, sz), spawn_cell.chunk_coord(), report)
+    };
+    spawn_point.0 = spawn_pos;
+    pipeline.spawn_chunk = Some(spawn_chunk);
+    runtime.interest_center = spawn_chunk;
 
     let extent = [
         world.world_extent_chunks[0] as i32,
@@ -383,10 +450,6 @@ fn init_terrain_world(
             "density source probe failed; continuing with prefs-backed build"
         );
     }
-    let source =
-        build_density_source_from_prefs(&registry.0, &prefs, terrain_tweaks.field_stack_params());
-    warn_if_atlas_validation_failed(&source);
-
     let procedural_only = world.island_gen.is_some() && world.island_atlas_baked.is_none();
     if procedural_only {
         pipeline.frozen = true;
@@ -410,16 +473,15 @@ fn init_terrain_world(
                 Some(&prefs),
                 Some(&field_stack),
             );
-            let (sx, sy, sz, _) = source.resolve_player_spawn(
-                terrain_generation::PLAYER_SPAWN_MIN_CLEARANCE_M,
-                48.0,
-            );
+            let (sx, sy, sz, spawn_report) =
+                source.resolve_player_spawn(terrain_generation::PLAYER_SPAWN_MIN_CLEARANCE_M, 48.0);
             let spawn_cell =
                 WorldCell::new(sx.floor() as i32, sy.floor() as i32, sz.floor() as i32);
             ProceduralAtlasBuildResult {
                 source,
                 spawn: Vec3::new(sx, sy, sz),
                 spawn_chunk: spawn_cell.chunk_coord(),
+                spawn_report,
                 recipe_hash: hash,
                 world_extent,
             }
@@ -428,6 +490,9 @@ fn init_terrain_world(
         return;
     }
 
+    let source =
+        build_density_source_from_prefs(&registry.0, &prefs, terrain_tweaks.field_stack_params());
+    warn_if_atlas_validation_failed(&source);
     finish_terrain_world_init(
         source,
         world,
@@ -442,6 +507,7 @@ fn init_terrain_world(
             Some(&prefs),
             Some(&terrain_tweaks.field_stack_params()),
         ),
+        None,
     );
 }
 
@@ -457,18 +523,13 @@ fn poll_procedural_atlas_init(
     let Some(mut task) = procedural_init.pending.take() else {
         return;
     };
-    if let Some(result) =
-        bevy::tasks::block_on(bevy::tasks::futures_lite::future::poll_once(&mut task))
-    {
+    if let Some(result) = try_poll_task(&mut task) {
         warn_if_atlas_validation_failed(&result.source);
         let world = registry
             .0
             .effective_world(Some(&prefs.world_stable_id()))
             .expect("world");
         pipeline.world_extent_chunks = result.world_extent;
-        spawn_point.0 = result.spawn;
-        pipeline.spawn_chunk = Some(result.spawn_chunk);
-        runtime.interest_center = result.spawn_chunk;
         finish_terrain_world_init(
             result.source,
             world,
@@ -477,6 +538,11 @@ fn poll_procedural_atlas_init(
             &mut recipe_revision,
             &mut runtime,
             result.recipe_hash,
+            Some(ResolvedSpawn {
+                position: result.spawn,
+                chunk: result.spawn_chunk,
+                report: result.spawn_report,
+            }),
         );
         info!(world = %world.id.as_str(), "procedural atlas build completed");
     } else {
@@ -538,7 +604,8 @@ pub fn regen_terrain_with_seed(
     let source =
         build_density_source_from_prefs(&registry.0, prefs, terrain_tweaks.field_stack_params());
     warn_if_atlas_validation_failed(&source);
-    let (sx, sy, sz) = source.spawn_position();
+    let (sx, sy, sz, _) =
+        source.resolve_player_spawn(terrain_generation::PLAYER_SPAWN_MIN_CLEARANCE_M, 48.0);
     spawn_point.0 = Vec3::new(sx, sy, sz);
     let spawn_cell = WorldCell::new(sx.floor() as i32, sy.floor() as i32, sz.floor() as i32);
     pipeline.density_source = Some(Arc::new(source));
@@ -560,7 +627,7 @@ pub fn regen_terrain_with_seed(
     pending.pending = false;
     pending.recipe_hash.clear();
     pending.horizon_skirt_reset = true;
-    let to_despawn = pipeline.reset_for_revision(revision.value);
+    let to_despawn = pipeline.reset_for_revision();
     for entity in to_despawn {
         commands.entity(entity).despawn();
     }
@@ -599,15 +666,14 @@ fn manage_chunk_residency(
         }
         keep
     });
-    let cached_coords: HashSet<ChunkCoord> = pipeline.density_cache.keys().copied().collect();
+    let mut cached_coords: HashSet<ChunkCoord> = pipeline.density_cache.keys().copied().collect();
     reset_transient_chunk_states(&mut pipeline.chunks, &cancelled, &cached_coords);
 
     // Evict density cache and records outside the density radius.
-    pipeline.density_cache.retain(|coord, _| {
-        within_density_radius(center, *coord, &world_tweaks)
-    });
-
-    let cached_coords: HashSet<ChunkCoord> = pipeline.density_cache.keys().copied().collect();
+    pipeline
+        .density_cache
+        .retain(|coord, _| within_density_radius(center, *coord, &world_tweaks));
+    cached_coords.retain(|coord| pipeline.density_cache.contains_key(coord));
 
     // Despawn entities that left the render radius; keep density cache so
     // re-entry only remeshes.
@@ -644,9 +710,7 @@ fn manage_chunk_residency(
             chunk.failed_at = None;
             return false;
         }
-        chunk.entity.is_some()
-            || chunk.state != ChunkState::Unrequested
-            || within_density_radius(center, *coord, &world_tweaks)
+        true
     });
 
     for entity in to_despawn.iter() {
@@ -696,13 +760,16 @@ fn dispatch_density_jobs(
     policy: Res<LodPolicy>,
     world_tweaks: Res<WorldTweaks>,
     edit_store: Res<TerrainEditStore>,
+    mut edit_snapshot: ResMut<TerrainEditSnapshot>,
     mut pipeline: ResMut<TerrainPipelineState>,
     mut metrics: ResMut<TerrainPipelineMetrics>,
 ) {
     if pipeline.frozen {
         return;
     }
-    let perf = registry.0.active_performance().expect("performance");
+    let Ok(perf) = registry.0.active_performance() else {
+        return;
+    };
     let max_jobs = perf.maximum_density_jobs as usize;
     if pipeline.pending_density.len() >= max_jobs {
         return;
@@ -766,7 +833,12 @@ fn dispatch_density_jobs(
             }
         }
     }
-    candidates.sort_by_key(|(d, _)| *d);
+    candidates.sort_by(|(da, a), (db, b)| {
+        da.cmp(db)
+            .then_with(|| a.x.cmp(&b.x))
+            .then_with(|| a.y.cmp(&b.y))
+            .then_with(|| a.z.cmp(&b.z))
+    });
 
     for (_d, coord) in candidates {
         if to_start.len() >= slots {
@@ -777,21 +849,23 @@ fn dispatch_density_jobs(
         }
     }
 
-    let edits: Arc<TerrainEditStore> = Arc::new(edit_store.as_ref().clone());
-    let cell_size_m = runtime.cell_size_m;
-    for (coord, rev) in to_start {
-        let src = Arc::clone(&source);
-        let edit_overlay = Arc::clone(&edits);
-        let started = Instant::now();
-        let task = AsyncComputeTaskPool::get().spawn(async move {
-            generate_padded_samples_runtime(&src, &edit_overlay, coord, cell_size_m)
-        });
-        pipeline.pending_density.push(PendingDensityJob {
-            coord,
-            revision: rev,
-            started,
-            task,
-        });
+    if !to_start.is_empty() {
+        let edits = edit_snapshot.get(revision.value, &edit_store);
+        let cell_size_m = runtime.cell_size_m;
+        for (coord, rev) in to_start {
+            let src = Arc::clone(&source);
+            let edit_overlay = Arc::clone(&edits);
+            let started = Instant::now();
+            let task = AsyncComputeTaskPool::get().spawn(async move {
+                generate_padded_samples_runtime(&src, &edit_overlay, coord, cell_size_m)
+            });
+            pipeline.pending_density.push(PendingDensityJob {
+                coord,
+                revision: rev,
+                started,
+                task,
+            });
+        }
     }
 
     metrics.density_queue = pipeline.density_queue_len();
@@ -801,18 +875,23 @@ fn dispatch_density_jobs(
 }
 
 fn poll_density_jobs(
+    revision: Res<TerrainRevision>,
+    edit_store: Res<TerrainEditStore>,
+    mut edit_snapshot: ResMut<TerrainEditSnapshot>,
     mut pipeline: ResMut<TerrainPipelineState>,
     mut metrics: ResMut<TerrainPipelineMetrics>,
-    edit_store: Res<TerrainEditStore>,
 ) {
     if pipeline.frozen {
         return;
     }
     let mut completed = Vec::new();
+    let mut polls = 0usize;
     pipeline.pending_density.retain_mut(|job| {
-        if let Some(result) =
-            bevy::tasks::block_on(bevy::tasks::futures_lite::future::poll_once(&mut job.task))
-        {
+        if polls >= MAX_TASK_POLLS_PER_FRAME {
+            return true;
+        }
+        polls += 1;
+        if let Some(result) = try_poll_task(&mut job.task) {
             completed.push((job.coord, job.revision, job.started, result));
             false
         } else {
@@ -820,7 +899,13 @@ fn poll_density_jobs(
         }
     });
 
-    let edit_snapshot = Arc::new(edit_store.as_ref().clone());
+    if completed.is_empty() {
+        metrics.density_queue = pipeline.density_queue_len();
+        metrics.mesh_queue = pipeline.mesh_queue_len();
+        return;
+    }
+
+    let edit_snapshot = edit_snapshot.get(revision.value, &edit_store);
     for (coord, revision, started, result) in completed {
         metrics.record_density_ms(started.elapsed().as_secs_f32() * 1000.0);
         pipeline.density_cache.insert(
@@ -861,7 +946,9 @@ fn promote_density_ready_to_mesh(
     if pipeline.frozen {
         return;
     }
-    let perf = registry.0.active_performance().expect("performance");
+    let Ok(perf) = registry.0.active_performance() else {
+        return;
+    };
     let max_mesh_jobs = perf.maximum_mesh_jobs as usize;
     if pipeline.pending_mesh.len() >= max_mesh_jobs {
         return;
@@ -885,31 +972,40 @@ fn promote_density_ready_to_mesh(
         })
         .map(|(coord, _)| (chunk_chebyshev_distance(center, *coord), *coord))
         .collect();
-    candidates.sort_by_key(|(d, _)| *d);
-
-    if let Some(spawn_chunk) = pipeline.spawn_chunk {
-        candidates.sort_by_key(|(_, coord)| *coord != spawn_chunk);
-    }
+    let spawn_chunk = pipeline.spawn_chunk;
+    candidates.sort_by(|(da, a), (db, b)| {
+        let a_spawn = Some(*a) == spawn_chunk;
+        let b_spawn = Some(*b) == spawn_chunk;
+        match (a_spawn, b_spawn) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => da
+                .cmp(db)
+                .then_with(|| a.x.cmp(&b.x))
+                .then_with(|| a.y.cmp(&b.y))
+                .then_with(|| a.z.cmp(&b.z)),
+        }
+    });
 
     let slots = max_mesh_jobs - pipeline.pending_mesh.len();
+    if slots == 0 || candidates.is_empty() {
+        metrics.mesh_queue = pipeline.mesh_queue_len();
+        return;
+    }
+
     let world_id = crate::world::requested_world_id(&prefs);
-    let world = registry
-        .0
-        .effective_world(Some(&world_id))
-        .expect("world");
-    let palette = registry
-        .0
-        .materials
-        .get(&world.materials)
-        .expect("materials palette")
-        .clone();
-    let surface_rules = registry
-        .0
-        .surface_rules
-        .get(&world.surface)
-        .expect("surface rules")
-        .clone();
-    let biome_catalog = biomes.clone();
+    let Ok(world) = registry.0.effective_world(Some(&world_id)) else {
+        return;
+    };
+    let Some(palette) = registry.0.materials.get(&world.materials).cloned() else {
+        return;
+    };
+    let Some(surface_rules) = registry.0.surface_rules.get(&world.surface).cloned() else {
+        return;
+    };
+    let palette = Arc::new(palette);
+    let surface_rules = Arc::new(surface_rules);
+    let biome_catalog = Arc::new(biomes.clone());
 
     for (_d, coord) in candidates.into_iter().take(slots) {
         let (lod_tier, mesh_scale, collider_lod) =
@@ -923,8 +1019,8 @@ fn promote_density_ready_to_mesh(
                 return None;
             }
             Some((
-                cached.samples.clone(),
-                cached.column_cache.clone(),
+                Arc::clone(&cached.samples),
+                Arc::clone(&cached.column_cache),
                 Arc::clone(&cached.edit_snapshot),
             ))
         });
@@ -954,14 +1050,14 @@ fn promote_density_ready_to_mesh(
         let src = Arc::clone(&source);
         let (ox, oy, oz) = voxel_core::TerrainChunk::new(job.coord).sample_origin();
         let mesh_started = Instant::now();
-        let palette_job = palette.clone();
-        let surface_rules_job = surface_rules.clone();
-        let biome_catalog_job = biome_catalog.clone();
+        let palette_job = Arc::clone(&palette);
+        let surface_rules_job = Arc::clone(&surface_rules);
+        let biome_catalog_job = Arc::clone(&biome_catalog);
         let cell_stride = job.cell_stride;
         let mesh_task = AsyncComputeTaskPool::get().spawn(async move {
             let resolver = ChunkSurfaceResolver::from_compiled(
                 Arc::unwrap_or_clone(src),
-                job.column_cache,
+                Arc::unwrap_or_clone(job.column_cache),
                 ox,
                 oy,
                 oz,
@@ -969,7 +1065,7 @@ fn promote_density_ready_to_mesh(
                 Arc::unwrap_or_clone(job.edit_snapshot),
                 &palette_job,
                 &surface_rules_job,
-                biome_catalog_job,
+                (*biome_catalog_job).clone(),
             );
             let mesher = SurfaceNetsMesher;
             let input = ChunkMeshingInput {
@@ -1008,10 +1104,13 @@ fn poll_mesh_jobs(
         return;
     }
     let mut completed = Vec::new();
+    let mut polls = 0usize;
     pipeline.pending_mesh.retain_mut(|job| {
-        if let Some(result) =
-            bevy::tasks::block_on(bevy::tasks::futures_lite::future::poll_once(&mut job.task))
-        {
+        if polls >= MAX_TASK_POLLS_PER_FRAME {
+            return true;
+        }
+        polls += 1;
+        if let Some(result) = try_poll_task(&mut job.task) {
             completed.push((job.coord, job.revision, job.started, result));
             false
         } else {
@@ -1053,6 +1152,24 @@ fn poll_mesh_jobs(
     metrics.upload_queue = pipeline.upload_queue_len();
 }
 
+fn record_chunk_region_coverage(
+    region_cache: &mut TerrainRegionPaletteCache,
+    layer_order: &[shared::StableId],
+    coord: ChunkCoord,
+    palette: &terrain_surface::ChunkSlotPalette,
+) {
+    let region = region_cache.cache.region_for_chunk(coord.x, coord.z);
+    let coverage = region_cache.coverage.entry(region).or_default();
+    for local in 0..palette.slot_count() {
+        if let Some(global) = palette.global_for_local(local) {
+            let global = global as usize;
+            if let Some(id) = layer_order.get(global) {
+                coverage.record(MaterialKey::new(id.as_str()), 1.0);
+            }
+        }
+    }
+}
+
 fn upload_chunk_meshes(
     mut commands: Commands,
     registry: Res<ConfigRegistryResource>,
@@ -1062,28 +1179,51 @@ fn upload_chunk_meshes(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<terrain_material_bevy::TerrainPbrMaterial>>,
     triplanar_handle: Res<TerrainMaterialHandle>,
+    mut upload_template: ResMut<TerrainMaterialUploadTemplate>,
+    mut region_cache: ResMut<TerrainRegionPaletteCache>,
+    prefs: Res<UserSetupPrefs>,
 ) {
     if pipeline.frozen {
         return;
     }
     let upload_start = Instant::now();
-    let perf = registry.0.active_performance().expect("performance");
+    let Ok(perf) = registry.0.active_performance() else {
+        return;
+    };
     let mesh_budget = perf.mesh_uploads_per_frame as usize;
 
     let mut queue = std::mem::take(&mut pipeline.upload_queue);
-    let center = runtime.interest_center;
-    queue.sort_by_key(|item| {
-        std::cmp::Reverse(chunk_chebyshev_distance(center, item.coord))
-    });
-    if let Some(spawn_chunk) = pipeline.spawn_chunk {
-        // pop() takes from the back, so keep the spawn chunk at the end.
-        queue.sort_by_key(|item| item.coord == spawn_chunk);
+    if queue.is_empty() {
+        pipeline.upload_queue = queue;
+        return;
     }
 
-    let material_template = materials
-        .get(&triplanar_handle.0)
-        .cloned()
-        .expect("terrain material");
+    let center = runtime.interest_center;
+    let spawn_chunk = pipeline.spawn_chunk;
+    queue.sort_by(|a, b| {
+        let a_spawn = Some(a.coord) == spawn_chunk;
+        let b_spawn = Some(b.coord) == spawn_chunk;
+        match (a_spawn, b_spawn) {
+            (true, false) => std::cmp::Ordering::Greater,
+            (false, true) => std::cmp::Ordering::Less,
+            _ => {
+                let da = chunk_chebyshev_distance(center, a.coord);
+                let db = chunk_chebyshev_distance(center, b.coord);
+                db.cmp(&da)
+                    .then_with(|| a.coord.x.cmp(&b.coord.x))
+                    .then_with(|| a.coord.y.cmp(&b.coord.y))
+                    .then_with(|| a.coord.z.cmp(&b.coord.z))
+            }
+        }
+    });
+
+    let world_id = crate::world::requested_world_id(&prefs);
+    let layer_order = registry
+        .0
+        .effective_world(Some(&world_id))
+        .ok()
+        .and_then(|world| registry.0.materials.get(&world.materials))
+        .map(|materials_def| materials_def.layer_order.clone());
 
     let mut uploaded = 0usize;
     for _ in 0..mesh_budget {
@@ -1098,17 +1238,25 @@ fn upload_chunk_meshes(
         }
 
         let cell_size_m = runtime.cell_size_m;
-        let mesh = mesh_from_terrain_data(&item.mesh_data, cell_size_m);
+        let chunk_palette = item.mesh_data.chunk_palette;
+        let mesh = mesh_from_terrain_data(item.mesh_data, cell_size_m);
 
-        let chunk_material = materials.add(
-            material_template.with_chunk_palette(item.mesh_data.chunk_palette),
-        );
+        let material_template = upload_template
+            .template
+            .get_or_insert_with(|| {
+                materials
+                    .get(&triplanar_handle.0)
+                    .cloned()
+                    .expect("terrain material")
+            })
+            .clone();
+        let chunk_material = materials.add(material_template.with_chunk_palette(chunk_palette));
 
         let entity = commands
             .spawn((
                 TerrainChunkEntity { coord: item.coord },
                 TerrainChunkMaterial,
-                TerrainChunkPalette(item.mesh_data.chunk_palette),
+                TerrainChunkPalette(chunk_palette),
                 Mesh3d(meshes.add(mesh)),
                 MeshMaterial3d(chunk_material),
                 chunk_world_transform(item.coord, cell_size_m),
@@ -1126,6 +1274,14 @@ fn upload_chunk_meshes(
                 coord: item.coord,
                 collider,
             });
+        }
+        if let Some(layer_order) = layer_order.as_deref() {
+            record_chunk_region_coverage(
+                &mut region_cache,
+                layer_order,
+                item.coord,
+                &chunk_palette,
+            );
         }
         uploaded += 1;
     }
@@ -1152,17 +1308,28 @@ fn attach_pending_colliders(
         return;
     }
 
-    let perf = registry.0.active_performance().expect("performance");
+    let Ok(perf) = registry.0.active_performance() else {
+        metrics.colliders_built_this_frame = 0;
+        return;
+    };
     let budget = perf.collider_builds_per_frame as usize;
     let center = runtime.interest_center;
     let mut built = 0u32;
+    let render_resident: HashSet<ChunkCoord> = pipeline
+        .chunks
+        .iter()
+        .filter(|(coord, chunk)| {
+            chunk.entity.is_some() && within_render_radius(center, **coord, &world_tweaks)
+        })
+        .map(|(coord, _)| *coord)
+        .collect();
 
     pipeline.collider_queue.retain(|pending| {
         if built as usize >= budget {
             return true;
         }
         if !within_physics_radius(center, pending.coord, &world_tweaks) {
-            return false;
+            return render_resident.contains(&pending.coord);
         }
         commands.entity(pending.entity).insert((
             pending.collider.clone(),
@@ -1207,6 +1374,7 @@ fn sync_chunk_lod_tiers(
     policy: Res<LodPolicy>,
     mut lod_runtime: ResMut<LodRuntimeState>,
     runtime: Res<TerrainWorldRuntime>,
+    world_tweaks: Res<WorldTweaks>,
     mut pipeline: ResMut<TerrainPipelineState>,
     mut commands: Commands,
 ) {
@@ -1219,6 +1387,9 @@ fn sync_chunk_lod_tiers(
 
     for (coord, chunk) in &pipeline.chunks {
         if chunk.state != ChunkState::Ready {
+            continue;
+        }
+        if !within_render_radius(center, *coord, &world_tweaks) {
             continue;
         }
         let (target_tier, target_scale, collider_lod) =
@@ -1287,8 +1458,8 @@ fn generate_padded_samples_runtime(
         }
     });
     DensityJobResult {
-        samples,
-        column_cache,
+        samples: Arc::from(samples),
+        column_cache: Arc::new(column_cache),
     }
 }
 
@@ -1342,16 +1513,16 @@ fn generate_padded_samples_with_biomes(
 
 #[cfg(test)]
 mod pipeline_tests {
-    use bevy::prelude::Entity;
-    use std::collections::{HashMap, HashSet};
-    use std::sync::Arc;
     use super::{
-        generate_padded_samples_runtime, generate_padded_samples_with_biomes, reset_transient_chunk_states,
-        ChunkRecord,
+        ChunkRecord, generate_padded_samples_runtime, generate_padded_samples_with_biomes,
+        reset_transient_chunk_states,
     };
     use crate::environment::biomes::BiomeCatalog;
     use crate::terrain::{ChunkState, TerrainEditStore};
+    use bevy::prelude::Entity;
     use game_data::BiomeRuleDefinition;
+    use std::collections::{HashMap, HashSet};
+    use std::sync::Arc;
     use terrain_generation::{
         DensitySource, IslandGenParams, RecipeDensitySource, TerrainRecipe, build_island_atlas,
         default_vertical_slice_recipe,
@@ -1365,7 +1536,11 @@ mod pipeline_tests {
         }
     }
 
-    fn single_record(coord: ChunkCoord, state: ChunkState, entity: Option<Entity>) -> HashMap<ChunkCoord, ChunkRecord> {
+    fn single_record(
+        coord: ChunkCoord,
+        state: ChunkState,
+        entity: Option<Entity>,
+    ) -> HashMap<ChunkCoord, ChunkRecord> {
         let mut chunks = HashMap::new();
         chunks.insert(
             coord,
@@ -1431,8 +1606,7 @@ mod pipeline_tests {
         let probe_z = 8.0;
         let surface_y = source.terrain_surface_height_at(probe_x, probe_z);
         let chunk_y = (surface_y.floor() as i32).div_euclid(CHUNK_CELLS as i32);
-        let coord = WorldCell::new(0, surface_y.floor() as i32, 0)
-            .chunk_coord();
+        let coord = WorldCell::new(0, surface_y.floor() as i32, 0).chunk_coord();
         assert_eq!(coord.y, chunk_y);
         let samples = generate_padded_samples_with_biomes(
             &source,
@@ -1530,6 +1704,155 @@ mod pipeline_tests {
     }
 
     #[test]
+    fn mesh_promote_candidate_sort_is_deterministic_at_equal_distance() {
+        let spawn_chunk = Some(ChunkCoord::new(1, 0, 0));
+        let candidates: Vec<(i32, ChunkCoord)> = vec![
+            (2, ChunkCoord::new(2, 0, 0)),
+            (2, ChunkCoord::new(0, 2, 0)),
+            (2, ChunkCoord::new(0, 0, 2)),
+            (1, ChunkCoord::new(1, 0, 0)),
+            (2, ChunkCoord::new(-2, 0, 0)),
+        ];
+
+        let sort_candidates = |candidates: &mut [(i32, ChunkCoord)]| {
+            candidates.sort_by(|(da, a), (db, b)| {
+                let a_spawn = Some(*a) == spawn_chunk;
+                let b_spawn = Some(*b) == spawn_chunk;
+                match (a_spawn, b_spawn) {
+                    (true, false) => std::cmp::Ordering::Less,
+                    (false, true) => std::cmp::Ordering::Greater,
+                    _ => da
+                        .cmp(db)
+                        .then_with(|| a.x.cmp(&b.x))
+                        .then_with(|| a.y.cmp(&b.y))
+                        .then_with(|| a.z.cmp(&b.z)),
+                }
+            });
+        };
+
+        let mut first = candidates.clone();
+        sort_candidates(&mut first);
+        for _ in 0..32 {
+            let mut shuffled = candidates.clone();
+            shuffled.reverse();
+            sort_candidates(&mut shuffled);
+            assert_eq!(
+                first, shuffled,
+                "equal-distance mesh candidates must sort identically regardless of input order"
+            );
+        }
+    }
+
+    #[test]
+    fn upload_queue_sort_is_deterministic_at_equal_distance() {
+        let center = ChunkCoord::new(0, 0, 0);
+        let spawn_chunk = Some(ChunkCoord::new(1, 0, 0));
+        let coords = [
+            ChunkCoord::new(2, 0, 0),
+            ChunkCoord::new(0, 2, 0),
+            ChunkCoord::new(1, 0, 0),
+            ChunkCoord::new(0, 0, 2),
+        ];
+
+        let sort_coords = |coords: &mut [ChunkCoord]| {
+            coords.sort_by(|a, b| {
+                let a_spawn = Some(*a) == spawn_chunk;
+                let b_spawn = Some(*b) == spawn_chunk;
+                match (a_spawn, b_spawn) {
+                    (true, false) => std::cmp::Ordering::Greater,
+                    (false, true) => std::cmp::Ordering::Less,
+                    _ => {
+                        let da = crate::terrain::residency::chunk_chebyshev_distance(center, *a);
+                        let db = crate::terrain::residency::chunk_chebyshev_distance(center, *b);
+                        db.cmp(&da)
+                            .then_with(|| a.x.cmp(&b.x))
+                            .then_with(|| a.y.cmp(&b.y))
+                            .then_with(|| a.z.cmp(&b.z))
+                    }
+                }
+            });
+        };
+
+        let mut first = coords;
+        sort_coords(&mut first);
+        let mut reversed = [
+            ChunkCoord::new(0, 0, 2),
+            ChunkCoord::new(1, 0, 0),
+            ChunkCoord::new(0, 2, 0),
+            ChunkCoord::new(2, 0, 0),
+        ];
+        sort_coords(&mut reversed);
+        assert_eq!(first, reversed);
+        assert_eq!(first.last().copied(), spawn_chunk);
+    }
+
+    #[test]
+    fn collider_queue_keeps_render_resident_chunks_outside_physics_radius() {
+        use crate::terrain::TerrainPipelineState;
+
+        let coord = ChunkCoord::new(6, 0, 0);
+        let entity = Entity::from_bits(42);
+        let mut pipeline = TerrainPipelineState::default();
+        pipeline.chunks.insert(
+            coord,
+            ChunkRecord {
+                coord,
+                state: ChunkState::Ready,
+                revision: 1,
+                entity: Some(entity),
+                failed_at: None,
+                lod_tier: 0,
+                mesh_resolution_scale: 1.0,
+                collider_lod: game_data::TerrainColliderLodDefinition::Full,
+            },
+        );
+
+        let center = ChunkCoord::new(0, 0, 0);
+        let world_tweaks = crate::ui::WorldTweaks::default();
+        let outside_physics =
+            !crate::terrain::residency::within_physics_radius(center, coord, &world_tweaks);
+        let still_render_resident = pipeline
+            .chunks
+            .get(&coord)
+            .and_then(|chunk| chunk.entity)
+            .is_some()
+            && crate::terrain::residency::within_render_radius(center, coord, &world_tweaks);
+
+        assert!(
+            outside_physics,
+            "test coord must sit outside physics radius"
+        );
+        assert!(
+            still_render_resident,
+            "test coord must remain inside render radius"
+        );
+
+        let retain = |chunks: &HashMap<ChunkCoord, ChunkRecord>, pending_coord: ChunkCoord| {
+            if !crate::terrain::residency::within_physics_radius(
+                center,
+                pending_coord,
+                &world_tweaks,
+            ) {
+                return chunks
+                    .get(&pending_coord)
+                    .and_then(|chunk| chunk.entity)
+                    .is_some()
+                    && crate::terrain::residency::within_render_radius(
+                        center,
+                        pending_coord,
+                        &world_tweaks,
+                    );
+            }
+            true
+        };
+
+        assert!(
+            retain(&pipeline.chunks, coord),
+            "pending collider should be retained while chunk entity is render-resident"
+        );
+    }
+
+    #[test]
     fn subtract_sphere_boundary_sample_matches_sample_density_field() {
         let mut params = IslandGenParams::default();
         params.surface_noise.voxel_amplitude_m = 1.0;
@@ -1554,10 +1877,7 @@ mod pipeline_tests {
 
         let mut store = TerrainEditStore::default();
         store.0.apply_command(
-            &voxel_core::TerrainEditCommand::SubtractSphere {
-                center,
-                radius_m,
-            },
+            &voxel_core::TerrainEditCommand::SubtractSphere { center, radius_m },
             |ix, iy, iz| source.sample_density(ix as f32, iy as f32, iz as f32),
             |_ix, _iy, _iz, _d| MaterialId(0),
         );

@@ -4,8 +4,14 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+[features]
+test-oracle = []
+
 [dependencies]
+game_data = { path = "../game_data" }
 procedural_textures = { path = "../procedural_textures" }
+shared = { path = "../shared" }
+terrain_generation = { path = "../terrain_generation" }
 serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]

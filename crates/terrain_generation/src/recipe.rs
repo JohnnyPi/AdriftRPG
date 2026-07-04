@@ -1,15 +1,16 @@
 // crates/terrain_generation/src/recipe.rs
-use crate::field_stack::FieldStackParams;
+use crate::DensitySource;
 use crate::density_ops::{capsule_sdf, ellipsoid_sdf, plane_density, solid_subtract, solid_union};
+use crate::field_stack::FieldStackParams;
 use crate::island_atlas::IslandAtlas;
 use crate::island_gen::sample_atlas_surface;
 use crate::noise::ValueNoise;
 use crate::river::{river_carve_offset, river_channel_at};
+use crate::surface_height::CoastModifierKind;
 use crate::surface_height::{island_land_factor_warped, land_surface_height};
 use crate::topology::apply_foundation_seal_at;
 use crate::water_body::{RiverControlPoint, RiverSpline};
-use crate::DensitySource;
-use crate::surface_height::CoastModifierKind;
+use shared::smoothstep;
 use std::sync::Arc;
 
 /// Portable terrain recipe evaluated at runtime (may originate from YAML).
@@ -157,6 +158,28 @@ pub struct RecipeDensitySource {
     world_bounds: Option<WorldVolumeBounds>,
     detail_noise: ValueNoise,
     field_stack: FieldStackParams,
+    /// Indices into `recipe.ops` that modify atlas density (union/subtract/perturb).
+    atlas_object_ops: Vec<usize>,
+}
+
+fn is_atlas_object_op(op: &RecipeOp) -> bool {
+    matches!(
+        op,
+        RecipeOp::MountainPeak { .. }
+            | RecipeOp::UnderwaterTrench { .. }
+            | RecipeOp::Ellipsoid { .. }
+            | RecipeOp::Capsule { .. }
+            | RecipeOp::NoisePerturb { .. }
+    )
+}
+
+fn collect_atlas_object_ops(recipe: &TerrainRecipe) -> Vec<usize> {
+    recipe
+        .ops
+        .iter()
+        .enumerate()
+        .filter_map(|(index, op)| is_atlas_object_op(op).then_some(index))
+        .collect()
 }
 
 /// Coastal inland factor: 0 at the shore, 1 deep inland.
@@ -237,6 +260,7 @@ fn river_spline_to_recipe_space(spline: &RiverSpline, coord_offset: [f32; 3]) ->
 impl RecipeDensitySource {
     pub fn new(recipe: TerrainRecipe) -> Self {
         let detail_noise = ValueNoise::new(recipe.seed);
+        let atlas_object_ops = collect_atlas_object_ops(&recipe);
         Self {
             recipe,
             river_carve: None,
@@ -244,6 +268,7 @@ impl RecipeDensitySource {
             world_bounds: None,
             detail_noise,
             field_stack: FieldStackParams::default(),
+            atlas_object_ops,
         }
     }
 
@@ -313,11 +338,27 @@ impl RecipeDensitySource {
     }
 
     pub fn distance_to_water_m(&self, world_x: f32, world_z: f32) -> f32 {
+        if let Some(atlas) = self.atlas.as_ref() {
+            return atlas.sample_coast_distance(world_x, world_z);
+        }
         distance_to_water_m(
             &self.recipe,
             world_x + self.recipe.coord_offset[0],
             world_z + self.recipe.coord_offset[2],
         )
+    }
+
+    /// Surface height for biome/material column sampling.
+    ///
+    /// When an atlas is present this uses the clamped atlas elevation field so
+    /// classification matches [`ChunkColumnCache`]. For composite density
+    /// (recipe union objects, caves) use [`Self::terrain_surface_height_at`] or
+    /// [`Self::surface_height_at`] instead.
+    pub fn column_surface_height_at(&self, world_x: f32, world_z: f32) -> f32 {
+        if let Some(ref atlas) = self.atlas {
+            return self.clamp_surface_for_world(sample_atlas_surface(atlas, world_x, world_z));
+        }
+        self.terrain_surface_height_at(world_x, world_z)
     }
 
     pub fn distance_to_river_m(&self, world_x: f32, world_z: f32) -> f32 {
@@ -364,26 +405,28 @@ impl RecipeDensitySource {
         self.density_at_recipe_without_atlas(x, y, z, false)
     }
 
-    fn density_at_recipe_without_atlas(&self, x: f32, y: f32, z: f32, include_union_objects: bool) -> f32 {
+    fn density_at_recipe_without_atlas(
+        &self,
+        x: f32,
+        y: f32,
+        z: f32,
+        include_union_objects: bool,
+    ) -> f32 {
         let noise = &self.detail_noise;
-        let island = self
-            .recipe
-            .ops
-            .iter()
-            .find_map(|op| {
-                if let RecipeOp::IslandMask {
-                    center,
-                    radius_m,
-                    falloff_m,
-                    ocean_floor_y,
-                    domain_warp,
-                } = op
-                {
-                    Some((*center, *radius_m, *falloff_m, *domain_warp, *ocean_floor_y))
-                } else {
-                    None
-                }
-            });
+        let island = self.recipe.ops.iter().find_map(|op| {
+            if let RecipeOp::IslandMask {
+                center,
+                radius_m,
+                falloff_m,
+                ocean_floor_y,
+                domain_warp,
+            } = op
+            {
+                Some((*center, *radius_m, *falloff_m, *domain_warp, *ocean_floor_y))
+            } else {
+                None
+            }
+        });
         let ocean_floor = self.recipe.ops.iter().find_map(|op| {
             if let RecipeOp::OceanFloor {
                 origin,
@@ -407,19 +450,19 @@ impl RecipeDensitySource {
             }
         });
 
-        let land_factor = island.as_ref().map(|(center, radius, falloff, domain_warp, _)| {
-            let (wx, wz) = if *domain_warp > 0.0 {
-                let ox = noise.fbm(x * domain_warp, 0.0, z * domain_warp, 2, 2.0, 0.5) - 0.5;
-                let oz = noise.fbm(x * domain_warp + 100.0, 0.0, z * domain_warp, 2, 2.0, 0.5) - 0.5;
-                (
-                    x + ox * 30.0 * domain_warp,
-                    z + oz * 30.0 * domain_warp,
-                )
-            } else {
-                (x, z)
-            };
-            island_land_factor(wx, wz, *center, *radius, *falloff)
-        });
+        let land_factor = island
+            .as_ref()
+            .map(|(center, radius, falloff, domain_warp, _)| {
+                let (wx, wz) = if *domain_warp > 0.0 {
+                    let ox = noise.fbm(x * domain_warp, 0.0, z * domain_warp, 2, 2.0, 0.5) - 0.5;
+                    let oz =
+                        noise.fbm(x * domain_warp + 100.0, 0.0, z * domain_warp, 2, 2.0, 0.5) - 0.5;
+                    (x + ox * 30.0 * domain_warp, z + oz * 30.0 * domain_warp)
+                } else {
+                    (x, z)
+                };
+                island_land_factor(wx, wz, *center, *radius, *falloff)
+            });
 
         let mut density = f32::MAX;
         let land_surface = land_surface_height(&self.recipe, x, z);
@@ -454,7 +497,10 @@ impl RecipeDensitySource {
                     };
                     density = solid_union(density, plane_density(y, surface_y));
                 }
-                RecipeOp::IslandMask { .. } | RecipeOp::OceanFloor { .. } | RecipeOp::ValleyBasin { .. } | RecipeOp::CoastModifier { .. } => {}
+                RecipeOp::IslandMask { .. }
+                | RecipeOp::OceanFloor { .. }
+                | RecipeOp::ValleyBasin { .. }
+                | RecipeOp::CoastModifier { .. } => {}
                 RecipeOp::MountainPeak {
                     center,
                     base_elevation_m,
@@ -463,127 +509,7 @@ impl RecipeDensitySource {
                     steepness,
                     peak_noise,
                 } => {
-                    let hr =
-                        ((x - center[0]).powi(2) + (z - center[1]).powi(2)).sqrt();
-                    if hr < *base_radius_m {
-                        let t = (1.0 - hr / base_radius_m).max(0.0).powf(*steepness);
-                        let mut peak_top = base_elevation_m + peak_height_m * t;
-                        if let Some((freq, amp)) = peak_noise {
-                            peak_top += (noise.sample(x * freq, 0.0, z * freq) - 0.5) * amp;
-                        }
-                        density = solid_union(density, plane_density(y, peak_top));
-                    }
-                }
-                RecipeOp::UnderwaterTrench { points, width_m } => {
-                    if points.len() >= 2 {
-                        for window in points.windows(2) {
-                            let start = window[0];
-                            let end = window[1];
-                            let sdf = capsule_sdf(
-                                x,
-                                y,
-                                z,
-                                start[0],
-                                start[1],
-                                start[2],
-                                end[0],
-                                end[1],
-                                end[2],
-                                width_m * 0.5,
-                            );
-                            density = solid_subtract(density, sdf);
-                        }
-                    }
-                }
-                RecipeOp::Ellipsoid {
-                    center,
-                    radii,
-                    peak_noise,
-                    combine,
-                } => {
-                    if !include_union_objects && *combine == CombineOp::Union {
-                        continue;
-                    }
-                    let mut cy = center[1];
-                    if let Some((freq, amp)) = peak_noise {
-                        cy += (noise.sample(x * freq, 0.0, z * freq) - 0.5) * amp;
-                    }
-                    let sdf = ellipsoid_sdf(x, y, z, center[0], cy, center[2], radii[0], radii[1], radii[2]);
-                    density = apply_combine(density, sdf, *combine);
-                }
-                RecipeOp::Capsule {
-                    start,
-                    end,
-                    radius,
-                    combine,
-                } => {
-                    if !include_union_objects && *combine == CombineOp::Union {
-                        continue;
-                    }
-                    let sdf = capsule_sdf(
-                        x,
-                        y,
-                        z,
-                        start[0],
-                        start[1],
-                        start[2],
-                        end[0],
-                        end[1],
-                        end[2],
-                        *radius,
-                    );
-                    density = apply_combine(density, sdf, *combine);
-                }
-                RecipeOp::NoisePerturb {
-                    scale,
-                    amplitude,
-                    density_min,
-                    density_max,
-                } => {
-                    let scaled_amp = amplitude * self.field_stack.ridge_amplitude.max(0.01);
-                    let perturb =
-                        (noise.sample(x * scale, y * scale, z * scale) - 0.5) * scaled_amp;
-                    let band = perturb_band_weight(density, *density_min, *density_max);
-                    density += perturb * band;
-                }
-            }
-        }
-
-        if let Some(ref river) = self.river_carve {
-            let (dist, half_width, depth) = river_channel_at(&river.spline, x, z);
-            let carve = river_carve_offset(dist, half_width, river.bank_width_m, depth);
-            density += carve;
-        }
-
-        apply_foundation_seal_at(&self.recipe, x, y, z, density, land_surface)
-    }
-
-    fn density_at_recipe_with_atlas(
-        &self,
-        atlas: &IslandAtlas,
-        x: f32,
-        y: f32,
-        z: f32,
-        include_union_objects: bool,
-    ) -> f32 {
-        let noise = &self.detail_noise;
-        let wx = x - self.recipe.coord_offset[0];
-        let wz = z - self.recipe.coord_offset[2];
-        let surface = self.clamp_surface_for_world(sample_atlas_surface(atlas, wx, wz));
-        let mut density = y - surface;
-
-        for op in &self.recipe.ops {
-            match op {
-                RecipeOp::MountainPeak {
-                    center,
-                    base_elevation_m,
-                    base_radius_m,
-                    peak_height_m,
-                    steepness,
-                    peak_noise,
-                } => {
-                    let hr =
-                        ((x - center[0]).powi(2) + (z - center[1]).powi(2)).sqrt();
+                    let hr = ((x - center[0]).powi(2) + (z - center[1]).powi(2)).sqrt();
                     if hr < *base_radius_m {
                         let t = (1.0 - hr / base_radius_m).max(0.0).powf(*steepness);
                         let mut peak_top = base_elevation_m + peak_height_m * t;
@@ -658,11 +584,118 @@ impl RecipeDensitySource {
                     let band = perturb_band_weight(density, *density_min, *density_max);
                     density += perturb * band;
                 }
-                RecipeOp::IslandMask { .. }
-                | RecipeOp::OceanFloor { .. }
-                | RecipeOp::CoastalSurface { .. }
-                | RecipeOp::ValleyBasin { .. }
-                | RecipeOp::CoastModifier { .. } => {}
+            }
+        }
+
+        if let Some(ref river) = self.river_carve {
+            let (dist, half_width, depth) = river_channel_at(&river.spline, x, z);
+            let carve = river_carve_offset(dist, half_width, river.bank_width_m, depth);
+            density += carve;
+        }
+
+        apply_foundation_seal_at(&self.recipe, x, y, z, density, land_surface)
+    }
+
+    fn density_at_recipe_with_atlas(
+        &self,
+        atlas: &IslandAtlas,
+        x: f32,
+        y: f32,
+        z: f32,
+        include_union_objects: bool,
+    ) -> f32 {
+        let noise = &self.detail_noise;
+        let wx = x - self.recipe.coord_offset[0];
+        let wz = z - self.recipe.coord_offset[2];
+        let surface = self.clamp_surface_for_world(sample_atlas_surface(atlas, wx, wz));
+        let mut density = y - surface;
+
+        for &index in &self.atlas_object_ops {
+            match &self.recipe.ops[index] {
+                RecipeOp::MountainPeak {
+                    center,
+                    base_elevation_m,
+                    base_radius_m,
+                    peak_height_m,
+                    steepness,
+                    peak_noise,
+                } => {
+                    let hr = ((x - center[0]).powi(2) + (z - center[1]).powi(2)).sqrt();
+                    if hr < *base_radius_m {
+                        let t = (1.0 - hr / base_radius_m).max(0.0).powf(*steepness);
+                        let mut peak_top = base_elevation_m + peak_height_m * t;
+                        if let Some((freq, amp)) = peak_noise {
+                            peak_top += (noise.sample(x * freq, 0.0, z * freq) - 0.5) * amp;
+                        }
+                        density = solid_union(density, plane_density(y, peak_top));
+                    }
+                }
+                RecipeOp::UnderwaterTrench { points, width_m } => {
+                    if points.len() >= 2 {
+                        for window in points.windows(2) {
+                            let start = window[0];
+                            let end = window[1];
+                            let sdf = capsule_sdf(
+                                x,
+                                y,
+                                z,
+                                start[0],
+                                start[1],
+                                start[2],
+                                end[0],
+                                end[1],
+                                end[2],
+                                width_m * 0.5,
+                            );
+                            density = solid_subtract(density, sdf);
+                        }
+                    }
+                }
+                RecipeOp::Ellipsoid {
+                    center,
+                    radii,
+                    peak_noise,
+                    combine,
+                } => {
+                    if !include_union_objects && *combine == CombineOp::Union {
+                        continue;
+                    }
+                    let mut cy = center[1];
+                    if let Some((freq, amp)) = peak_noise {
+                        cy += (noise.sample(x * freq, 0.0, z * freq) - 0.5) * amp;
+                    }
+                    let sdf = ellipsoid_sdf(
+                        x, y, z, center[0], cy, center[2], radii[0], radii[1], radii[2],
+                    );
+                    density = apply_combine(density, sdf, *combine);
+                }
+                RecipeOp::Capsule {
+                    start,
+                    end,
+                    radius,
+                    combine,
+                } => {
+                    if !include_union_objects && *combine == CombineOp::Union {
+                        continue;
+                    }
+                    let sdf = capsule_sdf(
+                        x, y, z, start[0], start[1], start[2], end[0], end[1], end[2], *radius,
+                    );
+                    density = apply_combine(density, sdf, *combine);
+                }
+                RecipeOp::NoisePerturb {
+                    scale,
+                    amplitude,
+                    density_min,
+                    density_max,
+                } => {
+                    let scaled_amp = amplitude * self.field_stack.ridge_amplitude.max(0.01);
+                    let perturb =
+                        (noise.sample(x * scale, y * scale, z * scale) - 0.5) * scaled_amp;
+                    let band = perturb_band_weight(density, *density_min, *density_max);
+                    density += perturb * band;
+                }
+                _ => {}
             }
         }
 
@@ -672,6 +705,9 @@ impl RecipeDensitySource {
     }
 
     pub fn terrain_surface_height_at(&self, world_x: f32, world_z: f32) -> f32 {
+        if self.atlas.is_some() && self.atlas_object_ops.is_empty() {
+            return self.column_surface_height_at(world_x, world_z);
+        }
         let mut lo = self.recipe.sea_level - 10.0;
         let mut hi = self.surface_search_upper_bound();
         for _ in 0..32 {
@@ -694,8 +730,7 @@ impl RecipeDensitySource {
     /// cave margins.
     pub fn foundation_surface_at(&self, world_x: f32, world_z: f32) -> f32 {
         if let Some(ref atlas) = self.atlas {
-            return self
-                .clamp_surface_for_world(sample_atlas_surface(atlas, world_x, world_z));
+            return self.clamp_surface_for_world(sample_atlas_surface(atlas, world_x, world_z));
         }
         let rx = world_x + self.recipe.coord_offset[0];
         let rz = world_z + self.recipe.coord_offset[2];
@@ -899,8 +934,8 @@ impl DensitySource for RecipeDensitySource {
                 let land = atlas.island_mask.sample_bilinear(wx, wz);
                 if land > 0.01 && density.abs() < 2.0 {
                     let noise = &self.detail_noise;
-                    let micro = (noise.fbm_2d(wx * 0.35, wz * 0.35, 2) - 0.5)
-                        * atlas.voxel_amplitude_m;
+                    let micro =
+                        (noise.fbm_2d(wx * 0.35, wz * 0.35, 2) - 0.5) * atlas.voxel_amplitude_m;
                     density += micro * land;
                 }
             }
@@ -929,7 +964,11 @@ pub fn island_land_factor(x: f32, z: f32, center: [f32; 2], radius_m: f32, fallo
     }
 }
 
-pub(crate) fn island_land_factor_from_recipe(recipe: &TerrainRecipe, x: f32, z: f32) -> Option<f32> {
+pub(crate) fn island_land_factor_from_recipe(
+    recipe: &TerrainRecipe,
+    x: f32,
+    z: f32,
+) -> Option<f32> {
     let noise = ValueNoise::new(recipe.seed);
     if recipe
         .ops
@@ -942,9 +981,7 @@ pub(crate) fn island_land_factor_from_recipe(recipe: &TerrainRecipe, x: f32, z: 
     }
 }
 
-fn island_mask_params(
-    recipe: &TerrainRecipe,
-) -> Option<([f32; 2], f32, f32, f32, f32)> {
+fn island_mask_params(recipe: &TerrainRecipe) -> Option<([f32; 2], f32, f32, f32, f32)> {
     recipe.ops.iter().find_map(|op| {
         if let RecipeOp::IslandMask {
             center,
@@ -968,18 +1005,7 @@ fn warp_xz_for_mask(seed: u64, x: f32, z: f32, domain_warp: f32) -> (f32, f32) {
     let noise = ValueNoise::new(seed);
     let ox = noise.fbm(x * domain_warp, 0.0, z * domain_warp, 2, 2.0, 0.5) - 0.5;
     let oz = noise.fbm(x * domain_warp + 100.0, 0.0, z * domain_warp, 2, 2.0, 0.5) - 0.5;
-    (
-        x + ox * 30.0 * domain_warp,
-        z + oz * 30.0 * domain_warp,
-    )
-}
-
-fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
-    if (edge1 - edge0).abs() <= f32::EPSILON {
-        return if x >= edge1 { 1.0 } else { 0.0 };
-    }
-    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
+    (x + ox * 30.0 * domain_warp, z + oz * 30.0 * domain_warp)
 }
 
 fn perturb_band_weight(density: f32, density_min: f32, density_max: f32) -> f32 {

@@ -2,14 +2,14 @@
 
 use bevy::camera::{Exposure, Hdr};
 use bevy::color::palettes::css::BLACK;
+use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::light::{
-    atmosphere::ScatteringMedium, VolumetricFog, VolumetricLight, Atmosphere,
-    AtmosphereEnvironmentMapLight,
+    Atmosphere, AtmosphereEnvironmentMapLight, VolumetricFog, VolumetricLight,
+    atmosphere::ScatteringMedium,
 };
 use bevy::pbr::{AtmosphereMode, AtmosphereSettings};
 use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
-use bevy::core_pipeline::tonemapping::Tonemapping;
 
 use super::config_init::EnvironmentInitSet;
 use crate::state::AppState;

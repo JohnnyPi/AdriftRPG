@@ -1,7 +1,15 @@
 // crates/game_bevy/src/ui/tweaks.rs
 //! Runtime tweak resources mutated by the options panel.
+//!
+//! # Authored defaults vs live overrides
+//!
+//! YAML compiles into `game_data::Compiled*` structs at load time. Each `*Tweaks`
+//! resource here holds **live** values the options panel and debug tools mutate.
+//! On world enter, `environment::config_init` seeds compiled profiles into
+//! `EnvironmentLightingState` (sun/exposure) and `AtmosphereTweaks` (sky/fog colors).
 
 use bevy::prelude::*;
+use game_data::{CompiledChunkResidency, CompiledFog, CompiledWater};
 
 /// Live atmosphere overrides applied on top of YAML lighting config.
 #[derive(Resource, Clone, Debug)]
@@ -20,6 +28,15 @@ impl Default for LightingTweaks {
             fog_end_m: 520.0,
             override_fog: false,
         }
+    }
+}
+
+impl LightingTweaks {
+    /// Seed distance-fog UI defaults from compiled `fog.yaml`.
+    pub fn apply_authored_defaults(&mut self, fog: &CompiledFog) {
+        self.fog_color = fog.distance_color;
+        self.fog_start_m = fog.distance_start_m;
+        self.fog_end_m = fog.distance_end_m;
     }
 }
 
@@ -51,12 +68,32 @@ impl Default for MovementTweaks {
     }
 }
 
+impl MovementTweaks {
+    /// Seed movement fields from compiled `player.yaml`.
+    pub fn apply_authored_player(&mut self, player: &game_data::CompiledPlayer) {
+        self.walk_speed = player.walk_speed_mps;
+        self.run_speed = player.run_speed_mps;
+        self.acceleration = player.acceleration_mps2;
+        self.deceleration = player.deceleration_mps2;
+        self.jump_buffer_s = player.jump_buffer_s;
+        self.coyote_time_s = player.coyote_time_s;
+        self.max_slope_deg = player.maximum_walkable_slope_deg;
+    }
+}
+
 /// Physics tuning overrides (Phase 2+).
 #[derive(Resource, Clone, Debug)]
 pub struct PhysicsTweaks {
     pub gravity: f32,
     pub prop_friction: f32,
     pub use_overrides: bool,
+}
+
+impl PhysicsTweaks {
+    /// Seed gravity from compiled `physics.yaml`.
+    pub fn apply_authored_physics(&mut self, physics: &game_data::CompiledPhysics) {
+        self.gravity = physics.gravity_mps2;
+    }
 }
 
 impl Default for PhysicsTweaks {
@@ -96,6 +133,17 @@ impl Default for WorldTweaks {
             show_residency_rings: false,
             show_semantic_landmarks: false,
         }
+    }
+}
+
+impl WorldTweaks {
+    /// Seed chunk residency radii from the active world's compiled profile.
+    pub fn apply_authored_residency(&mut self, residency: &CompiledChunkResidency) {
+        self.density_radius = residency.density_radius;
+        self.render_radius = residency.render_radius;
+        self.physics_radius = residency.physics_radius;
+        self.decoration_radius = residency.decoration_radius;
+        self.high_detail_radius = residency.high_detail_radius;
     }
 }
 
@@ -164,6 +212,15 @@ pub struct WaterTweaks {
     pub shallow_color: [f32; 3],
     pub deep_color: [f32; 3],
     pub use_overrides: bool,
+}
+
+impl WaterTweaks {
+    /// Seed sea level and colors from compiled `water.yaml`.
+    pub fn apply_authored_water(&mut self, water: &CompiledWater) {
+        self.sea_level_m = water.sea_level_m;
+        self.shallow_color = water.shallow_color;
+        self.deep_color = water.deep_color;
+    }
 }
 
 impl Default for WaterTweaks {
@@ -270,56 +327,39 @@ pub fn sun_color_for_elevation(elevation_deg: f32) -> [f32; 3] {
 }
 
 /// Camera EV100 from sun elevation; tuned for readable nights and clear midday.
-pub fn exposure_ev_for_elevation(
-    elevation_deg: f32,
-    min_ev: f32,
-    max_ev: f32,
-    bias: f32,
-) -> f32 {
+pub fn exposure_ev_for_elevation(elevation_deg: f32, min_ev: f32, max_ev: f32, bias: f32) -> f32 {
     let day = ((elevation_deg + 6.0) / 66.0).clamp(0.0, 1.0);
     let ev = min_ev + day.powf(0.85) * (max_ev - min_ev);
     (ev + bias).clamp(min_ev, max_ev)
 }
 
-/// Atmosphere / sky overrides (Phase 7–9).
+/// Sky color and fog-density presentation overrides (Phase 7–9).
 #[derive(Resource, Clone, Debug)]
 pub struct AtmosphereTweaks {
-    /// When true, sun angles are driven from [`Self::time_of_day_hours`].
-    pub drive_sun_from_time_of_day: bool,
-    pub time_of_day_hours: f32,
-    pub sun_azimuth_deg: f32,
-    pub sun_elevation_deg: f32,
-    pub exposure_ev_min: f32,
-    pub exposure_ev_max: f32,
-    pub exposure_bias: f32,
-    pub environment_intensity_scale: f32,
     pub zenith_color: [f32; 3],
     pub horizon_color: [f32; 3],
     pub mie_strength: f32,
     pub height_fog_density: f32,
     pub underwater_fog_density: f32,
-    pub use_overrides: bool,
 }
 
 impl Default for AtmosphereTweaks {
     fn default() -> Self {
         Self {
-            drive_sun_from_time_of_day: false,
-            time_of_day_hours: 10.0,
-            // Match atmosphere.default and sky.expanded_showcase (active presentation).
-            sun_azimuth_deg: 145.0,
-            sun_elevation_deg: 42.0,
-            exposure_ev_min: 9.0,
-            exposure_ev_max: 15.0,
-            exposure_bias: 0.0,
-            environment_intensity_scale: 1.0,
             zenith_color: [0.22, 0.42, 0.78],
             horizon_color: [0.58, 0.72, 0.88],
             mie_strength: 0.55,
             height_fog_density: 0.02,
             underwater_fog_density: 0.15,
-            use_overrides: false,
         }
+    }
+}
+
+impl AtmosphereTweaks {
+    /// Seed height/underwater fog densities from compiled `fog.yaml`.
+    pub fn apply_authored_fog_densities(&mut self, fog: &CompiledFog) {
+        self.height_fog_density = fog.height_density;
+        self.underwater_fog_density = fog.underwater_density;
     }
 }
 
@@ -334,6 +374,15 @@ pub struct CameraTweaks {
     pub collision_outward_sharpness: f32,
     pub interior_distance_scale: f32,
     pub use_overrides: bool,
+}
+
+impl CameraTweaks {
+    /// Seed orbit and collision fields from compiled `camera.yaml`.
+    pub fn apply_authored_camera(&mut self, camera: &game_data::CompiledCamera) {
+        self.orbit_distance = camera.distance_default_m;
+        self.collision_inward_sharpness = camera.collision_inward_sharpness;
+        self.collision_outward_sharpness = camera.collision_outward_sharpness;
+    }
 }
 
 impl Default for CameraTweaks {
@@ -456,8 +505,7 @@ mod lighting_curve_tests {
         }
         assert!(noon_ev > midnight_ev + 3.0);
         let (_, midnight_elev) = sun_angles_from_time_of_day(0.0);
-        let moon_lux =
-            moon_gameplay_illuminance(midnight_elev, 35.0, 1.0, 2.0, 0.0);
+        let moon_lux = moon_gameplay_illuminance(midnight_elev, 35.0, 1.0, 2.0, 0.0);
         assert!(moon_lux > 0.3, "readable moonlit midnight");
     }
 }

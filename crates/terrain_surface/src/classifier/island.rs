@@ -1,9 +1,9 @@
 // crates/terrain_surface/src/classifier/island.rs
-use std::collections::HashMap;
+//! Golden oracle classifier for YAML surface rules (parity tests only).
 
-use crate::blend::SurfaceMaterialBlend;
 use crate::blend::SurfaceClassifier;
-use crate::context::{saturate, smoothstep, BiomeId, GeologyId, SurfaceContext};
+use crate::blend::{MergeSlotPadding, SurfaceMaterialBlend, merge_weighted_blends};
+use crate::context::{BiomeId, GeologyId, SurfaceContext, saturate, smoothstep};
 use crate::material_id::MaterialKey;
 
 fn mat(name: &str) -> MaterialKey {
@@ -27,55 +27,32 @@ impl SurfaceClassifier for IslandSurfaceClassifier {
         let river_gate = 1.0 - smoothstep(3.0, 7.0, c.river_distance_m);
         let cliff_gate = smoothstep(46.0, 50.0, c.slope_degrees);
 
-        weighted_blend(&[
-            (coast_gate, classify_coast(c)),
-            (river_gate * (1.0 - coast_gate), classify_river(c)),
-            (cliff_gate, classify_cliff(c)),
-            (
-                (1.0 - coast_gate) * (1.0 - river_gate) * (1.0 - cliff_gate),
-                classify_land(c),
-            ),
-        ])
+        merge_weighted_blends(
+            &[
+                (coast_gate, classify_coast(c)),
+                (river_gate * (1.0 - coast_gate), classify_river(c)),
+                (cliff_gate, classify_cliff(c)),
+                (
+                    (1.0 - coast_gate) * (1.0 - river_gate) * (1.0 - cliff_gate),
+                    classify_land(c),
+                ),
+            ],
+            MergeSlotPadding::Fixed(mat("grass")),
+        )
+        .normalize()
     }
 }
 
 fn weighted_blend(parts: &[(f32, SurfaceMaterialBlend)]) -> SurfaceMaterialBlend {
-    let mut weights: HashMap<MaterialKey, f32> = HashMap::new();
-    for (gate, blend) in parts {
-        if *gate <= f32::EPSILON {
-            continue;
-        }
-        for i in 0..4 {
-            let w = blend.weights[i] * gate;
-            if w > 0.0 {
-                *weights.entry(blend.materials[i].clone()).or_default() += w;
-            }
-        }
-    }
-    let mut ranked: Vec<(MaterialKey, f32)> = weights.into_iter().collect();
-    ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    let default = mat("grass");
-    let mut materials = [default.clone(), default.clone(), default.clone(), default];
-    let mut w = [0.0; 4];
-    for (i, (mat_key, wt)) in ranked.into_iter().take(4).enumerate() {
-        materials[i] = mat_key;
-        w[i] = wt;
-    }
-    SurfaceMaterialBlend { materials, weights: w }.normalize()
+    merge_weighted_blends(parts, MergeSlotPadding::Fixed(mat("grass"))).normalize()
 }
 
 fn classify_cliff(c: &SurfaceContext) -> SurfaceMaterialBlend {
-    let moss = smoothstep(0.45, 0.95, c.moisture)
-        * (1.0 - smoothstep(70.0, 88.0, c.slope_degrees));
+    let moss = smoothstep(0.45, 0.95, c.moisture) * (1.0 - smoothstep(70.0, 88.0, c.slope_degrees));
     let fresh_rock = smoothstep(68.0, 88.0, c.slope_degrees);
 
     SurfaceMaterialBlend {
-        materials: [
-            mat("rock"),
-            mat("rock"),
-            mat("forest_floor"),
-            mat("grass"),
-        ],
+        materials: [mat("rock"), mat("rock"), mat("forest_floor"), mat("grass")],
         weights: [
             0.70 * (1.0 - fresh_rock),
             0.30 + fresh_rock,
@@ -92,12 +69,7 @@ fn classify_coast(c: &SurfaceContext) -> SurfaceMaterialBlend {
     let shoreline = smoothstep(c.sea_level_m + 2.0, c.sea_level_m, c.elevation_m);
 
     SurfaceMaterialBlend {
-        materials: [
-            mat("sand"),
-            mat("wet_rock"),
-            mat("rock"),
-            mat("grass"),
-        ],
+        materials: [mat("sand"), mat("wet_rock"), mat("rock"), mat("grass")],
         weights: [
             (1.0 - rock) * (1.0 - wave_rubble) * 0.70,
             shoreline * 0.20,
@@ -156,7 +128,8 @@ fn classify_cave(c: &SurfaceContext) -> SurfaceMaterialBlend {
 
 fn classify_land(c: &SurfaceContext) -> SurfaceMaterialBlend {
     let soft = c.soft;
-    let exposed_rock = smoothstep(10.0, 34.0, c.slope_degrees) * (1.0 - saturate(c.soil_depth_m / 2.0));
+    let exposed_rock =
+        smoothstep(10.0, 34.0, c.slope_degrees) * (1.0 - saturate(c.soil_depth_m / 2.0));
     let moss = smoothstep(0.55, 0.95, c.moisture) * (1.0 - exposed_rock);
 
     let forest = soft.forest;
@@ -173,12 +146,7 @@ fn classify_land(c: &SurfaceContext) -> SurfaceMaterialBlend {
     };
 
     let default_blend = SurfaceMaterialBlend {
-        materials: [
-            mat("grass"),
-            mat("grass"),
-            mat("forest_floor"),
-            mat("rock"),
-        ],
+        materials: [mat("grass"), mat("grass"), mat("forest_floor"), mat("rock")],
         weights: [
             forest * (1.0 - litter) + scrub * 0.3,
             grass + scrub * 0.5,
@@ -189,12 +157,7 @@ fn classify_land(c: &SurfaceContext) -> SurfaceMaterialBlend {
     .normalize();
 
     let alpine_blend = SurfaceMaterialBlend {
-        materials: [
-            mat("rock"),
-            mat("rock"),
-            mat("forest_floor"),
-            mat("grass"),
-        ],
+        materials: [mat("rock"), mat("rock"), mat("forest_floor"), mat("grass")],
         weights: [
             alpine * 0.5,
             alpine * 0.35 + exposed_rock,
@@ -211,12 +174,7 @@ fn classify_land(c: &SurfaceContext) -> SurfaceMaterialBlend {
             mat("sand"),
             mat("grass"),
         ],
-        weights: [
-            wetland * 0.55,
-            moss * 0.25,
-            wetland * 0.2,
-            forest * 0.15,
-        ],
+        weights: [wetland * 0.55, moss * 0.25, wetland * 0.2, forest * 0.15],
     }
     .normalize();
 

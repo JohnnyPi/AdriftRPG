@@ -1,9 +1,9 @@
 // crates/terrain_generation/tests/edit_seams.rs
 use terrain_generation::{
-    default_vertical_slice_recipe, fill_padded_samples, padded_index, DensitySource,
-    RecipeDensitySource,
+    DensitySource, RecipeDensitySource, default_vertical_slice_recipe, fill_padded_samples,
+    padded_index,
 };
-use voxel_core::{MaterialId, TerrainEditCommand, TerrainEditStore, CHUNK_CELLS};
+use voxel_core::{CHUNK_CELLS, MaterialId, TerrainEditCommand, TerrainEditStore};
 
 fn samples_with_edits(
     source: &RecipeDensitySource,
@@ -43,8 +43,7 @@ fn face_straddling_edit_matches_in_both_neighbor_chunk_halos() {
     let left_idx = padded_index(face_x, 8, 8, padded);
     let right_idx = padded_index(face_x - CHUNK_CELLS as i32, 8, 8, padded);
     assert_eq!(
-        left[left_idx].density,
-        right[right_idx].density,
+        left[left_idx].density, right[right_idx].density,
         "shared world sample must agree across chunk halos"
     );
     assert!(

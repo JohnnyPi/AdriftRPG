@@ -45,14 +45,14 @@ impl Plugin for StarfieldPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(MaterialPlugin::<StarMaterial>::default())
             .add_systems(
-            OnEnter(AppState::Running),
-            spawn_starfield.in_set(EnvironmentInitSet),
-        )
-        .add_systems(
-            Update,
-            (follow_starfield_camera, update_starfield_params)
-                .run_if(in_state(AppState::Running)),
-        );
+                OnEnter(AppState::Running),
+                spawn_starfield.in_set(EnvironmentInitSet),
+            )
+            .add_systems(
+                Update,
+                (follow_starfield_camera, update_starfield_params)
+                    .run_if(in_state(AppState::Running)),
+            );
     }
 }
 
@@ -65,7 +65,10 @@ fn spawn_starfield(
     if !sky.stars_enabled {
         return;
     }
-    let mesh = meshes.add(Sphere::new(4000.0).mesh().kind(SphereKind::Uv { sectors: 32, stacks: 16 }));
+    let mesh = meshes.add(Sphere::new(4000.0).mesh().kind(SphereKind::Uv {
+        sectors: 32,
+        stacks: 16,
+    }));
     let material = materials.add(StarMaterial {
         params: StarParams {
             density: sky.stars_density,

@@ -4,8 +4,8 @@
 mod dual_contouring;
 mod surface_nets;
 
-use voxel_core::TerrainSample;
 use terrain_surface::{ChunkSlotPalette, MaterialVertex, SurfaceMeshResolver};
+use voxel_core::TerrainSample;
 
 pub use dual_contouring::DualContouringMesher;
 pub use surface_nets::SurfaceNetsMesher;

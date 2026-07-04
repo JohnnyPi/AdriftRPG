@@ -4,33 +4,33 @@ use terrain_generation::RecipeDensitySource;
 use voxel_core::MaterialId;
 
 use super::biome_context::{BiomeSampleContext, ChunkColumnCache, ROCK_SLOPE_DEG};
-use super::biomes::{biome_color, classify_biome_with_context, BiomeKind};
+use super::biomes::{biome_color, classify_biome_with_context};
 use crate::environment::BiomeCatalog;
+use terrain_surface::BiomeId;
 
 const SURFACE_VOXEL_BAND: f32 = 1.0;
 const WET_ROCK_DISTANCE_M: f32 = 12.0;
 
 pub fn assign_material_color(catalog: &BiomeCatalog, material_id: u16) -> Color {
-    let kind = material_id_to_biome_kind(material_id);
-    biome_color(catalog, kind)
+    biome_color(catalog, BiomeId::from_material_id(material_id))
 }
 
 pub fn surface_material_for(
     catalog: &BiomeCatalog,
-    biome: BiomeKind,
+    biome: BiomeId,
     ctx: &BiomeSampleContext,
 ) -> MaterialId {
-    if biome == BiomeKind::Cave {
-        return MaterialId(catalog.material_id_for(BiomeKind::Cave));
+    if biome == BiomeId::Cave {
+        return MaterialId(catalog.material_id_for(BiomeId::Cave));
     }
-    if biome == BiomeKind::ShallowWater {
-        return MaterialId(catalog.material_id_for(BiomeKind::ShallowWater));
+    if biome == BiomeId::ShallowWater {
+        return MaterialId(catalog.material_id_for(BiomeId::ShallowWater));
     }
     if ctx.slope_degrees > ROCK_SLOPE_DEG {
         return MaterialId(2);
     }
-    if biome == BiomeKind::Beach || ctx.distance_to_water < WET_ROCK_DISTANCE_M {
-        return MaterialId(catalog.material_id_for(BiomeKind::Beach));
+    if biome == BiomeId::Beach || ctx.distance_to_water < WET_ROCK_DISTANCE_M {
+        return MaterialId(catalog.material_id_for(BiomeId::Beach));
     }
     MaterialId(catalog.material_id_for(biome))
 }
@@ -89,27 +89,17 @@ pub fn material_for_world_with_cache(
     surface_material_for(catalog, biome, &ctx)
 }
 
-pub fn terrain_material_key_from_paint_material(material: MaterialId) -> terrain_surface::MaterialKey {
-    match material_id_to_biome_kind(material.0) {
-        BiomeKind::Beach => terrain_surface::MaterialKey::new("sand"),
-        BiomeKind::RockyUpland | BiomeKind::Alpine => terrain_surface::MaterialKey::new("rock"),
-        BiomeKind::Forest => terrain_surface::MaterialKey::new("forest_floor"),
-        BiomeKind::Wetland | BiomeKind::Riverbank => terrain_surface::MaterialKey::new("wet_rock"),
-        BiomeKind::Cave => terrain_surface::MaterialKey::new("cave_stone"),
-        BiomeKind::Scrub | BiomeKind::CoastalScrub => terrain_surface::MaterialKey::new("scrub"),
+pub fn terrain_material_key_from_paint_material(
+    material: MaterialId,
+) -> terrain_surface::MaterialKey {
+    match BiomeId::from_material_id(material.0) {
+        BiomeId::Beach => terrain_surface::MaterialKey::new("sand"),
+        BiomeId::RockyUpland | BiomeId::Alpine => terrain_surface::MaterialKey::new("rock"),
+        BiomeId::Forest => terrain_surface::MaterialKey::new("forest_floor"),
+        BiomeId::Wetland | BiomeId::Riverbank => terrain_surface::MaterialKey::new("wet_rock"),
+        BiomeId::Cave => terrain_surface::MaterialKey::new("cave_stone"),
+        BiomeId::Scrub | BiomeId::CoastalScrub => terrain_surface::MaterialKey::new("scrub"),
         _ => terrain_surface::MaterialKey::new("grass"),
-    }
-}
-
-fn material_id_to_biome_kind(material_id: u16) -> BiomeKind {
-    match material_id {
-        1 => BiomeKind::Beach,
-        2 => BiomeKind::RockyUpland,
-        3 => BiomeKind::Cave,
-        4 => BiomeKind::Wetland,
-        5 => BiomeKind::Forest,
-        6 => BiomeKind::Scrub,
-        _ => BiomeKind::Grassland,
     }
 }
 
@@ -127,7 +117,7 @@ mod tests {
             )],
         };
         let ctx = BiomeSampleContext::for_test(20.0, 18.0, 50.0, 80.0);
-        let mat = surface_material_for(&catalog, BiomeKind::Grassland, &ctx);
+        let mat = surface_material_for(&catalog, BiomeId::Grassland, &ctx);
         assert_eq!(mat.0, 2);
     }
 
@@ -141,7 +131,7 @@ mod tests {
             )],
         };
         let ctx = BiomeSampleContext::for_test(12.0, 10.0, 5.0, 80.0);
-        let mat = surface_material_for(&catalog, BiomeKind::Grassland, &ctx);
+        let mat = surface_material_for(&catalog, BiomeId::Grassland, &ctx);
         assert_eq!(mat.0, 0);
     }
 }

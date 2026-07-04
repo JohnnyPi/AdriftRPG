@@ -64,7 +64,8 @@ impl PerformanceReport {
         let max_ms = *sorted.last().unwrap_or(&0.0);
         let min_ms = *sorted.first().unwrap_or(&0.0);
         let _ = min_ms;
-        let p99_index = ((samples.len() as f32 * 0.99) as usize).min(sorted.len().saturating_sub(1));
+        let p99_index =
+            ((samples.len() as f32 * 0.99) as usize).min(sorted.len().saturating_sub(1));
         let p99_ms = sorted[p99_index];
 
         let avg_fps = 1000.0 / avg_ms.max(0.001);
@@ -177,7 +178,9 @@ mod tests {
 
     #[test]
     fn report_flags_sub_60_one_percent_low() {
-        let samples: Vec<f32> = (0..100).map(|i| if i == 99 { 25.0 } else { 16.0 }).collect();
+        let samples: Vec<f32> = (0..100)
+            .map(|i| if i == 99 { 25.0 } else { 16.0 })
+            .collect();
         let report = PerformanceReport::from_samples(&samples, 60.0);
         assert!(report.avg_fps > 60.0);
         assert!(!report.meets_target);

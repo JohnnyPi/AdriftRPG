@@ -6,7 +6,9 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 use shared::{DataError, DataResult, StableId};
 
-use crate::definitions::{RawDefinition, TerrainMaterialEntryDefinition, TerrainMaterialsDefinition};
+use crate::definitions::{
+    RawDefinition, TerrainMaterialEntryDefinition, TerrainMaterialsDefinition,
+};
 use crate::material_catalog::{
     MaterialCatalogDefinition, OverlayDefinition, SurfaceMaterialDefinition,
     TextureRecipeDefinition,
@@ -182,12 +184,14 @@ pub fn build_surface_registry(
     let mut surface_by_id = BTreeMap::new();
     for (index, id) in sorted_surface_ids.iter().enumerate() {
         let def = &surface_defs[id];
-        let texture_layer = texture_by_id.get(&def.texture).copied().ok_or_else(|| {
-            DataError::InvalidValue {
-                context: format!("surface `{id}`"),
-                message: format!("references unknown texture `{}`", def.texture),
-            }
-        })?;
+        let texture_layer =
+            texture_by_id
+                .get(&def.texture)
+                .copied()
+                .ok_or_else(|| DataError::InvalidValue {
+                    context: format!("surface `{id}`"),
+                    message: format!("references unknown texture `{}`", def.texture),
+                })?;
         surface_by_id.insert(id.clone(), index as SurfaceIndex);
         surfaces.push(CompiledSurface {
             id: id.clone(),
@@ -247,8 +251,14 @@ pub fn build_surface_registry(
     let dep_index = MaterialDependencyIndex {
         texture_to_surfaces,
         surface_to_material_keys,
-        catalog_textures: catalog.as_ref().map(|c| c.textures.clone()).unwrap_or_default(),
-        catalog_surfaces: catalog.as_ref().map(|c| c.surfaces.clone()).unwrap_or_default(),
+        catalog_textures: catalog
+            .as_ref()
+            .map(|c| c.textures.clone())
+            .unwrap_or_default(),
+        catalog_surfaces: catalog
+            .as_ref()
+            .map(|c| c.surfaces.clone())
+            .unwrap_or_default(),
     };
 
     let registry = CompiledSurfaceRegistry {
@@ -384,8 +394,7 @@ mod tests {
                 responses: Default::default(),
             }),
         ];
-        let (registry, _) =
-            build_surface_registry(&definitions, None, None).expect("build");
+        let (registry, _) = build_surface_registry(&definitions, None, None).expect("build");
         assert_eq!(registry.textures.len(), 1);
         assert_eq!(registry.surfaces.len(), 1);
         assert_eq!(registry.surfaces[0].texture_layer, 0);

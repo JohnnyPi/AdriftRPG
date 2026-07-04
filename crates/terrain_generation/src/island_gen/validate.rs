@@ -239,11 +239,7 @@ pub fn validate_atlas(atlas: &IslandAtlas, params: &IslandGenParams) -> Validati
         0.0
     } else {
         let mean = soil_samples.iter().sum::<f32>() / soil_samples.len() as f32;
-        soil_samples
-            .iter()
-            .map(|v| (v - mean).powi(2))
-            .sum::<f32>()
-            / soil_samples.len() as f32
+        soil_samples.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / soil_samples.len() as f32
     };
     if soil_variance < 1e-4 {
         passed = false;
@@ -272,7 +268,7 @@ pub fn validate_atlas(atlas: &IslandAtlas, params: &IslandGenParams) -> Validati
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::island_gen::{build_island_atlas, IslandGenParams};
+    use crate::island_gen::{IslandGenParams, build_island_atlas};
 
     #[test]
     fn peak_floor_scales_with_composed_edifice() {
@@ -298,9 +294,8 @@ mod tests {
 
         // Sanity on the default relationship: the authored composed peak must
         // clear its own floor with room for discretization losses.
-        let composed = base.island.sea_level_m
-            + base.volcano.shield_height_m
-            + base.volcano.summit_height_m;
+        let composed =
+            base.island.sea_level_m + base.volcano.shield_height_m + base.volcano.summit_height_m;
         assert!(base_floor < composed * 0.85);
     }
 

@@ -18,7 +18,10 @@ fn steep_slope_above_max_is_rejected() {
     };
     let steep_normal = Vec3::new(0.85, 0.53, 0.0).normalize();
     let angle = slope_angle_deg(steep_normal);
-    assert!(angle > controller.max_slope_deg, "test normal should exceed walk limit");
+    assert!(
+        angle > controller.max_slope_deg,
+        "test normal should exceed walk limit"
+    );
 }
 
 #[test]

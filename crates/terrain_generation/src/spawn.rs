@@ -35,7 +35,8 @@ impl RecipeDensitySource {
             ..Default::default()
         };
 
-        if let Some((x, y, z, local)) = self.find_valid_spawn_near(world_x, world_z, min_clearance, 0.0)
+        if let Some((x, y, z, local)) =
+            self.find_valid_spawn_near(world_x, world_z, min_clearance, 0.0)
         {
             report.passed = true;
             report.foot_x = x;
@@ -221,8 +222,12 @@ impl RecipeDensitySource {
             0.25,
         )?;
         let center_y = floor + half_height;
-        if self.is_aabb_fully_embedded_in_terrain(world_x, center_y, world_z, [0.5, half_height, 0.5])
-        {
+        if self.is_aabb_fully_embedded_in_terrain(
+            world_x,
+            center_y,
+            world_z,
+            [0.5, half_height, 0.5],
+        ) {
             return None;
         }
         Some(center_y)
@@ -242,7 +247,7 @@ fn ring_samples(cx: f32, cz: f32, radius: f32, step: f32) -> Vec<(f32, f32)> {
 
 #[cfg(test)]
 mod spawn_tests {
-    use crate::{default_vertical_slice_recipe, RecipeDensitySource};
+    use crate::{RecipeDensitySource, default_vertical_slice_recipe};
 
     #[test]
     fn embedded_probe_is_detected() {
@@ -250,17 +255,7 @@ mod spawn_tests {
         let wx = source.recipe().spawn_x - source.recipe().coord_offset[0];
         let wz = source.recipe().spawn_z - source.recipe().coord_offset[2];
         let floor = source.terrain_surface_height_at(wx, wz);
-        assert!(!source.is_aabb_fully_embedded_in_terrain(
-            wx,
-            floor + 1.0,
-            wz,
-            [0.45, 0.45, 0.45]
-        ));
-        assert!(source.is_aabb_fully_embedded_in_terrain(
-            wx,
-            floor - 3.0,
-            wz,
-            [0.45, 0.45, 0.45]
-        ));
+        assert!(!source.is_aabb_fully_embedded_in_terrain(wx, floor + 1.0, wz, [0.45, 0.45, 0.45]));
+        assert!(source.is_aabb_fully_embedded_in_terrain(wx, floor - 3.0, wz, [0.45, 0.45, 0.45]));
     }
 }

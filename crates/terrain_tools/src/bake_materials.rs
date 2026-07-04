@@ -2,22 +2,21 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use procedural_textures::{
-    build_cpu_arrays, document_fingerprint, ProceduralMaterialsDocument,
-};
+use procedural_textures::{ProceduralMaterialsDocument, build_cpu_arrays, document_fingerprint};
+use terrain_material_bevy::cache_path_for;
 
 #[derive(Parser, Debug)]
 #[command(name = "bake-materials")]
 struct Args {
-    #[arg(short, long, default_value = "assets/procedural/terrain/procedural_island.yaml")]
+    #[arg(
+        short,
+        long,
+        default_value = "assets/procedural/terrain/procedural_island.yaml"
+    )]
     input: PathBuf,
 
     #[arg(short, long)]
     output: Option<PathBuf>,
-}
-
-fn cache_path_for(fingerprint: [u8; 32]) -> PathBuf {
-    PathBuf::from("target/terrain_material_cache").join(format!("{}.bin", hex::encode(fingerprint)))
 }
 
 fn main() {

@@ -37,14 +37,8 @@ pub fn build_island_mask(params: &IslandGenParams, wx: f32, wz: f32, noise: &Val
     let lobes = params.island.lobe_count.max(1);
     for i in 0..lobes {
         let angle = (i as f32 / lobes as f32) * std::f32::consts::TAU;
-        let offset = [
-            angle.cos() * radius * 0.18,
-            angle.sin() * radius * 0.18,
-        ];
-        let center = [
-            params.center[0] + offset[0],
-            params.center[1] + offset[1],
-        ];
+        let offset = [angle.cos() * radius * 0.18, angle.sin() * radius * 0.18];
+        let center = [params.center[0] + offset[0], params.center[1] + offset[1]];
         let radii = [
             radius * (0.85 + 0.1 * (i as f32 * 0.7).sin()),
             radius * (0.75 + 0.12 * (i as f32 * 1.1).cos()),

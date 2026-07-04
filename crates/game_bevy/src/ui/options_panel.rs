@@ -1,16 +1,19 @@
 // crates/game_bevy/src/ui/options_panel.rs
 use bevy::prelude::*;
-use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
+use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 
 use crate::data::ConfigRegistryResource;
-use crate::environment::celestial::CelestialState;
-use crate::environment::lighting_state::EnvironmentLightingState;
 use crate::environment::SimulationTime;
+use crate::environment::celestial::CelestialState;
+use crate::environment::lighting_state::{
+    EnvironmentLightingState, environment_intensity_with_clouds,
+};
 use crate::state::AppState;
 
 use super::tweaks::{
-    AtmosphereTweaks, CameraTweaks, EcologyTweaks, LightingTweaks, MovementTweaks,
-    PhysicsTweaks, RiverTweaks, TerrainMaterialTweaks, TerrainTweaks, WaterPhysicsTweaks, WaterTweaks, WorldTweaks,
+    AtmosphereTweaks, CameraTweaks, EcologyTweaks, LightingTweaks, MovementTweaks, PhysicsTweaks,
+    RiverTweaks, TerrainMaterialTweaks, TerrainTweaks, WaterPhysicsTweaks, WaterTweaks,
+    WorldTweaks,
 };
 
 #[derive(Resource, Clone, Debug)]
@@ -70,10 +73,7 @@ impl Plugin for OptionsPanelPlugin {
             .init_resource::<CameraTweaks>()
             .init_resource::<WaterPhysicsTweaks>()
             .init_resource::<EcologyTweaks>()
-            .add_systems(
-                OnEnter(AppState::MainMenu),
-                init_options_from_registry,
-            )
+            .add_systems(OnEnter(AppState::MainMenu), init_options_from_registry)
             .add_systems(OnEnter(AppState::Running), init_options_from_registry)
             .add_systems(
                 Update,
@@ -82,9 +82,8 @@ impl Plugin for OptionsPanelPlugin {
             )
             .add_systems(
                 EguiPrimaryContextPass,
-                draw_options_panel.run_if(
-                    in_state(AppState::MainMenu).or_else(in_state(AppState::Running)),
-                ),
+                draw_options_panel
+                    .run_if(in_state(AppState::MainMenu).or_else(in_state(AppState::Running))),
             );
     }
 }
@@ -111,31 +110,19 @@ fn init_options_from_registry(
         });
     }
     if let Ok(player) = registry.0.active_player() {
-        movement.walk_speed = player.walk_speed_mps;
-        movement.run_speed = player.run_speed_mps;
-        movement.acceleration = player.acceleration_mps2;
-        movement.deceleration = player.deceleration_mps2;
-        movement.jump_buffer_s = player.jump_buffer_s;
-        movement.coyote_time_s = player.coyote_time_s;
-        movement.max_slope_deg = player.maximum_walkable_slope_deg;
+        movement.apply_authored_player(player);
     }
     if let Ok(physics_def) = registry.0.active_physics() {
-        physics.gravity = physics_def.gravity_mps2;
+        physics.apply_authored_physics(physics_def);
     }
     if let Ok(water_def) = registry.0.active_water() {
-        water.sea_level_m = water_def.sea_level_m;
-        water.shallow_color = water_def.shallow_color;
-        water.deep_color = water_def.deep_color;
+        water.apply_authored_water(water_def);
     }
     if let Ok(camera_def) = registry.0.active_camera() {
-        camera.orbit_distance = camera_def.distance_default_m;
-        camera.collision_inward_sharpness = camera_def.collision_inward_sharpness;
-        camera.collision_outward_sharpness = camera_def.collision_outward_sharpness;
+        camera.apply_authored_camera(camera_def);
     }
     if let Some(fog) = registry.0.active_fog() {
-        lighting.fog_color = fog.distance_color;
-        lighting.fog_start_m = fog.distance_start_m;
-        lighting.fog_end_m = fog.distance_end_m;
+        lighting.apply_authored_defaults(fog);
     }
 }
 
@@ -185,8 +172,8 @@ fn draw_options_panel(
     mut water_physics: ResMut<WaterPhysicsTweaks>,
     mut ecology: ResMut<EcologyTweaks>,
     mut sim_time: ResMut<SimulationTime>,
+    mut lighting_state: ResMut<EnvironmentLightingState>,
     celestial: Option<Res<CelestialState>>,
-    lighting_state: Option<Res<EnvironmentLightingState>>,
 ) {
     if !panel.open {
         return;
@@ -211,21 +198,20 @@ fn draw_options_panel(
             ui.separator();
 
             match panel.tab {
-                OptionsTab::Atmosphere => draw_atmosphere_tab(ui, &mut lighting, &mut atmosphere),
+                OptionsTab::Atmosphere => {
+                    draw_atmosphere_tab(ui, &mut lighting, &mut atmosphere, &mut lighting_state)
+                }
                 OptionsTab::World => draw_world_tab(ui, &mut world, &mut terrain),
                 OptionsTab::Movement => draw_movement_tab(ui, &mut movement),
                 OptionsTab::Physics => draw_physics_tab(ui, &mut physics),
-                OptionsTab::Water => {
-                    draw_water_tab(ui, &mut water, &mut river, &mut water_physics)
-                }
+                OptionsTab::Water => draw_water_tab(ui, &mut water, &mut river, &mut water_physics),
                 OptionsTab::Debug => draw_debug_tab(
                     ui,
                     &mut camera,
-                    &mut atmosphere,
                     &mut ecology,
                     &mut sim_time,
+                    &mut lighting_state,
                     celestial.as_deref(),
-                    lighting_state.as_deref(),
                 ),
             }
 
@@ -250,6 +236,7 @@ fn draw_atmosphere_tab(
     ui: &mut egui::Ui,
     lighting: &mut LightingTweaks,
     atmosphere: &mut AtmosphereTweaks,
+    lighting_state: &mut EnvironmentLightingState,
 ) {
     ui.heading("Fog (live)");
     ui.label("Adjust distance fog color and range in real time.");
@@ -270,17 +257,20 @@ fn draw_atmosphere_tab(
 
     ui.separator();
     ui.heading("Sun");
-    ui.checkbox(&mut atmosphere.use_overrides, "Override YAML sun angles");
-    ui.add_enabled(
-        atmosphere.use_overrides,
-        egui::Slider::new(&mut atmosphere.sun_azimuth_deg, 0.0..=360.0).text("azimuth"),
+    ui.checkbox(
+        &mut lighting_state.override_sun_angles,
+        "Override YAML sun angles",
     );
     ui.add_enabled(
-        atmosphere.use_overrides,
-        egui::Slider::new(&mut atmosphere.sun_elevation_deg, -10.0..=85.0).text("elevation"),
+        lighting_state.override_sun_angles,
+        egui::Slider::new(&mut lighting_state.override_sun_azimuth_deg, 0.0..=360.0).text("azimuth"),
     );
     ui.add_enabled(
-        atmosphere.use_overrides,
+        lighting_state.override_sun_angles,
+        egui::Slider::new(&mut lighting_state.override_sun_elevation_deg, -10.0..=85.0)
+            .text("elevation"),
+    );
+    ui.add(
         egui::Slider::new(&mut atmosphere.height_fog_density, 0.0..=0.1).text("height fog"),
     );
 }
@@ -293,8 +283,14 @@ fn draw_world_tab(ui: &mut egui::Ui, world: &mut WorldTweaks, terrain: &mut Terr
     ui.add(egui::Slider::new(&mut world.density_radius, 2..=12).text("density radius"));
     ui.add(egui::Slider::new(&mut world.render_radius, 2..=10).text("render radius"));
     ui.add(egui::Slider::new(&mut world.physics_radius, 2..=8).text("physics radius"));
-    ui.checkbox(&mut world.show_residency_rings, "Show residency rings (Ctrl+F7)");
-    ui.checkbox(&mut world.show_semantic_landmarks, "Show semantic landmarks");
+    ui.checkbox(
+        &mut world.show_residency_rings,
+        "Show residency rings (Ctrl+F7)",
+    );
+    ui.checkbox(
+        &mut world.show_semantic_landmarks,
+        "Show semantic landmarks",
+    );
 
     ui.separator();
     ui.heading("Terrain fields");
@@ -376,20 +372,17 @@ fn draw_water_tab(
 
     ui.separator();
     ui.heading("Water physics");
-    ui.add(
-        egui::Slider::new(&mut water_physics.buoyancy_strength, 0.0..=3.0).text("buoyancy"),
-    );
+    ui.add(egui::Slider::new(&mut water_physics.buoyancy_strength, 0.0..=3.0).text("buoyancy"));
     ui.add(
         egui::Slider::new(&mut water_physics.flow_multiplier, 0.0..=3.0).text("flow multiplier"),
     );
-    ui.add(
-        egui::Slider::new(&mut water_physics.shallow_depth_m, 0.5..=3.0).text("shallow depth"),
-    );
+    ui.add(egui::Slider::new(&mut water_physics.shallow_depth_m, 0.5..=3.0).text("shallow depth"));
     ui.add(
         egui::Slider::new(&mut water_physics.swim_up_speed_mps, 0.5..=6.0).text("swim up speed"),
     );
     ui.add(
-        egui::Slider::new(&mut water_physics.shallow_speed_scale, 0.1..=1.0).text("shallow speed scale"),
+        egui::Slider::new(&mut water_physics.shallow_speed_scale, 0.1..=1.0)
+            .text("shallow speed scale"),
     );
     ui.add(
         egui::Slider::new(&mut water_physics.submerged_sink_cap_mps, 0.5..=4.0)
@@ -404,11 +397,10 @@ fn draw_water_tab(
 fn draw_debug_tab(
     ui: &mut egui::Ui,
     camera: &mut CameraTweaks,
-    atmosphere: &mut AtmosphereTweaks,
     ecology: &mut EcologyTweaks,
     sim_time: &mut SimulationTime,
+    lighting_state: &mut EnvironmentLightingState,
     celestial: Option<&CelestialState>,
-    lighting_state: Option<&EnvironmentLightingState>,
 ) {
     ui.heading("Day / night cycle");
     ui.checkbox(&mut sim_time.auto_advance, "Auto-advance time");
@@ -418,58 +410,69 @@ fn draw_debug_tab(
     );
     ui.add(egui::Slider::new(&mut sim_time.time_scale, 0.0..=8.0).text("time scale"));
     if !sim_time.auto_advance {
-        ui.add(
-            egui::Slider::new(&mut sim_time.time_of_day_hours, 0.0..=24.0).text("manual hours"),
-        );
-        atmosphere.time_of_day_hours = sim_time.time_of_day_hours;
+        ui.add(egui::Slider::new(&mut sim_time.time_of_day_hours, 0.0..=24.0).text("manual hours"));
     }
 
     ui.heading("Time of day");
     ui.checkbox(
-        &mut atmosphere.drive_sun_from_time_of_day,
+        &mut lighting_state.drive_sun_from_time_of_day,
         "Drive sun & sky from clock",
     );
     ui.add_enabled(
-        atmosphere.drive_sun_from_time_of_day,
-        egui::Slider::new(&mut atmosphere.time_of_day_hours, 0.0..=24.0)
+        lighting_state.drive_sun_from_time_of_day && !sim_time.auto_advance,
+        egui::Slider::new(&mut sim_time.time_of_day_hours, 0.0..=24.0)
             .text("hours (0/24=night, 6=dawn, 12=noon, 18=dusk)"),
     );
-    if atmosphere.drive_sun_from_time_of_day {
-        let (azimuth, elevation) =
-            super::tweaks::sun_angles_from_time_of_day(atmosphere.time_of_day_hours);
-        atmosphere.sun_azimuth_deg = azimuth;
-        atmosphere.sun_elevation_deg = elevation;
-    }
+    let (sun_azimuth, sun_elevation) = if let Some(celestial) = celestial {
+        (celestial.sun_azimuth_deg, celestial.sun_elevation_deg)
+    } else if lighting_state.drive_sun_from_time_of_day {
+        super::tweaks::sun_angles_from_time_of_day(sim_time.time_of_day_hours)
+    } else if lighting_state.override_sun_angles {
+        (
+            lighting_state.override_sun_azimuth_deg,
+            lighting_state.override_sun_elevation_deg,
+        )
+    } else {
+        (
+            lighting_state.authored_sun_azimuth_deg,
+            lighting_state.authored_sun_elevation_deg,
+        )
+    };
     ui.label(format!(
         "Sun azimuth {:.0}°, elevation {:.0}°",
-        atmosphere.sun_azimuth_deg, atmosphere.sun_elevation_deg
+        sun_azimuth, sun_elevation
     ));
 
     if let Some(celestial) = celestial {
+        let env_map_intensity = environment_intensity_with_clouds(
+            celestial.environment_intensity,
+            celestial.cloud_cover,
+        );
         ui.label(format!(
             "Target EV100 {:.2} · env-map {:.2}",
-            celestial.exposure_ev100, celestial.environment_intensity
+            celestial.exposure_ev100, env_map_intensity
         ));
-        if let Some(state) = lighting_state {
-            ui.label(format!("Applied EV100 {:.2}", state.current_exposure));
-        }
+        ui.label(format!(
+            "Applied EV100 {:.2}",
+            lighting_state.current_exposure
+        ));
     }
 
     ui.add_enabled(
-        atmosphere.drive_sun_from_time_of_day,
-        egui::Slider::new(&mut atmosphere.exposure_ev_min, 7.0..=12.0).text("exposure EV min"),
+        lighting_state.drive_sun_from_time_of_day,
+        egui::Slider::new(&mut lighting_state.exposure_ev_min, 7.0..=12.0).text("exposure EV min"),
     );
     ui.add_enabled(
-        atmosphere.drive_sun_from_time_of_day,
-        egui::Slider::new(&mut atmosphere.exposure_ev_max, 12.0..=16.0).text("exposure EV max"),
+        lighting_state.drive_sun_from_time_of_day,
+        egui::Slider::new(&mut lighting_state.exposure_ev_max, 12.0..=16.0).text("exposure EV max"),
     );
     ui.add_enabled(
-        atmosphere.drive_sun_from_time_of_day,
-        egui::Slider::new(&mut atmosphere.exposure_bias, -1.0..=1.0).text("exposure bias"),
+        lighting_state.drive_sun_from_time_of_day,
+        egui::Slider::new(&mut lighting_state.exposure_bias, -1.0..=1.0).text("exposure bias"),
     );
     ui.add_enabled(
-        atmosphere.drive_sun_from_time_of_day,
-        egui::Slider::new(&mut atmosphere.environment_intensity_scale, 0.5..=1.5)
+        lighting_state.drive_sun_from_time_of_day,
+        egui::Slider::new(&mut lighting_state.environment_intensity_scale, 0.5..=1.5)
             .text("env-map scale"),
     );
     ui.label("Scrub the clock to preview day/night lighting balance.");

@@ -176,7 +176,11 @@ pub struct CompiledWorldLod {
 impl From<&WorldLodDefinition> for CompiledWorldLod {
     fn from(def: &WorldLodDefinition) -> Self {
         Self {
-            terrain: def.terrain.iter().map(CompiledTerrainLodTier::from).collect(),
+            terrain: def
+                .terrain
+                .iter()
+                .map(CompiledTerrainLodTier::from)
+                .collect(),
             materials: CompiledMaterialLod::from(&def.materials),
             content: CompiledContentLod::from(&def.content),
             distant: CompiledDistantLod::from(&def.distant),
@@ -506,8 +510,7 @@ impl From<&WaterDefinition> for CompiledWater {
 
 impl From<&WorldDefinition> for CompiledWorld {
     fn from(def: &WorldDefinition) -> Self {
-        Self::try_from_definition(def)
-            .expect("world definition must be validated before compile")
+        Self::try_from_definition(def).expect("world definition must be validated before compile")
     }
 }
 
@@ -516,8 +519,9 @@ impl CompiledWorld {
         if (def.voxel.cell_size_m - 1.0).abs() > f32::EPSILON {
             return Err(DataError::InvalidValue {
                 context: format!("world `{}`", def.header.id),
-                message: "voxel.cell_size_m must be 1.0 until sub-meter voxel indexing is supported"
-                    .to_string(),
+                message:
+                    "voxel.cell_size_m must be 1.0 until sub-meter voxel indexing is supported"
+                        .to_string(),
             });
         }
         Ok(Self {
@@ -658,10 +662,7 @@ impl From<&TerrainMaterialsDefinition> for CompiledTerrainMaterials {
         let layer_order = if def.layers.is_empty() {
             let mut ordered: Vec<_> = def.materials.iter().collect();
             ordered.sort_by_key(|m| m.resolved_legacy_id());
-            ordered
-                .into_iter()
-                .map(|m| m.resolved_key())
-                .collect()
+            ordered.into_iter().map(|m| m.resolved_key()).collect()
         } else {
             def.layers.clone()
         };
@@ -790,7 +791,9 @@ impl CompiledIslandGeneration {
             "volcano.collapse_depth_m" => self.volcano.collapse_depth_m = value,
             "surface_noise.regional_amplitude_m" => self.surface_noise.regional_amplitude_m = value,
             "hydrology.stream_threshold" => self.hydrology.stream_threshold = value,
-            "hydrology.permanent_river_threshold" => self.hydrology.permanent_river_threshold = value,
+            "hydrology.permanent_river_threshold" => {
+                self.hydrology.permanent_river_threshold = value
+            }
             "erosion.stream_power_iterations" => {
                 self.erosion.stream_power_iterations = value.round().max(0.0) as u32
             }

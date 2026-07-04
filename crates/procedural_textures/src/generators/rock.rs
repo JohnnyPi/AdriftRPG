@@ -1,6 +1,6 @@
 // crates/procedural_textures/src/generators/rock.rs
 use crate::error::TextureGenerationError;
-use crate::maps::{encode_height_u8, linear_to_srgb_u8, pack_ormh, GeneratedPbrMaps};
+use crate::maps::{GeneratedPbrMaps, encode_height_u8, linear_to_srgb_u8, pack_ormh};
 use crate::noise::SeamlessNoise;
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -131,12 +131,8 @@ pub(crate) fn build_maps_from_height(
         .iter()
         .fold((f32::MAX, f32::MIN), |(mn, mx), v| (mn.min(*v), mx.max(*v)));
 
-    let normal = crate::normal::normals_from_height_field(
-        width,
-        height,
-        height_field,
-        normal_strength,
-    );
+    let normal =
+        crate::normal::normals_from_height_field(width, height, height_field, normal_strength);
     let height_u8 = encode_height_u8(height_field, min_h, max_h);
     let roughness_u8 = vec![(roughness.clamp(0.0, 1.0) * 255.0).round() as u8; count];
     let metallic_u8 = vec![(metallic.clamp(0.0, 1.0) * 255.0).round() as u8; count];

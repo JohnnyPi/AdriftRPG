@@ -3,7 +3,7 @@ use avian3d::math::AdjustPrecision;
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
-use crate::collision::{terrain_ground_filter, CharacterCollisionQuery};
+use crate::collision::{CharacterCollisionQuery, terrain_ground_filter};
 
 #[derive(Component, Debug, Default)]
 pub struct GroundedState {
@@ -88,7 +88,13 @@ impl Plugin for CharacterControllerPlugin {
 
 fn probe_ground(
     spatial: SpatialQuery,
-    mut query: Query<(Entity, &Transform, &CharacterController, &Collider, &mut GroundedState)>,
+    mut query: Query<(
+        Entity,
+        &Transform,
+        &CharacterController,
+        &Collider,
+        &mut GroundedState,
+    )>,
 ) {
     for (entity, transform, controller, collider, mut grounded) in &mut query {
         let max_distance = controller.ground_snap_m + controller.step_height + 0.15;

@@ -32,12 +32,7 @@ pub fn pack_ormh(ao: &[u8], roughness: &[u8], metallic: &[u8], height: &[u8]) ->
 
     let mut output = Vec::with_capacity(count * 4);
     for index in 0..count {
-        output.extend_from_slice(&[
-            ao[index],
-            roughness[index],
-            metallic[index],
-            height[index],
-        ]);
+        output.extend_from_slice(&[ao[index], roughness[index], metallic[index], height[index]]);
     }
     output
 }

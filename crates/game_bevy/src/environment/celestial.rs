@@ -1,11 +1,24 @@
 //! Shared celestial state driving sun, moon, fog, and exposure (SkyLightingGuide §1).
 
 use bevy::prelude::*;
+use shared::lerp_rgb;
 
 use super::lighting_state::sun_direction_from_angles;
-use super::sky_config::{night_mix_from_elevation, SkyPresentationConfig};
+use super::sky_config::{SkyPresentationConfig, night_mix_from_elevation};
 use crate::state::AppState;
-use crate::ui::AtmosphereTweaks;
+
+/// Moon presentation tracks the sun (opposite azimuth, mirrored elevation).
+pub fn moon_angles_from_sun(sun_azimuth_deg: f32, sun_elevation_deg: f32) -> (f32, f32) {
+    (
+        (sun_azimuth_deg + 180.0).rem_euclid(360.0),
+        (-sun_elevation_deg).clamp(-45.0, 45.0),
+    )
+}
+
+pub fn moon_direction_from_sun(sun_azimuth_deg: f32, sun_elevation_deg: f32) -> Vec3 {
+    let (azimuth, elevation) = moon_angles_from_sun(sun_azimuth_deg, sun_elevation_deg);
+    sun_direction_from_angles(azimuth, elevation)
+}
 
 #[derive(Resource, Clone, Debug)]
 pub struct CelestialState {
@@ -24,7 +37,7 @@ pub struct CelestialState {
     pub cloud_cover: f32,
     /// Target exposure in EV100 for the main camera.
     pub exposure_ev100: f32,
-    /// Atmosphere environment-map intensity for the current frame.
+    /// Elevation-based env-map intensity (cloud attenuation applied in sync).
     pub environment_intensity: f32,
     /// Fog inscattering tint blended at twilight.
     pub fog_inscattering: [f32; 3],
@@ -34,15 +47,16 @@ pub struct CelestialState {
 impl Default for CelestialState {
     fn default() -> Self {
         let (azimuth, elevation) = crate::ui::sun_angles_from_time_of_day(10.0);
+        let (moon_azimuth, moon_elevation) = moon_angles_from_sun(azimuth, elevation);
         Self {
             time_of_day_hours: 10.0,
             sun_azimuth_deg: azimuth,
             sun_elevation_deg: elevation,
             sun_direction: sun_direction_from_angles(azimuth, elevation),
             sun_color: [1.0, 0.97, 0.92],
-            moon_azimuth_deg: 315.0,
-            moon_elevation_deg: 35.0,
-            moon_direction: sun_direction_from_angles(315.0, 35.0),
+            moon_azimuth_deg: moon_azimuth,
+            moon_elevation_deg: moon_elevation,
+            moon_direction: sun_direction_from_angles(moon_azimuth, moon_elevation),
             moon_phase: 1.0,
             moon_enabled: false,
             moon_illuminance: 2.0,
@@ -52,6 +66,35 @@ impl Default for CelestialState {
             fog_inscattering: [0.72, 0.78, 0.88],
             fog_extinction: [0.58, 0.68, 0.76],
         }
+    }
+}
+
+impl CelestialState {
+    /// Bootstrap sun/moon presentation from compiled atmosphere on world enter.
+    pub fn apply_authored_atmosphere(&mut self, atmo: &game_data::CompiledAtmosphere) {
+        self.sun_azimuth_deg = atmo.sun_azimuth_deg;
+        self.sun_elevation_deg = atmo.sun_elevation_deg;
+        let (moon_azimuth, moon_elevation) =
+            moon_angles_from_sun(atmo.sun_azimuth_deg, atmo.sun_elevation_deg);
+        self.moon_azimuth_deg = moon_azimuth;
+        self.moon_elevation_deg = moon_elevation;
+        self.moon_phase = atmo.moon_phase;
+        self.moon_enabled = atmo.moon_enabled;
+        self.moon_illuminance = atmo.moon_illuminance;
+        self.moon_direction = moon_direction_from_sun(atmo.sun_azimuth_deg, atmo.sun_elevation_deg);
+        self.sun_direction =
+            sun_direction_from_angles(atmo.sun_azimuth_deg, atmo.sun_elevation_deg);
+        self.sun_color = crate::ui::sun_color_for_elevation(atmo.sun_elevation_deg);
+        self.exposure_ev100 = crate::ui::exposure_ev_for_elevation(
+            atmo.sun_elevation_deg,
+            atmo.exposure_ev_min,
+            atmo.exposure_ev_max,
+            atmo.exposure_bias,
+        );
+        self.environment_intensity = crate::ui::environment_intensity_for_elevation(
+            atmo.sun_elevation_deg,
+            atmo.environment_intensity_scale,
+        );
     }
 }
 
@@ -66,7 +109,10 @@ pub struct CelestialPlugin;
 impl Plugin for CelestialPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CelestialState>()
-            .configure_sets(Update, UpdateCelestialSet.before(super::lighting_state::SyncEnvironmentLightingSet))
+            .configure_sets(
+                Update,
+                UpdateCelestialSet.before(super::lighting_state::SyncEnvironmentLightingSet),
+            )
             .add_systems(
                 Update,
                 update_celestial_state
@@ -78,53 +124,32 @@ impl Plugin for CelestialPlugin {
 
 fn update_celestial_state(
     mut celestial: ResMut<CelestialState>,
-    tweaks: Res<AtmosphereTweaks>,
+    sim: Res<super::simulation_time::SimulationTime>,
     sky: Res<SkyPresentationConfig>,
     lighting: Res<super::lighting_state::EnvironmentLightingState>,
 ) {
-    let mut azimuth = lighting.sun_azimuth_deg;
-    let mut elevation = lighting.sun_elevation_deg;
-    let mut time_hours = tweaks.time_of_day_hours;
+    celestial.time_of_day_hours = sim.time_of_day_hours;
 
-    if tweaks.drive_sun_from_time_of_day {
-        let (az, el) = crate::ui::sun_angles_from_time_of_day(tweaks.time_of_day_hours);
+    let mut azimuth = lighting.authored_sun_azimuth_deg;
+    let mut elevation = lighting.authored_sun_elevation_deg;
+
+    if lighting.drive_sun_from_time_of_day {
+        let (az, el) = crate::ui::sun_angles_from_time_of_day(sim.time_of_day_hours);
         azimuth = az;
         elevation = el;
-        time_hours = tweaks.time_of_day_hours;
-    } else if tweaks.use_overrides {
-        azimuth = tweaks.sun_azimuth_deg;
-        elevation = tweaks.sun_elevation_deg;
+    } else if lighting.override_sun_angles {
+        azimuth = lighting.override_sun_azimuth_deg;
+        elevation = lighting.override_sun_elevation_deg;
     }
-
-    celestial.time_of_day_hours = time_hours;
     celestial.sun_azimuth_deg = azimuth;
     celestial.sun_elevation_deg = elevation;
     celestial.sun_direction = sun_direction_from_angles(azimuth, elevation);
     celestial.sun_color = crate::ui::sun_color_for_elevation(elevation);
 
-    let exposure_ev_min = if tweaks.use_overrides || tweaks.drive_sun_from_time_of_day {
-        tweaks.exposure_ev_min
-    } else {
-        lighting.exposure_ev_min
-    };
-    let exposure_ev_max = if tweaks.use_overrides || tweaks.drive_sun_from_time_of_day {
-        tweaks.exposure_ev_max
-    } else {
-        lighting.exposure_ev_max
-    };
-    let exposure_bias = if tweaks.use_overrides || tweaks.drive_sun_from_time_of_day {
-        tweaks.exposure_bias
-    } else {
-        lighting.exposure_bias
-    };
-
-    let env_scale = if tweaks.use_overrides || tweaks.drive_sun_from_time_of_day {
-        tweaks.environment_intensity_scale
-    } else {
-        lighting.environment_intensity_scale
-    };
-    celestial.environment_intensity =
-        crate::ui::environment_intensity_for_elevation(elevation, env_scale);
+    celestial.environment_intensity = crate::ui::environment_intensity_for_elevation(
+        elevation,
+        lighting.environment_intensity_scale,
+    );
 
     celestial.cloud_cover = if sky.clouds_enabled {
         sky.clouds_opacity
@@ -134,15 +159,15 @@ fn update_celestial_state(
 
     celestial.exposure_ev100 = crate::ui::exposure_ev_for_elevation(
         elevation,
-        exposure_ev_min,
-        exposure_ev_max,
-        exposure_bias,
+        lighting.exposure_ev_min,
+        lighting.exposure_ev_max,
+        lighting.exposure_bias,
     ) - 1.5 * celestial.cloud_cover;
 
-    celestial.moon_azimuth_deg = (azimuth + 180.0).rem_euclid(360.0);
-    celestial.moon_elevation_deg = (-elevation).clamp(-45.0, 45.0);
-    celestial.moon_direction =
-        sun_direction_from_angles(celestial.moon_azimuth_deg, celestial.moon_elevation_deg);
+    let (moon_azimuth, moon_elevation) = moon_angles_from_sun(azimuth, elevation);
+    celestial.moon_azimuth_deg = moon_azimuth;
+    celestial.moon_elevation_deg = moon_elevation;
+    celestial.moon_direction = moon_direction_from_sun(azimuth, elevation);
     celestial.moon_enabled = lighting.moon_enabled && elevation < -2.0;
     celestial.moon_illuminance = if celestial.moon_enabled {
         lighting.moon_illuminance
@@ -159,15 +184,26 @@ fn update_celestial_state(
     );
 }
 
-fn lerp_rgb(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
-    let t = t.clamp(0.0, 1.0);
-    [
-        a[0] * (1.0 - t) + b[0] * t,
-        a[1] * (1.0 - t) + b[1] * t,
-        a[2] * (1.0 - t) + b[2] * t,
-    ]
-}
-
 fn scale_rgb(c: [f32; 3], s: f32) -> [f32; 3] {
     [c[0] * s, c[1] * s, c[2] * s]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn moon_angles_track_sun_opposite() {
+        let (az, el) = moon_angles_from_sun(90.0, 30.0);
+        assert!((az - 270.0).abs() < 1e-3);
+        assert!((el - (-30.0)).abs() < 1e-3);
+    }
+
+    #[test]
+    fn moon_direction_matches_angles() {
+        let dir = moon_direction_from_sun(0.0, 45.0);
+        let (az, el) = moon_angles_from_sun(0.0, 45.0);
+        let expected = sun_direction_from_angles(az, el);
+        assert!((dir - expected).length() < 1e-5);
+    }
 }

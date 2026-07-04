@@ -1,22 +1,7 @@
 // crates/procedural_textures/src/curves.rs
 //! Shared curve and ramp utilities for texture graphs and classifiers.
 
-pub fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
-    if (edge1 - edge0).abs() < f32::EPSILON {
-        return if x >= edge1 { 1.0 } else { 0.0 };
-    }
-    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
-}
-
-pub fn remap(value: f32, from_min: f32, from_max: f32, to_min: f32, to_max: f32) -> f32 {
-    let t = if (from_max - from_min).abs() < f32::EPSILON {
-        0.0
-    } else {
-        ((value - from_min) / (from_max - from_min)).clamp(0.0, 1.0)
-    };
-    to_min + t * (to_max - to_min)
-}
+pub use shared::math::{remap, smoothstep};
 
 #[derive(Clone, Debug)]
 pub struct ColorStop {

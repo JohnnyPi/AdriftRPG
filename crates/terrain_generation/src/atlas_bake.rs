@@ -116,10 +116,16 @@ impl std::fmt::Display for AtlasBakeError {
             Self::Io(e) => write!(f, "{e}"),
             Self::Parse(msg) => write!(f, "{msg}"),
             Self::SchemaMismatch { expected, found } => {
-                write!(f, "atlas schema version mismatch: expected {expected}, found {found}")
+                write!(
+                    f,
+                    "atlas schema version mismatch: expected {expected}, found {found}"
+                )
             }
             Self::WorldMismatch { expected, found } => {
-                write!(f, "atlas world mismatch: expected {expected}, found {found}")
+                write!(
+                    f,
+                    "atlas world mismatch: expected {expected}, found {found}"
+                )
             }
             Self::SeedMismatch { expected, found } => {
                 write!(f, "atlas seed mismatch: expected {expected}, found {found}")
@@ -162,7 +168,13 @@ fn f32_bytes(field: &Field2D<f32>) -> Vec<u8> {
 fn biome_bytes(field: &Field2D<BiomeWeights>) -> Vec<u8> {
     let mut out = Vec::with_capacity(field.samples.len() * 5 * 4);
     for b in &field.samples {
-        for channel in [b.rainforest, b.grassland, b.volcanic_rock, b.beach, b.wetland] {
+        for channel in [
+            b.rainforest,
+            b.grassland,
+            b.volcanic_rock,
+            b.beach,
+            b.wetland,
+        ] {
             out.extend_from_slice(&channel.to_le_bytes());
         }
     }
@@ -180,9 +192,8 @@ fn write_compressed_blob(dir: &Path, blob_name: &str, raw: &[u8]) -> io::Result<
 
 fn read_compressed_blob(dir: &Path, blob_name: &str) -> Result<Vec<u8>, AtlasBakeError> {
     let path = dir.join(blob_name);
-    let compressed = fs::read(&path).map_err(|_| {
-        AtlasBakeError::MissingField(format!("{} ({})", blob_name, path.display()))
-    })?;
+    let compressed = fs::read(&path)
+        .map_err(|_| AtlasBakeError::MissingField(format!("{} ({})", blob_name, path.display())))?;
     zstd::decode_all(&compressed[..])
         .map_err(|e| AtlasBakeError::Parse(format!("zstd decode {blob_name}: {e}")))
 }
@@ -262,7 +273,10 @@ fn write_biome_field(
     Ok(())
 }
 
-fn load_biome_field(dir: &Path, meta: &FieldTierMeta) -> Result<Field2D<BiomeWeights>, AtlasBakeError> {
+fn load_biome_field(
+    dir: &Path,
+    meta: &FieldTierMeta,
+) -> Result<Field2D<BiomeWeights>, AtlasBakeError> {
     let raw = read_compressed_blob(dir, &meta.blob)?;
     if sha256_hex(&raw) != meta.sha256 {
         return Err(AtlasBakeError::HashMismatch {
@@ -277,9 +291,8 @@ fn load_biome_field(dir: &Path, meta: &FieldTierMeta) -> Result<Field2D<BiomeWei
     }
     let mut samples = Vec::with_capacity(cell_count);
     for cell in raw.chunks_exact(5 * 4) {
-        let read_f32 = |offset: usize| {
-            f32::from_le_bytes(cell[offset..offset + 4].try_into().unwrap())
-        };
+        let read_f32 =
+            |offset: usize| f32::from_le_bytes(cell[offset..offset + 4].try_into().unwrap());
         samples.push(BiomeWeights {
             rainforest: read_f32(0),
             grassland: read_f32(4),
@@ -391,7 +404,13 @@ pub fn atlas_content_hash(atlas: &IslandAtlas) -> String {
     }
     hasher.update(b"biome_weights");
     for b in &atlas.biome_weights.samples {
-        for channel in [b.rainforest, b.grassland, b.volcanic_rock, b.beach, b.wetland] {
+        for channel in [
+            b.rainforest,
+            b.grassland,
+            b.volcanic_rock,
+            b.beach,
+            b.wetland,
+        ] {
             hasher.update(channel.to_le_bytes());
         }
     }
@@ -456,7 +475,8 @@ pub fn write_baked_atlas(
         has_river_graph,
     };
 
-    let yaml = serde_yaml::to_string(&manifest).map_err(|e| AtlasBakeError::Parse(e.to_string()))?;
+    let yaml =
+        serde_yaml::to_string(&manifest).map_err(|e| AtlasBakeError::Parse(e.to_string()))?;
     fs::write(dir.join(MANIFEST_FILENAME), yaml)?;
     Ok(manifest)
 }

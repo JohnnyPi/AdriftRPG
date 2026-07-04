@@ -1,7 +1,7 @@
 // crates/procedural_textures/src/material_recipe.rs
 use serde::{Deserialize, Serialize};
 
-use crate::recipe::{texture_recipe_from_yaml_value, TextureRecipe};
+use crate::recipe::{TextureRecipe, texture_recipe_from_yaml_value};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "PascalCase")]
@@ -254,9 +254,7 @@ pub fn default_island_recipes() -> Vec<TerrainMaterialRecipe> {
     ]
 }
 
-use crate::generators::{
-    CobblestoneConfig, GroundConfig, RockConfig, SandConfig,
-};
+use crate::generators::{CobblestoneConfig, GroundConfig, RockConfig, SandConfig};
 
 pub fn document_fingerprint(doc: &ProceduralMaterialsDocument) -> [u8; 32] {
     let json = serde_json::to_string(doc).unwrap_or_default();

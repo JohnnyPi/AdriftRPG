@@ -58,12 +58,7 @@ fn build_surface_nets(input: &ChunkMeshingInput<'_>) -> Result<TerrainMeshData, 
                     resolver.vertex_blend(pos, normal)
                 } else {
                     let (ids, weights) = cell_material_blend(input, x, y, z, padded);
-                    let globals = [
-                        ids[0] as u32,
-                        ids[1] as u32,
-                        ids[2] as u32,
-                        ids[3] as u32,
-                    ];
+                    let globals = [ids[0] as u32, ids[1] as u32, ids[2] as u32, ids[3] as u32];
                     terrain_surface::remap_blend_to_local_slots(
                         globals,
                         weights,
@@ -284,7 +279,16 @@ fn normalize(v: [f32; 3]) -> [f32; 3] {
     }
 }
 
-fn edge_crosses(input: &ChunkMeshingInput<'_>, ax: i32, ay: i32, az: i32, bx: i32, by: i32, bz: i32, padded: usize) -> bool {
+fn edge_crosses(
+    input: &ChunkMeshingInput<'_>,
+    ax: i32,
+    ay: i32,
+    az: i32,
+    bx: i32,
+    by: i32,
+    bz: i32,
+    padded: usize,
+) -> bool {
     let da = sample_at(input, ax, ay, az, padded);
     let db = sample_at(input, bx, by, bz, padded);
     (da <= 0.0) != (db <= 0.0)

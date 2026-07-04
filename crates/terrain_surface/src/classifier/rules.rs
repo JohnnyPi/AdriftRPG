@@ -1,10 +1,10 @@
 // crates/terrain_surface/src/classifier/rules.rs
 use std::collections::BTreeMap;
 
-use crate::blend::SurfaceMaterialBlend;
-use crate::context::{smoothstep, BiomeId, GeologyId, SurfaceContext};
-use crate::material_id::MaterialKey;
 use crate::SurfaceClassifier;
+use crate::blend::{MergeSlotPadding, SurfaceMaterialBlend, merge_weighted_blends};
+use crate::context::{BiomeId, GeologyId, SurfaceContext, smoothstep};
+use crate::material_id::MaterialKey;
 
 #[derive(Clone, Debug)]
 pub struct SurfaceBlendEntry {
@@ -138,12 +138,22 @@ impl SurfaceClassifier for RuleSurfaceClassifier {
             return SurfaceMaterialBlend::single(self.default_material.clone());
         }
 
-        merge_weighted_blends(&contributions).normalize()
+        merge_weighted_blends(
+            &contributions,
+            MergeSlotPadding::TopRanked {
+                fallback: self.default_material.clone(),
+            },
+        )
+        .normalize()
     }
 }
 
 impl RuleSurfaceClassifier {
-    fn evaluate_gate(&self, gate: &SurfaceGate, context: &SurfaceContext) -> Option<SurfaceMaterialBlend> {
+    fn evaluate_gate(
+        &self,
+        gate: &SurfaceGate,
+        context: &SurfaceContext,
+    ) -> Option<SurfaceMaterialBlend> {
         if let Some(ref classifier_id) = gate.classifier {
             Some(self.resolve_classifier(classifier_id, context))
         } else if !gate.blend.is_empty() {
@@ -166,13 +176,21 @@ impl RuleSurfaceClassifier {
                     (mix.weight, blend)
                 })
                 .collect();
-            return merge_weighted_blends(&parts);
+            return merge_weighted_blends(
+                &parts,
+                MergeSlotPadding::TopRanked {
+                    fallback: self.default_material.clone(),
+                },
+            );
         }
         blend_from_entries(&preset.blend, &self.default_material)
     }
 }
 
-fn blend_from_entries(entries: &[SurfaceBlendEntry], default: &MaterialKey) -> SurfaceMaterialBlend {
+fn blend_from_entries(
+    entries: &[SurfaceBlendEntry],
+    default: &MaterialKey,
+) -> SurfaceMaterialBlend {
     if entries.is_empty() {
         return SurfaceMaterialBlend::single(default.clone());
     }
@@ -188,39 +206,6 @@ fn blend_from_entries(entries: &[SurfaceBlendEntry], default: &MaterialKey) -> S
         weights[i] = entry.weight.max(0.0);
     }
     SurfaceMaterialBlend { materials, weights }.normalize()
-}
-
-fn merge_weighted_blends(parts: &[(f32, SurfaceMaterialBlend)]) -> SurfaceMaterialBlend {
-    let mut weights: BTreeMap<MaterialKey, f32> = BTreeMap::new();
-    for (gate, blend) in parts {
-        if *gate <= f32::EPSILON {
-            continue;
-        }
-        for i in 0..4 {
-            let w = blend.weights[i] * gate;
-            if w > 0.0 {
-                *weights.entry(blend.materials[i].clone()).or_default() += w;
-            }
-        }
-    }
-    let mut ranked: Vec<(MaterialKey, f32)> = weights.into_iter().collect();
-    ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    let default = ranked
-        .first()
-        .map(|(k, _)| k.clone())
-        .unwrap_or_else(|| MaterialKey::new("grass"));
-    let mut materials = [
-        default.clone(),
-        default.clone(),
-        default.clone(),
-        default,
-    ];
-    let mut w = [0.0; 4];
-    for (i, (mat, wt)) in ranked.into_iter().take(4).enumerate() {
-        materials[i] = mat;
-        w[i] = wt;
-    }
-    SurfaceMaterialBlend { materials, weights: w }
 }
 
 fn conditions_match(when: &SurfaceConditions, c: &SurfaceContext) -> bool {
@@ -291,7 +276,7 @@ fn conditions_match(when: &SurfaceConditions, c: &SurfaceContext) -> bool {
         let matches = match geology.as_str() {
             "Limestone" | "limestone" => c.geology == GeologyId::Limestone,
             "Basalt" | "basalt" => c.geology == GeologyId::Basalt,
-            _ => true,
+            _ => false,
         };
         if !matches {
             return false;
@@ -326,19 +311,7 @@ fn conditions_match(when: &SurfaceConditions, c: &SurfaceContext) -> bool {
 }
 
 fn biome_matches(name: &str, biome: BiomeId) -> bool {
-    matches!(
-        (name, biome),
-        ("Grassland", BiomeId::Grassland)
-            | ("Forest", BiomeId::Forest)
-            | ("Scrub", BiomeId::Scrub)
-            | ("CoastalScrub", BiomeId::CoastalScrub)
-            | ("Wetland", BiomeId::Wetland)
-            | ("Beach", BiomeId::Beach)
-            | ("Alpine", BiomeId::Alpine)
-            | ("RockyUpland", BiomeId::RockyUpland)
-            | ("Cave", BiomeId::Cave)
-            | ("Riverbank", BiomeId::Riverbank)
-    )
+    BiomeId::from_rule_id(name) == biome
 }
 
 fn evaluate_gate_weight(weights: &SurfaceGateWeights, c: &SurfaceContext) -> f32 {
@@ -375,9 +348,109 @@ fn evaluate_gate_weight(weights: &SurfaceGateWeights, c: &SurfaceContext) -> f32
 
 fn eval_ramp(value: f32, ramp: &SurfaceRamp) -> f32 {
     let t = smoothstep(ramp.from, ramp.to, value);
-    if ramp.invert {
-        1.0 - t
-    } else {
-        t
+    if ramp.invert { 1.0 - t } else { t }
+}
+
+impl SurfaceRuleSet {
+    /// Compile YAML surface rules into the runtime classifier model.
+    pub fn from_compiled(rules: &game_data::CompiledSurfaceRules) -> Self {
+        use game_data::{
+            SurfaceBlendEntryDefinition, SurfaceClassifierDefinition, SurfaceConditionsDefinition,
+            SurfaceGateDefinition, SurfaceGateWeightDefinition, SurfaceRampDefinition,
+        };
+
+        fn map_ramp(ramp: &SurfaceRampDefinition) -> SurfaceRamp {
+            SurfaceRamp {
+                from: ramp.from,
+                to: ramp.to,
+                invert: ramp.invert,
+            }
+        }
+
+        fn map_conditions(when: &SurfaceConditionsDefinition) -> SurfaceConditions {
+            SurfaceConditions {
+                cave_exposure_min: when.cave_exposure_min,
+                water_depth_min: when.water_depth_min,
+                coast_distance_max: when.coast_distance_max,
+                river_distance_max: when.river_distance_max,
+                slope_min: when.slope_min,
+                slope_max: when.slope_max,
+                elevation_min: when.elevation_min,
+                elevation_max: when.elevation_max,
+                elevation_above_sea_min: when.elevation_above_sea_min,
+                elevation_above_sea_max: when.elevation_above_sea_max,
+                moisture_min: when.moisture_min,
+                moisture_max: when.moisture_max,
+                geology: when.geology.clone(),
+                biome: when.biome.clone(),
+                soft_grassland_min: when.soft_grassland_min,
+                soft_forest_min: when.soft_forest_min,
+                soft_wetland_min: when.soft_wetland_min,
+                soft_alpine_min: when.soft_alpine_min,
+                fallback: when.fallback,
+            }
+        }
+
+        fn map_gate_weights(weights: &SurfaceGateWeightDefinition) -> SurfaceGateWeights {
+            SurfaceGateWeights {
+                coast_distance: weights.coast_distance.as_ref().map(map_ramp),
+                river_distance: weights.river_distance.as_ref().map(map_ramp),
+                slope: weights.slope.as_ref().map(map_ramp),
+                elevation_above_sea: weights.elevation_above_sea.as_ref().map(map_ramp),
+                moisture: weights.moisture.as_ref().map(map_ramp),
+                cave_exposure: weights.cave_exposure.as_ref().map(map_ramp),
+                wave_exposure: weights.wave_exposure.as_ref().map(map_ramp),
+                soft_alpine: weights.soft_alpine.as_ref().map(map_ramp),
+                soft_wetland: weights.soft_wetland.as_ref().map(map_ramp),
+                constant: weights.constant,
+            }
+        }
+
+        fn map_blend(entries: &[SurfaceBlendEntryDefinition]) -> Vec<SurfaceBlendEntry> {
+            entries
+                .iter()
+                .map(|entry| SurfaceBlendEntry {
+                    material: MaterialKey::new(entry.material.as_str()),
+                    weight: entry.weight,
+                })
+                .collect()
+        }
+
+        fn map_classifier(def: &SurfaceClassifierDefinition) -> SurfaceClassifierPreset {
+            SurfaceClassifierPreset {
+                id: def.id.clone(),
+                blend: map_blend(&def.blend),
+                weighted_mix: def
+                    .weighted_mix
+                    .iter()
+                    .map(|mix| SurfaceWeightedMix {
+                        classifier: mix.classifier.clone(),
+                        weight: mix.weight,
+                    })
+                    .collect(),
+            }
+        }
+
+        let gates = rules
+            .gates
+            .iter()
+            .map(|gate: &SurfaceGateDefinition| SurfaceGate {
+                id: gate.id.clone(),
+                when: map_conditions(&gate.when),
+                gate_weight: map_gate_weights(&gate.gate_weight),
+                exclusive: gate.exclusive,
+                blend: map_blend(&gate.blend),
+                classifier: gate.classifier.clone(),
+            })
+            .collect();
+
+        let classifiers = rules
+            .classifiers
+            .iter()
+            .map(map_classifier)
+            .map(|preset| (preset.id.clone(), preset))
+            .collect();
+
+        Self { gates, classifiers }
     }
 }

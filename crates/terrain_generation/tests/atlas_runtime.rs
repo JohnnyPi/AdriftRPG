@@ -2,14 +2,13 @@
 use game_data::load_registry_from_directory;
 use std::path::PathBuf;
 use terrain_generation::{
-    atlas_content_hash, build_atlas_density_source, build_island_atlas,
-    compile_terrain_recipe, generate_padded_samples, generate_river_spline,
-    island_params_from_compiled, iter_world_chunk_coords, load_baked_atlas,
-    resolve_baked_atlas_path, RecipeDensitySource,
-    RiverCarveContext, RiverGenConfig, WorldVolumeBounds,
+    RecipeDensitySource, RiverCarveContext, RiverGenConfig, WorldVolumeBounds, atlas_content_hash,
+    build_atlas_density_source, build_island_atlas, compile_terrain_recipe,
+    generate_padded_samples, generate_river_spline, island_params_from_compiled,
+    iter_world_chunk_coords, load_baked_atlas, resolve_baked_atlas_path,
 };
 use terrain_meshing::{ChunkMeshingInput, SurfaceNetsMesher, TerrainMesher};
-use voxel_core::{MaterialId, WorldCell, CHUNK_CELLS};
+use voxel_core::{CHUNK_CELLS, MaterialId, WorldCell};
 
 fn workspace_assets() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -31,7 +30,7 @@ fn build_authored_testbed_density_source(
 ) -> RecipeDensitySource {
     let world = registry.world_by_id(&testbed_world_id()).expect("world");
     let water = registry.water.get(&world.water).expect("water");
-    let recipe = compile_terrain_recipe(registry, world, water, Some(world.seed));
+    let recipe = compile_terrain_recipe(registry, world, water, Some(world.seed)).expect("recipe");
     let bounds = WorldVolumeBounds::from_compiled_world(world);
     let mut source = RecipeDensitySource::new(recipe.clone()).with_world_bounds(bounds);
     let river_config = RiverGenConfig {
@@ -60,7 +59,9 @@ fn build_authored_testbed_density_source(
 #[test]
 fn atlas_harness_matches_runtime_island_params() {
     let registry = load_registry_from_directory(workspace_assets()).expect("registry");
-    let world = registry.world_by_id(&island_large_world_id()).expect("world");
+    let world = registry
+        .world_by_id(&island_large_world_id())
+        .expect("world");
     let water = registry.water.get(&world.water).expect("water");
     let base = registry
         .island_generation_for_world(world)
@@ -69,8 +70,10 @@ fn atlas_harness_matches_runtime_island_params() {
     let mut merged = base.clone();
     merged.seed = seed;
 
-    let harness = island_params_from_compiled(&merged, world, seed, water.sea_level_m);
-    let runtime = island_params_from_compiled(&merged, world, seed, water.sea_level_m);
+    let harness =
+        island_params_from_compiled(&merged, world, seed, water.sea_level_m).expect("params");
+    let runtime =
+        island_params_from_compiled(&merged, world, seed, water.sea_level_m).expect("params");
     assert_eq!(harness.seed, runtime.seed);
     assert_eq!(harness.ocean_extent_m, runtime.ocean_extent_m);
     assert_eq!(harness.volcano.center, runtime.volcano.center);
@@ -82,16 +85,16 @@ fn atlas_harness_matches_runtime_island_params() {
         harness.erosion.stream_power_iterations,
         runtime.erosion.stream_power_iterations
     );
-    assert_eq!(harness.coast.shelf_width_min_m, runtime.coast.shelf_width_min_m);
+    assert_eq!(
+        harness.coast.shelf_width_min_m,
+        runtime.coast.shelf_width_min_m
+    );
     assert_eq!(harness.beaches.width_max_m, runtime.beaches.width_max_m);
     assert_eq!(
         harness.caves.chamber_count_max,
         runtime.caves.chamber_count_max
     );
-    assert_eq!(
-        harness.resolution.regional_m,
-        runtime.resolution.regional_m
-    );
+    assert_eq!(harness.resolution.regional_m, runtime.resolution.regional_m);
 }
 
 #[test]
@@ -109,12 +112,8 @@ fn testbed_spawn_chunk_has_mesh() {
         "resolved spawn should be on land (y={terrain_y}, spawn=({sx:.1},{sy:.1},{sz:.1}))"
     );
 
-    let spawn_chunk = WorldCell::new(
-        sx.floor() as i32,
-        sy.floor() as i32,
-        sz.floor() as i32,
-    )
-    .chunk_coord();
+    let spawn_chunk =
+        WorldCell::new(sx.floor() as i32, sy.floor() as i32, sz.floor() as i32).chunk_coord();
     let samples = generate_padded_samples(&source, spawn_chunk, MaterialId(0));
     let mesh = SurfaceNetsMesher
         .build_mesh(&ChunkMeshingInput {
@@ -148,7 +147,7 @@ fn testbed_meshes_surface_chunks() {
             .build_mesh(&ChunkMeshingInput {
                 samples: &samples,
                 chunk_cells: CHUNK_CELLS,
-            cell_stride: 1,
+                cell_stride: 1,
                 surface_resolver: None,
             })
             .expect("mesh");
@@ -200,7 +199,9 @@ fn testbed_world_edge_columns_mesh_seabed() {
 fn golden_atlas_hash_matches_live_generation() {
     let assets = workspace_assets();
     let registry = load_registry_from_directory(&assets).expect("registry");
-    let world = registry.world_by_id(&island_large_world_id()).expect("world");
+    let world = registry
+        .world_by_id(&island_large_world_id())
+        .expect("world");
     let water = registry.water.get(&world.water).expect("water");
     let base = registry
         .island_generation_for_world(world)
@@ -208,7 +209,8 @@ fn golden_atlas_hash_matches_live_generation() {
     let seed = world.seed;
     let mut merged = base.clone();
     merged.seed = seed;
-    let params = island_params_from_compiled(&merged, world, seed, water.sea_level_m);
+    let params =
+        island_params_from_compiled(&merged, world, seed, water.sea_level_m).expect("params");
     let live = build_island_atlas(&params);
     let baked_rel = "terrain/baked/island_large.seed48130.atlas";
     let baked_path = resolve_baked_atlas_path(&assets, baked_rel);
@@ -245,8 +247,8 @@ fn golden_mesh_vertex_count_band() {
     let procedural = build_atlas_density_source(&registry, &world_id, world.seed, None, None);
     let baked = build_atlas_density_source(&registry, &world_id, world.seed, Some(&assets), None);
     let (sx, sy, sz, _) = procedural.resolve_player_spawn(2.0, 48.0);
-    let spawn_chunk = WorldCell::new(sx.floor() as i32, sy.floor() as i32, sz.floor() as i32)
-        .chunk_coord();
+    let spawn_chunk =
+        WorldCell::new(sx.floor() as i32, sy.floor() as i32, sz.floor() as i32).chunk_coord();
 
     let mesh_count = |source: &terrain_generation::RecipeDensitySource| {
         let samples = generate_padded_samples(source, spawn_chunk, MaterialId(0));
@@ -254,7 +256,7 @@ fn golden_mesh_vertex_count_band() {
             .build_mesh(&ChunkMeshingInput {
                 samples: &samples,
                 chunk_cells: CHUNK_CELLS,
-            cell_stride: 1,
+                cell_stride: 1,
                 surface_resolver: None,
             })
             .expect("mesh")
@@ -275,7 +277,9 @@ fn golden_mesh_vertex_count_band() {
 fn baked_atlas_rejects_wrong_seed() {
     let assets = workspace_assets();
     let registry = load_registry_from_directory(&assets).expect("registry");
-    let world = registry.world_by_id(&island_large_world_id()).expect("world");
+    let world = registry
+        .world_by_id(&island_large_world_id())
+        .expect("world");
     let baked_rel = "terrain/baked/island_large.seed48130.atlas";
     let baked_path = resolve_baked_atlas_path(&assets, baked_rel);
     let wrong_seed = world.seed.wrapping_add(1);

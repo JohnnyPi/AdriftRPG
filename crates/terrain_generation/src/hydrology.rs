@@ -2,7 +2,7 @@
 //! Hydrology backend with river spline support.
 
 #[cfg(test)]
-use crate::river::{generate_river_spline, RiverGenConfig};
+use crate::river::{RiverGenConfig, generate_river_spline};
 use crate::water_body::{RiverSpline, WaterBodyRegistry};
 
 pub trait HydrologyBackend: Send + Sync {
@@ -19,10 +19,6 @@ pub trait HydrologyBackend: Send + Sync {
     }
 }
 
-pub struct StubHydrology;
-
-impl HydrologyBackend for StubHydrology {}
-
 #[derive(Clone, Debug)]
 pub struct RiverHydrology {
     pub river: Option<RiverSpline>,
@@ -37,7 +33,9 @@ impl RiverHydrology {
         let river = generate_river_spline(&config, sea_level);
         let mut water = WaterBodyRegistry::demo_registry(sea_level, pool_elevation);
         if let Some(ref spline) = river {
-            use crate::water_body::{WaterBody, WaterBodyId, WaterBodyKind, WaterSurfaceDefinition};
+            use crate::water_body::{
+                WaterBody, WaterBodyId, WaterBodyKind, WaterSurfaceDefinition,
+            };
             use shared::StableId;
             water.bodies.insert(
                 WaterBodyId(3),

@@ -1,10 +1,10 @@
 // crates/terrain_meshing/tests/integration.rs
 use terrain_generation::{
-    default_vertical_slice_recipe, generate_padded_samples, iter_world_chunk_coords,
-    RecipeDensitySource,
+    RecipeDensitySource, default_vertical_slice_recipe, generate_padded_samples,
+    iter_world_chunk_coords,
 };
 use terrain_meshing::{ChunkMeshingInput, SurfaceNetsMesher, TerrainMesher};
-use voxel_core::{ChunkCoord, MaterialId, CHUNK_CELLS};
+use voxel_core::{CHUNK_CELLS, ChunkCoord, MaterialId};
 
 fn test_density_source(seed: u64) -> RecipeDensitySource {
     RecipeDensitySource::new(default_vertical_slice_recipe(seed, 2.0))
@@ -45,7 +45,10 @@ fn cave_region_produces_hollow_mesh() {
             surface_resolver: None,
         })
         .expect("mesh");
-    assert!(!mesh.positions.is_empty(), "cave chunk should have surface geometry");
+    assert!(
+        !mesh.positions.is_empty(),
+        "cave chunk should have surface geometry"
+    );
     assert_eq!(mesh.material_vertices.len(), mesh.positions.len());
 }
 
@@ -62,17 +65,18 @@ fn overhang_region_produces_geometry() {
             surface_resolver: None,
         })
         .expect("mesh");
-    assert!(!mesh.positions.is_empty(), "overhang chunk should have geometry");
+    assert!(
+        !mesh.positions.is_empty(),
+        "overhang chunk should have geometry"
+    );
 }
 
 #[test]
 fn neighbor_chunk_boundary_vertices_align() {
     let source = test_density_source(48129);
     let mesher = SurfaceNetsMesher;
-    let left_samples =
-        generate_padded_samples(&source, ChunkCoord::new(0, 1, 0), MaterialId(0));
-    let right_samples =
-        generate_padded_samples(&source, ChunkCoord::new(1, 1, 0), MaterialId(0));
+    let left_samples = generate_padded_samples(&source, ChunkCoord::new(0, 1, 0), MaterialId(0));
+    let right_samples = generate_padded_samples(&source, ChunkCoord::new(1, 1, 0), MaterialId(0));
     let left = mesher
         .build_mesh(&ChunkMeshingInput {
             samples: &left_samples,
@@ -97,7 +101,10 @@ fn neighbor_chunk_boundary_vertices_align() {
             left_boundary.push(*pos);
         }
     }
-    assert!(!left_boundary.is_empty(), "expected vertices near +X chunk face");
+    assert!(
+        !left_boundary.is_empty(),
+        "expected vertices near +X chunk face"
+    );
     let mut matched = 0usize;
     for lpos in &left_boundary {
         for rpos in &right.positions {

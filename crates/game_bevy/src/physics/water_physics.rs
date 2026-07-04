@@ -55,33 +55,31 @@ pub fn nearest_river_segment(
     let mut best_dir = Vec2::ZERO;
     let mut best_segment = segment_hint.min(segment_count - 1);
 
-    let scan_segment = |i: usize,
-                        best_dist: &mut f32,
-                        best_dir: &mut Vec2,
-                        best_segment: &mut usize| {
-        let a = &river.points[i];
-        let b = &river.points[i + 1];
-        let ax = a.position_xz[0];
-        let az = a.position_xz[1];
-        let bx = b.position_xz[0];
-        let bz = b.position_xz[1];
-        let dx = bx - ax;
-        let dz = bz - az;
-        let len2 = dx * dx + dz * dz;
-        if len2 < 1e-4 {
-            return;
-        }
-        let t = ((x - ax) * dx + (z - az) * dz) / len2;
-        let t = t.clamp(0.0, 1.0);
-        let cx = ax + dx * t;
-        let cz = az + dz * t;
-        let dist = Vec2::new(x - cx, z - cz).length();
-        if dist < *best_dist {
-            *best_dist = dist;
-            *best_dir = Vec2::new(dx, dz).normalize_or_zero();
-            *best_segment = i;
-        }
-    };
+    let scan_segment =
+        |i: usize, best_dist: &mut f32, best_dir: &mut Vec2, best_segment: &mut usize| {
+            let a = &river.points[i];
+            let b = &river.points[i + 1];
+            let ax = a.position_xz[0];
+            let az = a.position_xz[1];
+            let bx = b.position_xz[0];
+            let bz = b.position_xz[1];
+            let dx = bx - ax;
+            let dz = bz - az;
+            let len2 = dx * dx + dz * dz;
+            if len2 < 1e-4 {
+                return;
+            }
+            let t = ((x - ax) * dx + (z - az) * dz) / len2;
+            let t = t.clamp(0.0, 1.0);
+            let cx = ax + dx * t;
+            let cz = az + dz * t;
+            let dist = Vec2::new(x - cx, z - cz).length();
+            if dist < *best_dist {
+                *best_dist = dist;
+                *best_dir = Vec2::new(dx, dz).normalize_or_zero();
+                *best_segment = i;
+            }
+        };
 
     let start = segment_hint.saturating_sub(2);
     let end = (segment_hint + 3).min(segment_count);
@@ -202,10 +200,7 @@ fn apply_buoyancy(
 fn apply_river_flow(
     features: Res<TerrainFeatureRegistry>,
     tweaks: Res<WaterPhysicsTweaks>,
-    mut bodies: Query<
-        (&Transform, &mut LinearVelocity, &mut RiverFlowCache),
-        With<DynamicCrate>,
-    >,
+    mut bodies: Query<(&Transform, &mut LinearVelocity, &mut RiverFlowCache), With<DynamicCrate>>,
 ) {
     let Some(river) = features.rivers.get(&1) else {
         return;
@@ -235,14 +230,8 @@ fn apply_river_flow(
             || last_xz.distance_squared(Vec2::new(x, z))
                 > RIVER_CACHE_RESCAN_DISTANCE_M * RIVER_CACHE_RESCAN_DISTANCE_M;
 
-        let (best_dist, best_dir, best_segment) = nearest_river_segment(
-            river,
-            x,
-            z,
-            hint,
-            bounds.segment_count,
-            needs_full_scan,
-        );
+        let (best_dist, best_dir, best_segment) =
+            nearest_river_segment(river, x, z, hint, bounds.segment_count, needs_full_scan);
 
         cache.segment_hint = best_segment;
         cache.last_xz = Vec2::new(x, z);
@@ -264,10 +253,7 @@ pub(crate) fn apply_shallow_water_movement(
     let Some(hydro) = features.hydrology.as_ref() else {
         return;
     };
-    let swim_up = intent
-        .single()
-        .map(|i| i.jump_held)
-        .unwrap_or(false);
+    let swim_up = intent.single().map(|i| i.jump_held).unwrap_or(false);
     for (tf, mut vel, mut movement) in &mut players {
         let point = [tf.translation.x, tf.translation.y, tf.translation.z];
         let depth = hydro
@@ -329,7 +315,7 @@ mod water_physics_tests {
 
     #[test]
     fn river_segment_cache_matches_brute_force() {
-        use terrain_generation::{generate_river_spline, RiverGenConfig};
+        use terrain_generation::{RiverGenConfig, generate_river_spline};
         let river = generate_river_spline(&RiverGenConfig::default(), 0.0).expect("river");
         let mid = river.points.len() / 2;
         let x = river.points[mid].position_xz[0];
@@ -345,7 +331,7 @@ mod water_physics_tests {
 
     #[test]
     fn river_flow_direction_is_nonzero_near_spline() {
-        use terrain_generation::{generate_river_spline, RiverGenConfig};
+        use terrain_generation::{RiverGenConfig, generate_river_spline};
         let river = generate_river_spline(&RiverGenConfig::default(), 0.0).expect("river");
         let i = river.points.len() / 2;
         let a = &river.points[i];

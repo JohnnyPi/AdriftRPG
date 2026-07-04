@@ -5,8 +5,8 @@
 //! re-attaches after that camera is despawned. Spawning a fresh `Camera2d` per
 //! menu screen therefore leaves egui with no valid context and a blank UI.
 
-use bevy::camera::Viewport;
 use bevy::camera::ClearColorConfig;
+use bevy::camera::Viewport;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use bevy_egui::{EguiContext, EguiPlugin, PrimaryEguiContext};
@@ -27,11 +27,19 @@ impl Plugin for UiOverlayPlugin {
             .add_systems(Startup, spawn_ui_overlay_camera)
             .add_systems(
                 OnEnter(AppState::MainMenu),
-                (configure_ui_overlay_for_menu, sync_camera_viewports_to_window).chain(),
+                (
+                    configure_ui_overlay_for_menu,
+                    sync_camera_viewports_to_window,
+                )
+                    .chain(),
             )
             .add_systems(
                 OnEnter(AppState::SetupOptions),
-                (configure_ui_overlay_for_menu, sync_camera_viewports_to_window).chain(),
+                (
+                    configure_ui_overlay_for_menu,
+                    sync_camera_viewports_to_window,
+                )
+                    .chain(),
             )
             .add_systems(
                 Update,

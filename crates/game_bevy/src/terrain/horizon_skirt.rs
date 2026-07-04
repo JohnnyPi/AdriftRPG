@@ -8,16 +8,16 @@ use voxel_core::CHUNK_CELLS;
 
 use crate::data::ConfigRegistryResource;
 use crate::data::UserSetupPrefs;
+use crate::environment::BiomeCatalog;
 use crate::environment::atmosphere::PlanetAtmosphereMedium;
 use crate::environment::biome_context::ChunkColumnCache;
 use crate::environment::surface::ChunkSurfaceResolver;
-use crate::environment::BiomeCatalog;
+use crate::lod::LodPolicy;
 use crate::state::AppState;
 use crate::terrain::{
-    insert_terrain_material_attributes, TerrainChunkPalette, TerrainEditStore,
-    TerrainMaterialHandle, TerrainPipelineState, TerrainRegenPending, TerrainWorldRuntime,
+    TerrainChunkPalette, TerrainEditStore, TerrainMaterialHandle, TerrainPipelineState,
+    TerrainRegenPending, TerrainWorldRuntime, insert_terrain_material_attributes,
 };
-use crate::lod::LodPolicy;
 use crate::ui::WorldTweaks;
 use crate::world::requested_world_id;
 use terrain_material_bevy::{TerrainPbrMaterial, TerrainProceduralMaterialState};
@@ -32,19 +32,18 @@ pub struct HorizonSkirtPlugin;
 
 impl Plugin for HorizonSkirtPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<HorizonSkirtSpawned>()
-            .add_systems(
-                Update,
-                (
-                    despawn_horizon_skirt_on_reset,
-                    rebuild_horizon_skirt_on_radius_change,
-                    spawn_horizon_skirt_once,
-                    refresh_horizon_skirt_material,
-                    update_horizon_skirt_follow,
-                )
-                    .chain()
-                    .run_if(in_state(AppState::Running)),
-            );
+        app.init_resource::<HorizonSkirtSpawned>().add_systems(
+            Update,
+            (
+                despawn_horizon_skirt_on_reset,
+                rebuild_horizon_skirt_on_radius_change,
+                spawn_horizon_skirt_once,
+                refresh_horizon_skirt_material,
+                update_horizon_skirt_follow,
+            )
+                .chain()
+                .run_if(in_state(AppState::Running)),
+        );
     }
 }
 
@@ -210,7 +209,13 @@ fn refresh_horizon_skirt_material(
     state: Res<TerrainProceduralMaterialState>,
     mut materials: ResMut<Assets<TerrainPbrMaterial>>,
     mut last_fingerprint: Local<Option<[u8; 32]>>,
-    mut skirts: Query<(&mut MeshMaterial3d<TerrainPbrMaterial>, &TerrainChunkPalette), With<HorizonSkirt>>,
+    mut skirts: Query<
+        (
+            &mut MeshMaterial3d<TerrainPbrMaterial>,
+            &TerrainChunkPalette,
+        ),
+        With<HorizonSkirt>,
+    >,
 ) {
     if !state.ready {
         *last_fingerprint = None;
@@ -263,10 +268,7 @@ fn build_skirt_mesh(
     let mut normals = Vec::with_capacity(segments * 2);
     let mut material_vertices = Vec::with_capacity(segments * 2);
 
-    let center_y = source
-        .atlas()
-        .map(|a| a.sea_level_m)
-        .unwrap_or(0.0);
+    let center_y = source.atlas().map(|a| a.sea_level_m).unwrap_or(0.0);
 
     for i in 0..=segments {
         let t = i as f32 / segments as f32;

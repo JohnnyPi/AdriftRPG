@@ -3,7 +3,7 @@ use bevy::pbr::Material;
 use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, ShaderType};
 use bevy::shader::ShaderRef;
-use terrain_surface::{ChunkSlotPalette, CHUNK_LOCAL_SLOT_COUNT, UNUSED_SLOT};
+use terrain_surface::{CHUNK_LOCAL_SLOT_COUNT, ChunkSlotPalette, UNUSED_SLOT};
 
 #[derive(Clone, Copy, Debug, ShaderType, Default)]
 pub struct TerrainMaterialSettings {

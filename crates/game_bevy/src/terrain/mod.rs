@@ -1,9 +1,9 @@
 // crates/game_bevy/src/terrain/mod.rs
-mod horizon_skirt;
 mod editing;
 mod features;
-mod mesh_convert;
+mod horizon_skirt;
 mod material;
+mod mesh_convert;
 mod metrics;
 mod pipeline;
 mod recipe;
@@ -11,9 +11,9 @@ pub mod residency;
 
 pub use editing::TerrainEditingPlugin;
 pub use features::{
-    effective_runtime_sea_level_m, CameraWaterState, TerrainFeaturePlugin, TerrainFeatureRegistry,
+    CameraWaterState, TerrainFeaturePlugin, TerrainFeatureRegistry, effective_runtime_sea_level_m,
 };
-pub use material::{queue_compiled_palette_reload, TerrainMaterialHandle, TerrainMaterialPlugin};
+pub use material::{TerrainMaterialHandle, TerrainMaterialPlugin, queue_compiled_palette_reload};
 pub use mesh_convert::insert_terrain_material_attributes;
 pub use metrics::{TerrainPipelineMetrics, WorldSeedOverride};
 pub use recipe::{build_density_source, build_density_source_from_prefs};
@@ -39,13 +39,13 @@ pub fn validate_density_source_buildable(
     Ok(())
 }
 pub use pipeline::{
-    regen_terrain_with_seed, TerrainPipelineState, TerrainPlugin, TerrainRecipeRevision,
-    TerrainRegenPending, TerrainSpawnPoint, TerrainWorldInitSet,
+    TerrainPipelineState, TerrainPlugin, TerrainRecipeRevision, TerrainRegenPending,
+    TerrainSpawnPoint, TerrainWorldInitSet, regen_terrain_with_seed,
 };
 pub use residency::{
-    chunk_world_center, draw_residency_rings, spawn_terrain_collider_ready,
-    spawn_terrain_uploaded, world_position_in_decoration_radius, world_position_in_high_detail_radius,
-    ChunkResidencyPlugin, TerrainWorldRuntime,
+    ChunkResidencyPlugin, TerrainWorldRuntime, chunk_world_center, draw_residency_rings,
+    spawn_terrain_collider_ready, spawn_terrain_uploaded, world_position_in_decoration_radius,
+    world_position_in_high_detail_radius,
 };
 
 use bevy::prelude::*;

@@ -12,7 +12,7 @@ pub fn maximum_texture_seam_error(maps: &GeneratedPbrMaps) -> f32 {
         return 0.0;
     }
 
-  let horizontal = compare_left_right_edges(&maps.albedo_rgba8, w, h);
+    let horizontal = compare_left_right_edges(&maps.albedo_rgba8, w, h);
     let vertical = compare_top_bottom_edges(&maps.albedo_rgba8, w, h);
     horizontal.max(vertical)
 }

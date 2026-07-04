@@ -163,7 +163,10 @@ pub fn add_residual(base: &Field2D<f32>, detail: &Field2D<f32>) -> Field2D<f32> 
 }
 
 /// Compute `local_absolute - upsampled(regional)` as a local-tier residual field.
-pub fn residual_from_absolute(regional: &Field2D<f32>, local_absolute: &Field2D<f32>) -> Field2D<f32> {
+pub fn residual_from_absolute(
+    regional: &Field2D<f32>,
+    local_absolute: &Field2D<f32>,
+) -> Field2D<f32> {
     let mut residual = local_absolute.clone();
     for z in 0..residual.height {
         for x in 0..residual.width {
@@ -185,13 +188,7 @@ impl Field2D<u8> {
     }
 }
 
-pub fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
-    if (edge1 - edge0).abs() < f32::EPSILON {
-        return if x >= edge1 { 1.0 } else { 0.0 };
-    }
-    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
-}
+pub use shared::math::smoothstep;
 
 pub fn smooth_max(a: f32, b: f32, k: f32) -> f32 {
     let h = (0.5 + 0.5 * (a - b) / k.max(0.001)).clamp(0.0, 1.0);

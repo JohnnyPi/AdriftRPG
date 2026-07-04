@@ -16,8 +16,8 @@
 use game_data::load_registry_from_directory;
 use std::path::PathBuf;
 use terrain_generation::{
-    build_atlas_density_source, outside_declared_cavities, RecipeDensitySource, RecipeOp,
-    FOUNDATION_DEPTH_M, PLAYER_SPAWN_MIN_CLEARANCE_M, SPAWN_FLOOR_EPSILON_M,
+    CombineOp, FOUNDATION_DEPTH_M, PLAYER_SPAWN_MIN_CLEARANCE_M, RecipeDensitySource, RecipeOp,
+    SPAWN_FLOOR_EPSILON_M, build_atlas_density_source, outside_declared_cavities,
 };
 use voxel_core::CHUNK_CELLS;
 
@@ -135,36 +135,40 @@ fn testbed_recipe_includes_generated_caves() {
     );
 }
 
-/// Somewhere on the cave chamber ring there must be air beneath the terrain
-/// surface — otherwise the caves are sealed and undiscoverable. Scans the
-/// full ring (radius 20–60 m from the volcano center) so the test does not
-/// depend on the collapse-bearing sign convention.
+/// Somewhere inside a generated cave chamber there must be air beneath the
+/// terrain surface — otherwise the caves are sealed and undiscoverable.
 #[test]
 fn testbed_island_has_subsurface_cave_air() {
     let source = testbed_source();
-    let center = [128.0f32, 128.0f32];
     let mut found = false;
-    'scan: for bearing_deg in (0..360).step_by(5) {
-        let bearing = (bearing_deg as f32).to_radians();
-        for radius in (20..=60).step_by(2) {
-            let rx = center[0] + bearing.cos() * radius as f32;
-            let rz = center[1] + bearing.sin() * radius as f32;
-            let (wx, wz) = recipe_xz(&source, rx, rz);
-            let surface = source.terrain_surface_height_at(wx, wz);
-            if surface < source.recipe().sea_level + 1.0 {
-                continue;
+    for op in &source.recipe().ops {
+        let RecipeOp::Ellipsoid {
+            center,
+            combine: CombineOp::Subtract,
+            ..
+        } = op
+        else {
+            continue;
+        };
+        if source.density_at_recipe(center[0], center[1], center[2]) > 0.0 {
+            found = true;
+            break;
+        }
+        let (wx, wz) = recipe_xz(&source, center[0], center[2]);
+        let surface = source.terrain_surface_height_at(wx, wz);
+        for depth in [2.0f32, 4.0, 6.0, 8.0, 10.0, 14.0] {
+            if source.density_at(wx, surface - depth, wz) > 0.0 {
+                found = true;
+                break;
             }
-            for depth in [2.0f32, 4.0, 6.0, 8.0, 10.0] {
-                if source.density_at(wx, surface - depth, wz) > 0.0 {
-                    found = true;
-                    break 'scan;
-                }
-            }
+        }
+        if found {
+            break;
         }
     }
     assert!(
         found,
-        "no sub-surface air found on the cave chamber ring; caves sealed or not carved"
+        "no sub-surface air found in generated cave chambers; caves sealed or not carved"
     );
 }
 
@@ -172,8 +176,8 @@ fn testbed_island_has_subsurface_cave_air() {
 fn testbed_peak_exceeds_35m() {
     let source = testbed_source();
     let mut peak = f32::MIN;
-    for rx in (108..=148).step_by(2) {
-        for rz in (108..=148).step_by(2) {
+    for rx in (236..=276).step_by(2) {
+        for rz in (236..=276).step_by(2) {
             let (wx, wz) = recipe_xz(&source, rx as f32, rz as f32);
             peak = peak.max(source.terrain_surface_height_at(wx, wz));
         }
@@ -324,9 +328,21 @@ fn chunk_face_density_is_continuous() {
     let source = testbed_source();
     let cells = CHUNK_CELLS as i32;
     let pairs = [
-        (voxel_core::ChunkCoord::new(0, 1, 0), voxel_core::ChunkCoord::new(1, 1, 0), 0i32),
-        (voxel_core::ChunkCoord::new(1, 0, 0), voxel_core::ChunkCoord::new(1, 1, 0), 1i32),
-        (voxel_core::ChunkCoord::new(1, 1, 0), voxel_core::ChunkCoord::new(1, 1, 1), 2i32),
+        (
+            voxel_core::ChunkCoord::new(0, 1, 0),
+            voxel_core::ChunkCoord::new(1, 1, 0),
+            0i32,
+        ),
+        (
+            voxel_core::ChunkCoord::new(1, 0, 0),
+            voxel_core::ChunkCoord::new(1, 1, 0),
+            1i32,
+        ),
+        (
+            voxel_core::ChunkCoord::new(1, 1, 0),
+            voxel_core::ChunkCoord::new(1, 1, 1),
+            2i32,
+        ),
     ];
 
     for (a, b, axis) in pairs {

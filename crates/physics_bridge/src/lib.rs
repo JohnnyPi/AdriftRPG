@@ -7,15 +7,15 @@ mod collision;
 mod collision_layers;
 mod plugin;
 
+pub use avian3d::prelude::LinearVelocity;
 pub use body_spec::{CollisionProfileId, PhysicsBodySpec, PhysicsBodyType};
 pub use character::{
     CharacterController, CharacterControllerBundle, CharacterControllerPlugin,
-    CharacterPhysicsSystems, GroundedState, GROUND_CONTACT_SKIN,
+    CharacterPhysicsSystems, GROUND_CONTACT_SKIN, GroundedState,
 };
-pub use collision::{terrain_ground_filter, CharacterCollisionQuery};
+pub use collision::{CharacterCollisionQuery, terrain_ground_filter};
 pub use collision_layers::{
-    camera_probe_layers, dynamic_prop_layers, layers_for_profile, moving_platform_layers,
-    player_layers, terrain_layers, water_sensor_layers, CollisionLayer,
+    CollisionLayer, camera_probe_layers, dynamic_prop_layers, layers_for_profile,
+    moving_platform_layers, player_layers, terrain_layers, water_sensor_layers,
 };
-pub use avian3d::prelude::LinearVelocity;
 pub use plugin::PhysicsBridgePlugin;

@@ -1,9 +1,13 @@
 // crates/game_bevy/src/terrain/residency.rs
 //! Interest-based chunk residency (VS2 §3.3).
+//!
+//! Radii come from [`WorldTweaks`] (seeded from YAML via
+//! [`WorldTweaks::apply_authored_residency`](crate::ui::WorldTweaks::apply_authored_residency)).
+//! Use [`ChunkResidencyRadius`] + [`within_radius`] for generic checks.
 
-use bevy::prelude::*;
 use avian3d::prelude::Collider;
-use voxel_core::{ChunkCoord, WorldCell, CHUNK_CELLS};
+use bevy::prelude::*;
+use voxel_core::{CHUNK_CELLS, ChunkCoord, WorldCell};
 
 use crate::player::Player;
 use crate::ui::WorldTweaks;
@@ -52,7 +56,10 @@ fn update_interest_center(
 }
 
 pub fn chunk_chebyshev_distance(a: ChunkCoord, b: ChunkCoord) -> i32 {
-    (a.x - b.x).abs().max((a.y - b.y).abs()).max((a.z - b.z).abs())
+    (a.x - b.x)
+        .abs()
+        .max((a.y - b.y).abs())
+        .max((a.z - b.z).abs())
 }
 
 /// True when a chunk has finished mesh upload and is visible in the world.
@@ -94,34 +101,83 @@ pub fn spawn_terrain_collider_ready(
     spawn: ChunkCoord,
     colliders: &Query<Entity, With<Collider>>,
 ) -> bool {
-    let Some(entity) = pipeline
-        .chunks
-        .get(&spawn)
-        .and_then(|chunk| chunk.entity)
-    else {
+    let Some(entity) = pipeline.chunks.get(&spawn).and_then(|chunk| chunk.entity) else {
         return false;
     };
     colliders.get(entity).is_ok()
 }
 
+/// Chunk interest radii indexed from [`WorldTweaks`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChunkResidencyRadius {
+    Density,
+    Render,
+    Physics,
+    Decoration,
+    HighDetail,
+}
+
+impl ChunkResidencyRadius {
+    pub fn limit(self, tweaks: &WorldTweaks) -> i32 {
+        match self {
+            Self::Density => tweaks.density_radius,
+            Self::Render => tweaks.render_radius,
+            Self::Physics => tweaks.physics_radius,
+            Self::Decoration => tweaks.decoration_radius,
+            Self::HighDetail => tweaks.high_detail_radius,
+        }
+    }
+}
+
+pub fn within_radius(
+    center: ChunkCoord,
+    coord: ChunkCoord,
+    radius: ChunkResidencyRadius,
+    tweaks: &WorldTweaks,
+) -> bool {
+    chunk_chebyshev_distance(center, coord) <= radius.limit(tweaks)
+}
+
 pub fn within_density_radius(center: ChunkCoord, coord: ChunkCoord, tweaks: &WorldTweaks) -> bool {
-    chunk_chebyshev_distance(center, coord) <= tweaks.density_radius
+    within_radius(center, coord, ChunkResidencyRadius::Density, tweaks)
 }
 
 pub fn within_render_radius(center: ChunkCoord, coord: ChunkCoord, tweaks: &WorldTweaks) -> bool {
-    chunk_chebyshev_distance(center, coord) <= tweaks.render_radius
+    within_radius(center, coord, ChunkResidencyRadius::Render, tweaks)
 }
 
 pub fn within_physics_radius(center: ChunkCoord, coord: ChunkCoord, tweaks: &WorldTweaks) -> bool {
-    chunk_chebyshev_distance(center, coord) <= tweaks.physics_radius
+    within_radius(center, coord, ChunkResidencyRadius::Physics, tweaks)
 }
 
-pub fn within_decoration_radius(center: ChunkCoord, coord: ChunkCoord, tweaks: &WorldTweaks) -> bool {
-    chunk_chebyshev_distance(center, coord) <= tweaks.decoration_radius
+pub fn within_decoration_radius(
+    center: ChunkCoord,
+    coord: ChunkCoord,
+    tweaks: &WorldTweaks,
+) -> bool {
+    within_radius(center, coord, ChunkResidencyRadius::Decoration, tweaks)
 }
 
-pub fn within_high_detail_radius(center: ChunkCoord, coord: ChunkCoord, tweaks: &WorldTweaks) -> bool {
-    chunk_chebyshev_distance(center, coord) <= tweaks.high_detail_radius
+pub fn within_high_detail_radius(
+    center: ChunkCoord,
+    coord: ChunkCoord,
+    tweaks: &WorldTweaks,
+) -> bool {
+    within_radius(center, coord, ChunkResidencyRadius::HighDetail, tweaks)
+}
+
+pub fn world_position_in_radius(
+    center: ChunkCoord,
+    position: Vec3,
+    radius: ChunkResidencyRadius,
+    tweaks: &WorldTweaks,
+) -> bool {
+    let cell = WorldCell::new(
+        position.x.floor() as i32,
+        position.y.floor() as i32,
+        position.z.floor() as i32,
+    );
+    within_radius(center, cell.chunk_coord(), radius, tweaks)
 }
 
 pub fn world_position_in_high_detail_radius(
@@ -129,13 +185,7 @@ pub fn world_position_in_high_detail_radius(
     position: Vec3,
     tweaks: &WorldTweaks,
 ) -> bool {
-    use voxel_core::WorldCell;
-    let cell = WorldCell::new(
-        position.x.floor() as i32,
-        position.y.floor() as i32,
-        position.z.floor() as i32,
-    );
-    within_high_detail_radius(center, cell.chunk_coord(), tweaks)
+    world_position_in_radius(center, position, ChunkResidencyRadius::HighDetail, tweaks)
 }
 
 pub fn world_position_in_decoration_radius(
@@ -143,38 +193,48 @@ pub fn world_position_in_decoration_radius(
     position: Vec3,
     tweaks: &WorldTweaks,
 ) -> bool {
-    use voxel_core::WorldCell;
-    let cell = WorldCell::new(
-        position.x.floor() as i32,
-        position.y.floor() as i32,
-        position.z.floor() as i32,
-    );
-    within_decoration_radius(center, cell.chunk_coord(), tweaks)
+    world_position_in_radius(center, position, ChunkResidencyRadius::Decoration, tweaks)
 }
 
-/// Chunk center in world meters. Assumes `cell_size_m == 1.0`.
-pub fn chunk_world_center(coord: ChunkCoord) -> Vec3 {
-    let cells = CHUNK_CELLS as f32;
+/// Chunk center in world meters.
+pub fn chunk_world_center(coord: ChunkCoord, cell_size_m: f32) -> Vec3 {
+    let extent = CHUNK_CELLS as f32 * cell_size_m;
     Vec3::new(
-        coord.x as f32 * cells + cells * 0.5,
-        coord.y as f32 * cells + cells * 0.5,
-        coord.z as f32 * cells + cells * 0.5,
+        coord.x as f32 * extent + extent * 0.5,
+        coord.y as f32 * extent + extent * 0.5,
+        coord.z as f32 * extent + extent * 0.5,
     )
 }
 
 pub fn draw_residency_rings(
     gizmos: &mut Gizmos,
     center: ChunkCoord,
+    cell_size_m: f32,
     tweaks: &WorldTweaks,
 ) {
-    let origin = chunk_world_center(center);
-    let cells = CHUNK_CELLS as f32;
+    let origin = chunk_world_center(center, cell_size_m);
+    let cells = CHUNK_CELLS as f32 * cell_size_m;
     for (radius, color) in [
-        (tweaks.render_radius, Color::srgba(0.2, 0.8, 1.0, 0.35)),
-        (tweaks.physics_radius, Color::srgba(1.0, 0.6, 0.2, 0.35)),
-        (tweaks.decoration_radius, Color::srgba(0.9, 0.4, 0.9, 0.25)),
-        (tweaks.high_detail_radius, Color::srgba(0.4, 1.0, 0.4, 0.35)),
-        (tweaks.density_radius, Color::srgba(0.4, 1.0, 0.4, 0.25)),
+        (
+            ChunkResidencyRadius::Render.limit(tweaks),
+            Color::srgba(0.2, 0.8, 1.0, 0.35),
+        ),
+        (
+            ChunkResidencyRadius::Physics.limit(tweaks),
+            Color::srgba(1.0, 0.6, 0.2, 0.35),
+        ),
+        (
+            ChunkResidencyRadius::Decoration.limit(tweaks),
+            Color::srgba(0.9, 0.4, 0.9, 0.25),
+        ),
+        (
+            ChunkResidencyRadius::HighDetail.limit(tweaks),
+            Color::srgba(0.4, 1.0, 0.4, 0.35),
+        ),
+        (
+            ChunkResidencyRadius::Density.limit(tweaks),
+            Color::srgba(0.4, 1.0, 0.4, 0.25),
+        ),
     ] {
         let size = (radius as f32 * 2.0 + 1.0) * cells;
         gizmos.cube(
@@ -216,6 +276,9 @@ mod residency_tests {
     fn chebyshev_distance_is_symmetric() {
         let a = ChunkCoord::new(1, 2, 3);
         let b = ChunkCoord::new(4, 0, 1);
-        assert_eq!(chunk_chebyshev_distance(a, b), chunk_chebyshev_distance(b, a));
+        assert_eq!(
+            chunk_chebyshev_distance(a, b),
+            chunk_chebyshev_distance(b, a)
+        );
     }
 }

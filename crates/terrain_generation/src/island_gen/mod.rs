@@ -10,13 +10,14 @@ mod footprint;
 mod hydrology;
 mod params;
 mod soil_field;
+mod util;
 mod validate;
 mod volcano;
 
 pub use params::*;
-pub use validate::{min_peak_elevation_m, validate_atlas, ValidationReport};
+pub use validate::{ValidationReport, min_peak_elevation_m, validate_atlas};
 
-use crate::field2d::{residual_from_absolute, Field2D};
+use crate::field2d::{Field2D, residual_from_absolute};
 use crate::island_atlas::IslandAtlas;
 use crate::noise::ValueNoise;
 use bathymetry::{bathymetry_height, compute_coast_distance};
@@ -53,8 +54,7 @@ pub fn build_island_atlas(params: &IslandGenParams) -> IslandAtlas {
 
     // --- Regional tier: footprint, volcano, bathymetry, hydrology, erosion ---
     let mut island_mask = Field2D::<f32>::from_extent(extent, origin, regional_spacing);
-    let mut elevation_regional =
-        Field2D::<f32>::from_extent(extent, origin, regional_spacing);
+    let mut elevation_regional = Field2D::<f32>::from_extent(extent, origin, regional_spacing);
     let mut bathymetry = Field2D::<f32>::from_extent(extent, origin, regional_spacing);
 
     let mask_noise = ValueNoise::new(params.seed);
@@ -296,10 +296,7 @@ pub fn clamp_preview_output_side(side: u32) -> u32 {
 }
 
 /// World extent and per-axis sample spacing for a capped square preview grid.
-pub fn preview_grid_for_atlas(
-    atlas: &IslandAtlas,
-    output_side: u32,
-) -> (u32, u32, f32, f32) {
+pub fn preview_grid_for_atlas(atlas: &IslandAtlas, output_side: u32) -> (u32, u32, f32, f32) {
     let width = clamp_preview_output_side(output_side);
     let height = width;
     let extent_x = (atlas.width().saturating_sub(1)) as f32 * atlas.spacing_m();
@@ -536,7 +533,10 @@ mod tests {
                 break;
             }
         }
-        assert!(differs, "different seeds should produce different elevation fields");
+        assert!(
+            differs,
+            "different seeds should produce different elevation fields"
+        );
     }
 
     #[test]
@@ -604,10 +604,10 @@ mod tests {
             ops: Vec::new(),
         };
         let source = RecipeDensitySource::new(recipe).with_atlas(atlas.clone(), 3.5);
-        let center_wx = atlas.origin[0]
-            + (atlas.width() / 2) as f32 * atlas.elevation_local.spacing;
-        let center_wz = atlas.origin[1]
-            + (atlas.height() / 2) as f32 * atlas.elevation_local.spacing;
+        let center_wx =
+            atlas.origin[0] + (atlas.width() / 2) as f32 * atlas.elevation_local.spacing;
+        let center_wz =
+            atlas.origin[1] + (atlas.height() / 2) as f32 * atlas.elevation_local.spacing;
         let center_h = atlas.composed_land_elevation_at(center_wx, center_wz);
         let runtime_center = source.terrain_surface_height_at(0.0, 0.0);
         assert!(
@@ -674,8 +674,14 @@ mod tests {
             variance_acc += (s - mean).powi(2);
         }
         let variance = variance_acc / samples.len().max(1) as f32;
-        assert!(variance > 1e-4, "soil_depth should vary (variance={variance})");
-        assert!(flat_n > 0 && steep_n > 0, "need both flat and steep land cells");
+        assert!(
+            variance > 1e-4,
+            "soil_depth should vary (variance={variance})"
+        );
+        assert!(
+            flat_n > 0 && steep_n > 0,
+            "need both flat and steep land cells"
+        );
         assert!(
             flat_sum / flat_n as f32 > steep_sum / steep_n as f32,
             "flats should retain more soil than steep slopes"

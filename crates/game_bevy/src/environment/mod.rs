@@ -26,7 +26,7 @@ pub use config_init::EnvironmentConfigPlugin;
 pub use fog::FogPlugin;
 pub use lighting::{LightingPlugin, SunLight};
 pub use lighting_state::EnvironmentLightingPlugin;
-pub use sky_config::{SkyEffectsRevision, SkyPresentationConfig};
 pub use simulation_time::{SimulationTime, SimulationTimePlugin};
+pub use sky_config::{SkyEffectsRevision, SkyPresentationConfig};
 pub use stars::StarfieldPlugin;
 pub use weather::WeatherPlugin;

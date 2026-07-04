@@ -1,5 +1,6 @@
 // crates/game_bevy/src/environment/lighting_state.rs
-//! Unified environment lighting state (VS2 §12).
+//! Lighting config from YAML plus runtime exposure/ambient outputs (VS2 §12).
+//! Live sun/moon presentation lives in [`super::celestial::CelestialState`].
 
 use bevy::camera::Exposure;
 use bevy::light::light_consts::lux;
@@ -8,16 +9,20 @@ use bevy::prelude::*;
 
 use super::celestial::{CelestialState, MoonLight};
 use crate::camera::MainGameCamera;
-use crate::ui::{
-    environment_intensity_for_elevation, moon_gameplay_illuminance, SUN_PEAK_SCALE,
-};
+use crate::ui::{SUN_PEAK_SCALE, moon_gameplay_illuminance};
 
 #[derive(Resource, Clone, Debug)]
 pub struct EnvironmentLightingState {
-    pub sun_azimuth_deg: f32,
-    pub sun_elevation_deg: f32,
-    pub sun_illuminance: f32,
-    pub sun_color: [f32; 3],
+    /// YAML sun azimuth; used when time-of-day and manual overrides are off.
+    pub authored_sun_azimuth_deg: f32,
+    /// YAML sun elevation; used when time-of-day and manual overrides are off.
+    pub authored_sun_elevation_deg: f32,
+    /// When true, sun angles follow [`SimulationTime::time_of_day_hours`].
+    pub drive_sun_from_time_of_day: bool,
+    /// When true, sun angles use [`Self::override_sun_azimuth_deg`] / elevation.
+    pub override_sun_angles: bool,
+    pub override_sun_azimuth_deg: f32,
+    pub override_sun_elevation_deg: f32,
     pub ambient_brightness: f32,
     pub ambient_color: [f32; 3],
     pub exposure_ev_min: f32,
@@ -28,8 +33,6 @@ pub struct EnvironmentLightingState {
     pub environment_intensity_scale: f32,
     pub moon_enabled: bool,
     pub moon_illuminance: f32,
-    pub moon_azimuth_deg: f32,
-    pub moon_elevation_deg: f32,
     /// Last frame's sun-driven ambient (before cave dimming).
     pub effective_ambient_brightness: f32,
 }
@@ -37,10 +40,12 @@ pub struct EnvironmentLightingState {
 impl Default for EnvironmentLightingState {
     fn default() -> Self {
         Self {
-            sun_azimuth_deg: 132.0,
-            sun_elevation_deg: 48.0,
-            sun_illuminance: lux::RAW_SUNLIGHT,
-            sun_color: [1.0, 0.97, 0.92],
+            authored_sun_azimuth_deg: 132.0,
+            authored_sun_elevation_deg: 48.0,
+            drive_sun_from_time_of_day: false,
+            override_sun_angles: false,
+            override_sun_azimuth_deg: 145.0,
+            override_sun_elevation_deg: 42.0,
             ambient_brightness: 0.0,
             ambient_color: [0.55, 0.62, 0.75],
             exposure_ev_min: 9.0,
@@ -51,15 +56,52 @@ impl Default for EnvironmentLightingState {
             environment_intensity_scale: 1.0,
             moon_enabled: false,
             moon_illuminance: 2.0,
-            moon_azimuth_deg: 315.0,
-            moon_elevation_deg: 35.0,
             effective_ambient_brightness: 0.0,
         }
     }
 }
 
-#[derive(Component, Clone, Copy, Debug, Default)]
-pub struct SkyVisibility(pub f32);
+impl EnvironmentLightingState {
+    /// Bootstrap from compiled `atmosphere.yaml` on world enter.
+    pub fn apply_authored_atmosphere(&mut self, atmo: &game_data::CompiledAtmosphere) {
+        self.authored_sun_azimuth_deg = atmo.sun_azimuth_deg;
+        self.authored_sun_elevation_deg = atmo.sun_elevation_deg;
+        self.override_sun_azimuth_deg = atmo.sun_azimuth_deg;
+        self.override_sun_elevation_deg = atmo.sun_elevation_deg;
+        self.ambient_brightness = atmo.ambient_brightness;
+        self.ambient_color = atmo.ambient_color;
+        self.exposure_ev_min = atmo.exposure_ev_min;
+        self.exposure_ev_max = atmo.exposure_ev_max;
+        self.exposure_bias = atmo.exposure_bias;
+        self.exposure_adaptation_speed = atmo.exposure_adaptation_speed;
+        self.environment_intensity_scale = atmo.environment_intensity_scale;
+        self.moon_enabled = atmo.moon_enabled;
+        self.moon_illuminance = atmo.moon_illuminance;
+        self.current_exposure = crate::ui::exposure_ev_for_elevation(
+            atmo.sun_elevation_deg,
+            atmo.exposure_ev_min,
+            atmo.exposure_ev_max,
+            atmo.exposure_bias,
+        );
+    }
+}
+
+#[derive(Component, Clone, Copy, Debug)]
+pub struct SkyVisibility {
+    /// Outdoor skylight reaching the player (0..1).
+    pub sky: f32,
+    /// Cave/underwater depth factor for ambient dimming (0..1).
+    pub cave_depth: f32,
+}
+
+impl Default for SkyVisibility {
+    fn default() -> Self {
+        Self {
+            sky: 1.0,
+            cave_depth: 0.0,
+        }
+    }
+}
 
 pub fn sun_cloud_transmission(cloud_cover: f32) -> f32 {
     1.0 - cloud_cover * 0.75
@@ -72,12 +114,7 @@ pub fn environment_intensity_with_clouds(base: f32, cloud_cover: f32) -> f32 {
 pub fn sun_direction_from_angles(azimuth_deg: f32, elevation_deg: f32) -> Vec3 {
     let az = azimuth_deg.to_radians();
     let el = elevation_deg.to_radians();
-    Vec3::new(
-        el.cos() * az.sin(),
-        -el.sin(),
-        el.cos() * az.cos(),
-    )
-    .normalize_or_zero()
+    Vec3::new(el.cos() * az.sin(), -el.sin(), el.cos() * az.cos()).normalize_or_zero()
 }
 
 pub struct EnvironmentLightingPlugin;
@@ -89,7 +126,10 @@ impl Plugin for EnvironmentLightingPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<EnvironmentLightingState>()
             .configure_sets(Update, SyncEnvironmentLightingSet)
-            .add_systems(Update, sync_environment_lighting.in_set(SyncEnvironmentLightingSet));
+            .add_systems(
+                Update,
+                sync_environment_lighting.in_set(SyncEnvironmentLightingSet),
+            );
     }
 }
 
@@ -99,20 +139,21 @@ fn sync_environment_lighting(
     mut state: ResMut<EnvironmentLightingState>,
     mut commands: Commands,
     mut sun: Query<
-        (Entity, &mut DirectionalLight, &mut Transform, Option<&VolumetricLight>),
+        (
+            Entity,
+            &mut DirectionalLight,
+            &mut Transform,
+            Option<&VolumetricLight>,
+        ),
         (With<super::SunLight>, Without<MoonLight>),
     >,
     mut moon: Query<(&mut DirectionalLight, &mut Transform), With<MoonLight>>,
-    mut ambient: ResMut<GlobalAmbientLight>,
     mut exposure: Query<&mut Exposure, With<MainGameCamera>>,
     mut env_map: Query<&mut AtmosphereEnvironmentMapLight, With<MainGameCamera>>,
 ) {
-    state.sun_azimuth_deg = celestial.sun_azimuth_deg;
-    state.sun_elevation_deg = celestial.sun_elevation_deg;
-    state.sun_color = celestial.sun_color;
-
     let cloud_transmission = sun_cloud_transmission(celestial.cloud_cover);
-    let daylight = crate::ui::sun_illuminance_for_elevation(celestial.sun_elevation_deg) / 100_000.0;
+    let daylight =
+        crate::ui::sun_illuminance_for_elevation(celestial.sun_elevation_deg) / 100_000.0;
     let sun_illuminance =
         lux::RAW_SUNLIGHT * daylight.clamp(0.0, 1.0) * cloud_transmission * SUN_PEAK_SCALE;
 
@@ -123,10 +164,8 @@ fn sync_environment_lighting(
             celestial.sun_color[1],
             celestial.sun_color[2],
         );
-        *transform = Transform::from_rotation(Quat::from_rotation_arc(
-            -Vec3::Z,
-            celestial.sun_direction,
-        ));
+        *transform =
+            Transform::from_rotation(Quat::from_rotation_arc(-Vec3::Z, celestial.sun_direction));
 
         let volumetric_active = celestial.sun_elevation_deg >= 5.0;
         match (volumetric_active, volumetric.is_some()) {
@@ -161,13 +200,8 @@ fn sync_environment_lighting(
         }
     }
 
-    let env_intensity = environment_intensity_with_clouds(
-        environment_intensity_for_elevation(
-            celestial.sun_elevation_deg,
-            state.environment_intensity_scale,
-        ),
-        celestial.cloud_cover,
-    );
+    let env_intensity =
+        environment_intensity_with_clouds(celestial.environment_intensity, celestial.cloud_cover);
     for mut env in &mut env_map {
         env.intensity = env_intensity;
     }
@@ -176,7 +210,7 @@ fn sync_environment_lighting(
         celestial.sun_elevation_deg,
         state.ambient_brightness,
     );
-    ambient.brightness = 0.0;
+    // `apply_cave_atmosphere` owns `GlobalAmbientLight.brightness` every frame.
 
     let target_ev = celestial.exposure_ev100;
     let speed = state.exposure_adaptation_speed;

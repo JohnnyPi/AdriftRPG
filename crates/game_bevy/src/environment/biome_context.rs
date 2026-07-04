@@ -1,6 +1,7 @@
 // crates/game_bevy/src/environment/biome_context.rs
 use crate::ui::WaterPhysicsTweaks;
-use terrain_generation::{cavity_sdf_at, RecipeDensitySource, ValueNoise, CAVITY_EXTERIOR_MARGIN};
+use shared::smoothstep;
+use terrain_generation::{CAVITY_EXTERIOR_MARGIN, RecipeDensitySource, ValueNoise, cavity_sdf_at};
 
 /// Slope above which exposed rock replaces the biome default surface material.
 pub const ROCK_SLOPE_DEG: f32 = 35.0;
@@ -59,11 +60,7 @@ impl ChunkColumnCache {
             for lx in 0..side {
                 let wx = origin_x + lx as i32 - 1;
                 let wz = origin_z + lz as i32 - 1;
-                heights[lz * side + lx] = if let Some(atlas) = source.atlas() {
-                    atlas.surface_height_at(wx as f32, wz as f32)
-                } else {
-                    source.terrain_surface_height_at(wx as f32, wz as f32)
-                };
+                heights[lz * side + lx] = source.column_surface_height_at(wx as f32, wz as f32);
             }
         }
 
@@ -105,7 +102,13 @@ impl ChunkColumnCache {
         self.columns[lz * self.side + lx]
     }
 
-    pub fn context_at(&self, source: &RecipeDensitySource, wx: i32, y: f32, wz: i32) -> BiomeSampleContext {
+    pub fn context_at(
+        &self,
+        source: &RecipeDensitySource,
+        wx: i32,
+        y: f32,
+        wz: i32,
+    ) -> BiomeSampleContext {
         let column = self.column(wx, wz);
         context_from_column(source, &column, wx as f32, y, wz as f32)
     }
@@ -113,7 +116,7 @@ impl ChunkColumnCache {
 
 impl BiomeSampleContext {
     pub fn sample(source: &RecipeDensitySource, x: f32, y: f32, z: f32) -> Self {
-        let surface_y = source.terrain_surface_height_at(x, z);
+        let surface_y = source.column_surface_height_at(x, z);
         let slope_degrees = source.terrain_slope_at(x, z);
         let distance_to_water = source.distance_to_water_m(x, z);
         let distance_to_river = source.distance_to_river_m(x, z);
@@ -168,11 +171,7 @@ impl BiomeSampleContext {
 fn climate_noise_scales(source: &RecipeDensitySource) -> (f32, f32, f32) {
     let feature_wavelength = source.climate_extent_m() / 3.0;
     let moisture_scale = 1.0 / feature_wavelength.max(32.0);
-    (
-        moisture_scale,
-        moisture_scale * 0.4,
-        moisture_scale * 1.5,
-    )
+    (moisture_scale, moisture_scale * 0.4, moisture_scale * 1.5)
 }
 
 fn sample_climate(
@@ -212,12 +211,12 @@ fn sample_climate(
     let coast_humidity = (-distance_to_water / COAST_HUMIDITY_SCALE).exp() * 0.22;
 
     if let Some(atlas) = source.atlas() {
-        let wetness = (atlas.sample_wetness(x, z) / atlas.max_wetness()).clamp(0.0, 1.0);
+        let wetness =
+            terrain_surface::normalize_wetness(atlas.sample_wetness(x, z), atlas.max_wetness());
         moisture = (moisture * 0.45 + wetness * 0.55).clamp(0.0, 1.0);
     }
 
-    let effective_moisture =
-        (moisture + coast_humidity + continentalness * 0.08).clamp(0.0, 1.0);
+    let effective_moisture = (moisture + coast_humidity + continentalness * 0.08).clamp(0.0, 1.0);
     let elevation = surface_y - source.recipe().sea_level;
     let temperature = (BASE_TEMPERATURE - elevation * ELEVATION_COOLING + transition_noise * 0.08)
         .clamp(0.0, 1.0);
@@ -275,19 +274,11 @@ fn context_from_column(
     }
 }
 
-fn smoothstep(start: f32, end: f32, value: f32) -> f32 {
-    if (end - start).abs() < f32::EPSILON {
-        return if value >= end { 1.0 } else { 0.0 };
-    }
-    let t = ((value - start) / (end - start)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use terrain_generation::{
-        build_island_atlas, default_vertical_slice_recipe, IslandGenParams, RecipeDensitySource,
+        IslandGenParams, RecipeDensitySource, build_island_atlas, default_vertical_slice_recipe,
     };
 
     #[test]
@@ -309,8 +300,8 @@ mod tests {
                 80.0,
             ));
         }
-        let neighbor_mean = neighbors.iter().map(|c| c.effective_moisture).sum::<f32>()
-            / neighbors.len() as f32;
+        let neighbor_mean =
+            neighbors.iter().map(|c| c.effective_moisture).sum::<f32>() / neighbors.len() as f32;
         assert!(
             center.effective_moisture + 0.12 >= neighbor_mean,
             "expanded ridge coords should not be a moisture sink (center={}, mean={neighbor_mean})",

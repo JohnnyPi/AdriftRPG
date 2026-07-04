@@ -1,5 +1,5 @@
 // crates/terrain_surface/src/context.rs
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum BiomeId {
     Grassland,
     Forest,
@@ -12,6 +12,62 @@ pub enum BiomeId {
     Cave,
     Riverbank,
     ShallowWater,
+    DeepWater,
+    OffshoreShelf,
+}
+
+impl BiomeId {
+    /// YAML biome rule id (`biomes.expanded_slice` and friends).
+    pub const fn as_rule_id(self) -> &'static str {
+        match self {
+            BiomeId::Grassland => "grassland",
+            BiomeId::Forest => "forest",
+            BiomeId::Scrub => "scrub",
+            BiomeId::CoastalScrub => "coastal_scrub",
+            BiomeId::Wetland => "wetland",
+            BiomeId::Beach => "beach",
+            BiomeId::Alpine => "mountain_alpine",
+            BiomeId::RockyUpland => "rocky_upland",
+            BiomeId::Cave => "cave",
+            BiomeId::Riverbank => "riverbank",
+            BiomeId::ShallowWater => "shallow_water",
+            BiomeId::DeepWater => "deep_water",
+            BiomeId::OffshoreShelf => "offshore_shelf",
+        }
+    }
+
+    /// Parse a biome rule id (snake_case or PascalCase surface-rule names).
+    pub fn from_rule_id(id: &str) -> Self {
+        match id {
+            "grassland" | "Grassland" => BiomeId::Grassland,
+            "forest" | "Forest" => BiomeId::Forest,
+            "scrub" | "Scrub" => BiomeId::Scrub,
+            "coastal_scrub" | "CoastalScrub" => BiomeId::CoastalScrub,
+            "wetland" | "Wetland" => BiomeId::Wetland,
+            "beach" | "Beach" => BiomeId::Beach,
+            "mountain_alpine" | "Alpine" => BiomeId::Alpine,
+            "rocky_upland" | "RockyUpland" => BiomeId::RockyUpland,
+            "cave" | "Cave" => BiomeId::Cave,
+            "riverbank" | "Riverbank" => BiomeId::Riverbank,
+            "shallow_water" | "ShallowWater" => BiomeId::ShallowWater,
+            "deep_water" | "DeepWater" => BiomeId::DeepWater,
+            "offshore_shelf" | "OffshoreShelf" => BiomeId::OffshoreShelf,
+            _ => BiomeId::Grassland,
+        }
+    }
+
+    /// Legacy voxel material slot used before YAML biome catalogs.
+    pub fn from_material_id(material_id: u16) -> Self {
+        match material_id {
+            1 => BiomeId::Beach,
+            2 => BiomeId::RockyUpland,
+            3 => BiomeId::Cave,
+            4 => BiomeId::Wetland,
+            5 => BiomeId::Forest,
+            6 => BiomeId::Scrub,
+            _ => BiomeId::Grassland,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -78,7 +134,16 @@ impl SoftBiomeWeights {
     }
 
     pub fn primary_biome(&self) -> BiomeId {
-        let channels = [
+        self.weighted_biomes()
+            .into_iter()
+            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(b, _)| b)
+            .unwrap_or(BiomeId::Grassland)
+    }
+
+    /// Soft-weight channels in the order used for biome tint blending.
+    pub fn weighted_biomes(self) -> [(BiomeId, f32); 8] {
+        [
             (BiomeId::Grassland, self.grassland),
             (BiomeId::Forest, self.forest),
             (BiomeId::Scrub, self.scrub),
@@ -87,36 +152,22 @@ impl SoftBiomeWeights {
             (BiomeId::Beach, self.beach),
             (BiomeId::Alpine, self.alpine),
             (BiomeId::RockyUpland, self.rocky),
-        ];
-        channels
-            .into_iter()
-            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
-            .map(|(b, _)| b)
-            .unwrap_or(BiomeId::Grassland)
+        ]
     }
 }
 
-pub fn slope_degrees(normal: [f32; 3]) -> f32 {
-    let len = (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]).sqrt();
-    if len <= f32::EPSILON {
-        return 0.0;
-    }
-    let ny = (normal[1] / len).clamp(-1.0, 1.0);
-    ny.acos().to_degrees()
+pub use shared::math::{range_weight, saturate, slope_degrees, smoothstep};
+
+const DEFAULT_WETNESS_NORMALIZATION: f32 = 600.0;
+
+/// Normalize a raw wetness sample from an island atlas to `[0, 1]`.
+pub fn normalize_wetness(raw_wetness: f32, max_wetness: f32) -> f32 {
+    (raw_wetness / max_wetness.max(1.0)).clamp(0.0, 1.0)
 }
 
-#[inline]
-pub fn saturate(value: f32) -> f32 {
-    value.clamp(0.0, 1.0)
-}
-
-#[inline]
-pub fn smoothstep(start: f32, end: f32, value: f32) -> f32 {
-    if (end - start).abs() < f32::EPSILON {
-        return if value >= end { 1.0 } else { 0.0 };
-    }
-    let t = saturate((value - start) / (end - start));
-    t * t * (3.0 - 2.0 * t)
+/// Default wetness normalization when no atlas max is available.
+pub fn default_wetness_normalization() -> f32 {
+    DEFAULT_WETNESS_NORMALIZATION
 }
 
 /// Environmental sample used to compute soft biome weights (Bevy-independent).
@@ -162,7 +213,7 @@ pub fn compute_soft_biome_weights(sample: &EnvironmentSample) -> SoftBiomeWeight
     let beach = range_weight(sample.distance_to_water, 0.0, 35.0, 12.0)
         * range_weight(sample.elevation, -1.0, 14.0, 3.0);
 
-    let alpine = range_weight(sample.elevation, 24.0, 60.0, 8.0)
+    let alpine = range_weight(sample.elevation, 28.0, 60.0, 8.0)
         * smoothstep(10.0, 22.0, sample.slope_degrees);
 
     let rocky = smoothstep(18.0, 38.0, sample.slope_degrees)
@@ -182,6 +233,60 @@ pub fn compute_soft_biome_weights(sample: &EnvironmentSample) -> SoftBiomeWeight
     .normalize()
 }
 
-fn range_weight(value: f32, min: f32, max: f32, fade: f32) -> f32 {
-    smoothstep(min - fade, min, value) * (1.0 - smoothstep(max, max + fade, value))
+/// Blend runtime soft biome weights with baked atlas biome field weights.
+pub fn merge_soft_with_atlas(
+    climate: SoftBiomeWeights,
+    atlas: terrain_generation::BiomeWeights,
+    mix: f32,
+) -> SoftBiomeWeights {
+    let t = mix.clamp(0.0, 1.0);
+    SoftBiomeWeights {
+        grassland: climate.grassland * (1.0 - t) + atlas.grassland * t,
+        forest: climate.forest * (1.0 - t) + atlas.rainforest * t,
+        scrub: climate.scrub * (1.0 - t) + (atlas.volcanic_rock * 0.4 + atlas.grassland * 0.2) * t,
+        coastal_scrub: climate.coastal_scrub * (1.0 - t)
+            + (atlas.beach * 0.55 + atlas.grassland * 0.15) * t,
+        wetland: climate.wetland * (1.0 - t) + atlas.wetland * t,
+        beach: climate.beach * (1.0 - t) + atlas.beach * t,
+        alpine: climate.alpine * (1.0 - t) + atlas.volcanic_rock * 0.5 * t,
+        rocky: climate.rocky * (1.0 - t) + atlas.volcanic_rock * 0.55 * t,
+    }
+    .normalize()
+}
+
+#[cfg(test)]
+mod biome_id_tests {
+    use super::BiomeId;
+
+    #[test]
+    fn rule_id_round_trip_for_all_variants() {
+        let all = [
+            BiomeId::Grassland,
+            BiomeId::Forest,
+            BiomeId::Scrub,
+            BiomeId::CoastalScrub,
+            BiomeId::Wetland,
+            BiomeId::Beach,
+            BiomeId::Alpine,
+            BiomeId::RockyUpland,
+            BiomeId::Cave,
+            BiomeId::Riverbank,
+            BiomeId::ShallowWater,
+            BiomeId::DeepWater,
+            BiomeId::OffshoreShelf,
+        ];
+        for biome in all {
+            assert_eq!(
+                BiomeId::from_rule_id(biome.as_rule_id()),
+                biome,
+                "round-trip failed for {biome:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn from_rule_id_accepts_pascal_case_surface_rules() {
+        assert_eq!(BiomeId::from_rule_id("CoastalScrub"), BiomeId::CoastalScrub);
+        assert_eq!(BiomeId::from_rule_id("RockyUpland"), BiomeId::RockyUpland);
+    }
 }

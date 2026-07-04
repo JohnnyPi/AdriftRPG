@@ -69,14 +69,14 @@ pub fn river_flow_bounds_from_spline(river: &RiverSpline, flow_radius_m: f32) ->
 
 use crate::data::ConfigRegistryResource;
 use crate::data::UserSetupPrefs;
-use game_data::CompiledHydrologyBody;
 use crate::state::AppState;
 use crate::terrain::{
-    TerrainPipelineState, TerrainRegenPending, TerrainRecipeRevision, TerrainRevision,
+    TerrainPipelineState, TerrainRecipeRevision, TerrainRegenPending, TerrainRevision,
     TerrainWorldInitSet,
 };
 use crate::ui::{TerrainTweaks, WaterTweaks};
 use crate::world::requested_world_id;
+use game_data::CompiledHydrologyBody;
 
 #[derive(Resource, Clone, Debug, Default)]
 pub struct TerrainFeatureRegistry {
@@ -106,7 +106,10 @@ impl Plugin for TerrainFeaturePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TerrainFeatureRegistry>()
             .init_resource::<CameraWaterState>()
-            .add_systems(OnEnter(AppState::Running), init_terrain_features.after(TerrainWorldInitSet))
+            .add_systems(
+                OnEnter(AppState::Running),
+                init_terrain_features.after(TerrainWorldInitSet),
+            )
             .add_systems(
                 Update,
                 (sync_hydrology_from_tweaks, update_camera_water_state)
@@ -235,10 +238,7 @@ pub fn build_hydrology(
             .as_str()
             .strip_prefix("hydrology.")
             .unwrap_or(lake.id.as_str());
-        let world_center = [
-            center[0] - coord_offset[0],
-            center[1] - coord_offset[2],
-        ];
+        let world_center = [center[0] - coord_offset[0], center[1] - coord_offset[2]];
         bodies.insert(
             WaterBodyId(next_id),
             WaterBody {

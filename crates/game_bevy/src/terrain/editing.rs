@@ -5,7 +5,7 @@ use terrain_generation::DensitySource;
 use tracing::info;
 use voxel_core::{MaterialId, TerrainEditCommand};
 
-use crate::camera::{camera_view_direction, MainGameCamera, MmoCamera};
+use crate::camera::{MainGameCamera, MmoCamera, camera_view_direction};
 use crate::debug_tools::DebugKeyBindings;
 use crate::environment::BiomeCatalog;
 use crate::environment::biomes::BiomeKind;
@@ -68,12 +68,7 @@ fn handle_edit_keys(
         return;
     };
 
-    let center = edit_target_world(
-        player_tf.translation,
-        cam,
-        &spatial,
-        cam.player,
-    );
+    let center = edit_target_world(player_tf.translation, cam, &spatial, cam.player);
     match &mut command {
         TerrainEditCommand::SubtractSphere { center: c, .. }
         | TerrainEditCommand::AddSphere { center: c, .. }
@@ -90,14 +85,7 @@ fn handle_edit_keys(
         &command,
         |wx, wy, wz| source.sample_density(wx as f32, wy as f32, wz as f32),
         |wx, wy, wz, density| {
-            material_for_world(
-                &biomes,
-                &source,
-                wx as f32,
-                wy as f32,
-                wz as f32,
-                density,
-            )
+            material_for_world(&biomes, &source, wx as f32, wy as f32, wz as f32, density)
         },
     );
 

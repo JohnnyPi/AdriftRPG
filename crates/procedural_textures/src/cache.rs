@@ -38,12 +38,16 @@ pub fn write_texture_cache(key: [u8; 32], maps: &GeneratedPbrMaps) {
     }
 }
 
-pub fn bake_recipe_with_cache(recipe: &TerrainMaterialRecipe) -> Result<GeneratedPbrMaps, crate::error::TextureGenerationError> {
+pub fn bake_recipe_with_cache(
+    recipe: &TerrainMaterialRecipe,
+) -> Result<GeneratedPbrMaps, crate::error::TextureGenerationError> {
     let key = texture_cache_key(recipe);
     if let Some(cached) = try_load_texture_cache(key) {
         return Ok(cached);
     }
-    let maps = recipe.generator.generate(recipe.resolution, recipe.resolution)?;
+    let maps = recipe
+        .generator
+        .generate(recipe.resolution, recipe.resolution)?;
     write_texture_cache(key, &maps);
     Ok(maps)
 }

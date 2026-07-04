@@ -20,7 +20,9 @@ pub enum DataError {
         expected: u32,
     },
 
-    #[error("duplicate definition id `{id}` (first seen in `{first_path}`, also in `{duplicate_path}`)")]
+    #[error(
+        "duplicate definition id `{id}` (first seen in `{first_path}`, also in `{duplicate_path}`)"
+    )]
     DuplicateId {
         id: StableId,
         first_path: String,
@@ -28,7 +30,10 @@ pub enum DataError {
     },
 
     #[error("unknown reference `{reference}` in `{context}`")]
-    UnknownReference { reference: StableId, context: String },
+    UnknownReference {
+        reference: StableId,
+        context: String,
+    },
 
     #[error("invalid value in `{context}`: {message}")]
     InvalidValue { context: String, message: String },

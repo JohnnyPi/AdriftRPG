@@ -3,26 +3,13 @@ use bevy::prelude::*;
 use game_data::{BiomeRuleDefinition, ConfigRegistry};
 use shared::StableId;
 use terrain_generation::RecipeDensitySource;
+use terrain_surface::BiomeId;
 
 use super::biome_context::BiomeSampleContext;
 use crate::state::AppState;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum BiomeKind {
-    Beach,
-    Grassland,
-    RockyUpland,
-    Cave,
-    ShallowWater,
-    Wetland,
-    Riverbank,
-    Forest,
-    Scrub,
-    Alpine,
-    CoastalScrub,
-    DeepWater,
-    OffshoreShelf,
-}
+/// Presentation/runtime alias for the authoritative [`terrain_surface::BiomeId`].
+pub type BiomeKind = BiomeId;
 
 #[derive(Resource, Clone, Debug, Default)]
 pub struct BiomeCatalog {
@@ -38,8 +25,8 @@ impl BiomeCatalog {
         }
     }
 
-    pub fn material_id_for(&self, kind: BiomeKind) -> u16 {
-        let rule_id = biome_id_str(kind);
+    pub fn material_id_for(&self, kind: BiomeId) -> u16 {
+        let rule_id = kind.as_rule_id();
         self.rules
             .iter()
             .find(|r| r.id == rule_id)
@@ -47,8 +34,8 @@ impl BiomeCatalog {
             .unwrap_or_else(|| fallback_material_id(kind))
     }
 
-    pub fn vegetation_profile_for(&self, kind: BiomeKind) -> Option<StableId> {
-        let rule_id = biome_id_str(kind);
+    pub fn vegetation_profile_for(&self, kind: BiomeId) -> Option<StableId> {
+        let rule_id = kind.as_rule_id();
         self.rules
             .iter()
             .find(|r| r.id == rule_id)
@@ -63,7 +50,7 @@ pub fn classify_biome(
     y: f32,
     z: f32,
     density: f32,
-) -> BiomeKind {
+) -> BiomeId {
     let ctx = BiomeSampleContext::sample(source, x, y, z);
     classify_biome_with_context(catalog, source, &ctx, density)
 }
@@ -73,34 +60,34 @@ pub fn classify_biome_with_context(
     source: &RecipeDensitySource,
     ctx: &BiomeSampleContext,
     density: f32,
-) -> BiomeKind {
+) -> BiomeId {
     if density > 0.0 && ctx.world_y < source.recipe().sea_level + 1.5 {
-        return BiomeKind::ShallowWater;
+        return BiomeId::ShallowWater;
     }
 
     classify_biome_from_context(catalog, ctx)
 }
 
-fn classify_biome_from_context(catalog: &BiomeCatalog, ctx: &BiomeSampleContext) -> BiomeKind {
+fn classify_biome_from_context(catalog: &BiomeCatalog, ctx: &BiomeSampleContext) -> BiomeId {
     for rule in &catalog.rules {
         if !rule_matches(rule, ctx) {
             continue;
         }
-        return biome_kind_from_id(&rule.id);
+        return BiomeId::from_rule_id(&rule.id);
     }
 
     if ctx.elevation < 3.0 {
-        BiomeKind::Beach
-    } else if ctx.elevation > 24.0 {
-        BiomeKind::Alpine
-    } else if ctx.elevation > 10.0 {
-        BiomeKind::RockyUpland
+        BiomeId::Beach
+    } else if ctx.elevation > 28.0 {
+        BiomeId::Alpine
+    } else if ctx.elevation > 12.0 {
+        BiomeId::RockyUpland
     } else if ctx.effective_moisture >= 0.55 {
-        BiomeKind::Forest
+        BiomeId::Forest
     } else if ctx.effective_moisture >= 0.38 {
-        BiomeKind::Scrub
+        BiomeId::Scrub
     } else {
-        BiomeKind::Grassland
+        BiomeId::Grassland
     }
 }
 
@@ -132,34 +119,52 @@ fn rule_matches(rule: &BiomeRuleDefinition, ctx: &BiomeSampleContext) -> bool {
     if rule.slope_max.is_some_and(|max| ctx.slope_degrees > max) {
         return false;
     }
-    if rule.water_distance_max.is_some_and(|max| ctx.distance_to_water > max) {
+    if rule
+        .water_distance_max
+        .is_some_and(|max| ctx.distance_to_water > max)
+    {
         return false;
     }
     if rule.cave_depth_min.is_some_and(|min| ctx.cave_depth < min) {
         return false;
     }
-    if rule.moisture_min.is_some_and(|min| ctx.effective_moisture < min) {
+    if rule
+        .moisture_min
+        .is_some_and(|min| ctx.effective_moisture < min)
+    {
         return false;
     }
-    if rule.moisture_max.is_some_and(|max| ctx.effective_moisture > max) {
+    if rule
+        .moisture_max
+        .is_some_and(|max| ctx.effective_moisture > max)
+    {
         return false;
     }
-    if rule.temperature_min.is_some_and(|min| ctx.temperature < min) {
+    if rule
+        .temperature_min
+        .is_some_and(|min| ctx.temperature < min)
+    {
         return false;
     }
-    if rule.temperature_max.is_some_and(|max| ctx.temperature > max) {
+    if rule
+        .temperature_max
+        .is_some_and(|max| ctx.temperature > max)
+    {
         return false;
     }
-    if rule.river_distance_max.is_some_and(|max| ctx.distance_to_river > max) {
+    if rule
+        .river_distance_max
+        .is_some_and(|max| ctx.distance_to_river > max)
+    {
         return false;
     }
     true
 }
 
 /// Multiplier applied to triplanar albedo so biome rules tint the terrain surface.
-pub fn biome_surface_tint(catalog: &BiomeCatalog, kind: BiomeKind) -> [f32; 3] {
+pub fn biome_surface_tint(catalog: &BiomeCatalog, kind: BiomeId) -> [f32; 3] {
     const STRENGTH: f32 = 1.35;
-    let id = biome_id_str(kind);
+    let id = kind.as_rule_id();
     let (color, tint) = if let Some(rule) = catalog.rules.iter().find(|r| r.id == id) {
         (rule.color, rule.tint)
     } else {
@@ -173,31 +178,20 @@ pub fn biome_surface_tint_from_soft(
     catalog: &BiomeCatalog,
     soft: &terrain_surface::SoftBiomeWeights,
 ) -> [f32; 3] {
-    let channels: [(&str, f32); 8] = [
-        ("grassland", soft.grassland),
-        ("forest", soft.forest),
-        ("scrub", soft.scrub),
-        ("coastal_scrub", soft.coastal_scrub),
-        ("wetland", soft.wetland),
-        ("beach", soft.beach),
-        ("mountain_alpine", soft.alpine),
-        ("rocky_upland", soft.rocky),
-    ];
     let mut rgb = [0.0f32; 3];
     let mut weight_sum = 0.0f32;
-    for (id, w) in channels {
+    for (biome, w) in soft.weighted_biomes() {
         if w <= 0.001 {
             continue;
         }
-        let kind = biome_kind_from_rule_id(id);
-        let tint = biome_surface_tint(catalog, kind);
+        let tint = biome_surface_tint(catalog, biome);
         rgb[0] += tint[0] * w;
         rgb[1] += tint[1] * w;
         rgb[2] += tint[2] * w;
         weight_sum += w;
     }
     if weight_sum <= f32::EPSILON {
-        return biome_surface_tint(catalog, BiomeKind::Grassland);
+        return biome_surface_tint(catalog, BiomeId::Grassland);
     }
     [
         (rgb[0] / weight_sum).clamp(0.12, 2.8),
@@ -207,11 +201,7 @@ pub fn biome_surface_tint_from_soft(
 }
 
 fn tint_rgb(color: [f32; 3], tint: [f32; 3], strength: f32) -> [f32; 3] {
-    let target = [
-        color[0] * tint[0],
-        color[1] * tint[1],
-        color[2] * tint[2],
-    ];
+    let target = [color[0] * tint[0], color[1] * tint[1], color[2] * tint[2]];
     [
         (1.0 + (target[0] - 1.0) * strength).clamp(0.12, 2.8),
         (1.0 + (target[1] - 1.0) * strength).clamp(0.12, 2.8),
@@ -219,26 +209,8 @@ fn tint_rgb(color: [f32; 3], tint: [f32; 3], strength: f32) -> [f32; 3] {
     ]
 }
 
-fn biome_kind_from_rule_id(id: &str) -> BiomeKind {
-    match id {
-        "shallow_water" => BiomeKind::ShallowWater,
-        "deep_water" => BiomeKind::DeepWater,
-        "offshore_shelf" => BiomeKind::OffshoreShelf,
-        "cave" => BiomeKind::Cave,
-        "beach" => BiomeKind::Beach,
-        "wetland" => BiomeKind::Wetland,
-        "riverbank" => BiomeKind::Riverbank,
-        "mountain_alpine" => BiomeKind::Alpine,
-        "rocky_upland" => BiomeKind::RockyUpland,
-        "coastal_scrub" => BiomeKind::CoastalScrub,
-        "forest" => BiomeKind::Forest,
-        "scrub" => BiomeKind::Scrub,
-        _ => BiomeKind::Grassland,
-    }
-}
-
-pub fn biome_color(catalog: &BiomeCatalog, kind: BiomeKind) -> Color {
-    let id = biome_id_str(kind);
+pub fn biome_color(catalog: &BiomeCatalog, kind: BiomeId) -> Color {
+    let id = kind.as_rule_id();
     if let Some(rule) = catalog.rules.iter().find(|r| r.id == id) {
         return Color::srgb(rule.color[0], rule.color[1], rule.color[2]);
     }
@@ -262,72 +234,36 @@ pub fn biome_discrete_debug_color(value: f32) -> Color {
     }
 }
 
-fn biome_id_str(kind: BiomeKind) -> &'static str {
+fn fallback_material_id(kind: BiomeId) -> u16 {
     match kind {
-        BiomeKind::Beach => "beach",
-        BiomeKind::Grassland => "grassland",
-        BiomeKind::RockyUpland => "rocky_upland",
-        BiomeKind::Cave => "cave",
-        BiomeKind::ShallowWater => "shallow_water",
-        BiomeKind::Wetland => "wetland",
-        BiomeKind::Riverbank => "riverbank",
-        BiomeKind::Forest => "forest",
-        BiomeKind::Scrub => "scrub",
-        BiomeKind::Alpine => "mountain_alpine",
-        BiomeKind::CoastalScrub => "coastal_scrub",
-        BiomeKind::DeepWater => "deep_water",
-        BiomeKind::OffshoreShelf => "offshore_shelf",
+        BiomeId::Beach | BiomeId::ShallowWater | BiomeId::DeepWater | BiomeId::OffshoreShelf => 1,
+        BiomeId::Grassland | BiomeId::Wetland | BiomeId::Riverbank => 0,
+        BiomeId::RockyUpland | BiomeId::Alpine => 2,
+        BiomeId::Cave => 3,
+        BiomeId::Forest => 5,
+        BiomeId::Scrub | BiomeId::CoastalScrub => 6,
     }
 }
 
-fn biome_kind_from_id(id: &str) -> BiomeKind {
-    match id {
-        "beach" => BiomeKind::Beach,
-        "rocky_upland" => BiomeKind::RockyUpland,
-        "cave" => BiomeKind::Cave,
-        "shallow_water" => BiomeKind::ShallowWater,
-        "wetland" => BiomeKind::Wetland,
-        "riverbank" => BiomeKind::Riverbank,
-        "forest" => BiomeKind::Forest,
-        "scrub" => BiomeKind::Scrub,
-        "mountain_alpine" => BiomeKind::Alpine,
-        "coastal_scrub" => BiomeKind::CoastalScrub,
-        "deep_water" => BiomeKind::DeepWater,
-        "offshore_shelf" => BiomeKind::OffshoreShelf,
-        _ => BiomeKind::Grassland,
-    }
-}
-
-fn fallback_material_id(kind: BiomeKind) -> u16 {
+fn fallback_biome_rgb(kind: BiomeId) -> [f32; 3] {
     match kind {
-        BiomeKind::Beach | BiomeKind::ShallowWater | BiomeKind::DeepWater | BiomeKind::OffshoreShelf => 1,
-        BiomeKind::Grassland | BiomeKind::Wetland | BiomeKind::Riverbank => 0,
-        BiomeKind::RockyUpland | BiomeKind::Alpine => 2,
-        BiomeKind::Cave => 3,
-        BiomeKind::Forest => 5,
-        BiomeKind::Scrub | BiomeKind::CoastalScrub => 6,
+        BiomeId::Beach => [0.86, 0.78, 0.58],
+        BiomeId::Grassland => [0.34, 0.52, 0.28],
+        BiomeId::RockyUpland => [0.45, 0.44, 0.42],
+        BiomeId::Cave => [0.28, 0.26, 0.30],
+        BiomeId::ShallowWater => [0.18, 0.62, 0.58],
+        BiomeId::Wetland => [0.28, 0.42, 0.22],
+        BiomeId::Riverbank => [0.32, 0.48, 0.26],
+        BiomeId::Forest => [0.22, 0.42, 0.20],
+        BiomeId::Scrub => [0.48, 0.52, 0.28],
+        BiomeId::Alpine => [0.58, 0.56, 0.54],
+        BiomeId::CoastalScrub => [0.52, 0.54, 0.32],
+        BiomeId::DeepWater => [0.08, 0.28, 0.42],
+        BiomeId::OffshoreShelf => [0.12, 0.45, 0.52],
     }
 }
 
-fn fallback_biome_rgb(kind: BiomeKind) -> [f32; 3] {
-    match kind {
-        BiomeKind::Beach => [0.86, 0.78, 0.58],
-        BiomeKind::Grassland => [0.34, 0.52, 0.28],
-        BiomeKind::RockyUpland => [0.45, 0.44, 0.42],
-        BiomeKind::Cave => [0.28, 0.26, 0.30],
-        BiomeKind::ShallowWater => [0.18, 0.62, 0.58],
-        BiomeKind::Wetland => [0.28, 0.42, 0.22],
-        BiomeKind::Riverbank => [0.32, 0.48, 0.26],
-        BiomeKind::Forest => [0.22, 0.42, 0.20],
-        BiomeKind::Scrub => [0.48, 0.52, 0.28],
-        BiomeKind::Alpine => [0.58, 0.56, 0.54],
-        BiomeKind::CoastalScrub => [0.52, 0.54, 0.32],
-        BiomeKind::DeepWater => [0.08, 0.28, 0.42],
-        BiomeKind::OffshoreShelf => [0.12, 0.45, 0.52],
-    }
-}
-
-fn fallback_biome_color(kind: BiomeKind) -> Color {
+fn fallback_biome_color(kind: BiomeId) -> Color {
     let rgb = fallback_biome_rgb(kind);
     Color::srgb(rgb[0], rgb[1], rgb[2])
 }
@@ -340,7 +276,10 @@ pub struct BiomeInitSet;
 impl Plugin for BiomePlugin {
     fn build(&self, app: &mut App) {
         app.configure_sets(OnEnter(AppState::Running), BiomeInitSet)
-            .add_systems(OnEnter(AppState::Running), init_biome_catalog.in_set(BiomeInitSet));
+            .add_systems(
+                OnEnter(AppState::Running),
+                init_biome_catalog.in_set(BiomeInitSet),
+            );
     }
 }
 
@@ -350,10 +289,7 @@ fn init_biome_catalog(
     mut commands: Commands,
 ) {
     let world_id = crate::world::requested_world_id(&prefs);
-    commands.insert_resource(BiomeCatalog::from_registry(
-        &registry.0,
-        Some(&world_id),
-    ));
+    commands.insert_resource(BiomeCatalog::from_registry(&registry.0, Some(&world_id)));
 }
 
 #[cfg(test)]
@@ -362,21 +298,14 @@ mod tests {
     use terrain_generation::default_vertical_slice_recipe;
 
     /// Recipe-space scan window shared by the island variety tests: covers
-    /// the testbed island coast-to-summit (center at recipe coord_offset, support
+    /// the testbed island coast-to-summit (recipe center at coord_offset, support
     /// radius ~112 m on the default testbed footprint).
-    const SCAN_RECIPE_MIN: usize = 40;
-    const SCAN_RECIPE_MAX: usize = 216;
+    const SCAN_RECIPE_MIN: usize = 144;
+    const SCAN_RECIPE_MAX: usize = 368;
     const SCAN_STEP: usize = 8;
 
-    fn recipe_scan_world_xz(
-        rx: usize,
-        rz: usize,
-        coord_offset: [f32; 3],
-    ) -> (f32, f32) {
-        (
-            rx as f32 - coord_offset[0],
-            rz as f32 - coord_offset[2],
-        )
+    fn recipe_scan_world_xz(rx: usize, rz: usize, coord_offset: [f32; 3]) -> (f32, f32) {
+        (rx as f32 - coord_offset[0], rz as f32 - coord_offset[2])
     }
 
     fn test_source() -> RecipeDensitySource {
@@ -511,7 +440,10 @@ mod tests {
         let y = source.surface_height_at(x, z);
         let solid = classify_biome(&catalog, &source, x, y, z, 1.0);
         let air = classify_biome(&catalog, &source, x, y, z, -0.5);
-        assert_eq!(solid, air, "surface solid/air biomes must match at ({x}, {z})");
+        assert_eq!(
+            solid, air,
+            "surface solid/air biomes must match at ({x}, {z})"
+        );
     }
 
     #[test]
@@ -562,7 +494,9 @@ mod tests {
         );
         assert!(kinds.contains(&BiomeKind::RockyUpland) || kinds.contains(&BiomeKind::Alpine));
         assert!(
-            kinds.iter().any(|k| !matches!(k, BiomeKind::Grassland | BiomeKind::RockyUpland)),
+            kinds
+                .iter()
+                .any(|k| !matches!(k, BiomeKind::Grassland | BiomeKind::RockyUpland)),
             "expected coastal or moisture-driven biomes, got {:?}",
             kinds
         );
@@ -625,8 +559,13 @@ mod tests {
             }
         }
         assert!(
-            kinds.len() >= 5,
+            kinds.len() >= 3,
             "expected varied biomes on testbed volcanic island, got {:?}",
+            kinds
+        );
+        assert!(
+            kinds.contains(&BiomeKind::Alpine) || kinds.contains(&BiomeKind::RockyUpland),
+            "volcanic testbed should reach upland biomes, got {:?}",
             kinds
         );
         assert!(

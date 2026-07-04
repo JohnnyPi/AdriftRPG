@@ -2,7 +2,7 @@
 //! Topological validation helpers for signed-density terrain.
 
 use crate::recipe::{CombineOp, RecipeDensitySource, RecipeOp, TerrainRecipe};
-use crate::{capsule_sdf, ellipsoid_sdf, plane_density, solid_union, ValueNoise};
+use crate::{ValueNoise, capsule_sdf, ellipsoid_sdf, plane_density, solid_union};
 
 /// Meters of solid guaranteed below the coastal surface outside intentional cavities.
 pub const FOUNDATION_DEPTH_M: f32 = 14.0;
@@ -31,7 +31,9 @@ pub fn cavity_sdf_at(recipe: &TerrainRecipe, x: f32, y: f32, z: f32) -> f32 {
                 if let Some((freq, amp)) = peak_noise {
                     cy += (noise.sample(x * freq, 0.0, z * freq) - 0.5) * amp;
                 }
-                ellipsoid_sdf(x, y, z, center[0], cy, center[2], radii[0], radii[1], radii[2])
+                ellipsoid_sdf(
+                    x, y, z, center[0], cy, center[2], radii[0], radii[1], radii[2],
+                )
             }
             RecipeOp::Capsule {
                 start,

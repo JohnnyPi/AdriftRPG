@@ -1,15 +1,12 @@
 // crates/terrain_generation/src/island_gen/coast.rs
 //! Cliff and beach classification (VS3 §8–9).
 
-use crate::field2d::{smoothstep, Field2D};
+use crate::field2d::{Field2D, smoothstep};
 use crate::island_gen::params::IslandGenParams;
+use crate::island_gen::util::seeded_unit;
 use crate::noise::ValueNoise;
 
 pub const SALT_BERM_HEIGHT: u64 = 0xBEAC_0001_0001;
-
-fn seeded_unit(noise: &ValueNoise, wx: f32, wz: f32) -> f32 {
-    noise.sample(wx * 0.0025, 0.0, wz * 0.0025)
-}
 
 fn range_mix(min: f32, max: f32, t: f32) -> f32 {
     min + (max - min) * t.clamp(0.0, 1.0)
@@ -138,12 +135,7 @@ mod tests {
         let radius_cells = 18;
         let mask = circular_mask(radius_cells, spacing);
         let coast_distance = compute_coast_distance(&mask, spacing);
-        let mut elevation = Field2D::<f32>::new(
-            mask.width,
-            mask.height,
-            mask.origin,
-            spacing,
-        );
+        let mut elevation = Field2D::<f32>::new(mask.width, mask.height, mask.origin, spacing);
         let cx = radius_cells;
         let sea = 0.0f32;
         for z in 0..mask.height {

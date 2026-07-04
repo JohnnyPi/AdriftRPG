@@ -1,7 +1,7 @@
 // crates/terrain_generation/src/island_gen/soil_field.rs
 //! Soil depth from slope, sediment, and relief (VS3 §15 adjunct).
 
-use crate::field2d::{smoothstep, Field2D};
+use crate::field2d::{Field2D, smoothstep};
 use crate::island_gen::params::IslandGenParams;
 
 pub fn compute_soil_depth(
@@ -33,8 +33,7 @@ pub fn compute_soil_depth(
             let slope_norm = (slope.get(x, z) / 45.0).clamp(0.0, 1.0);
             let sediment_term = sediment.get(x, z) * sediment_gain;
             let summit_thin = smoothstep(summit_start, summit_start + 50.0, relief);
-            let depth =
-                (base - slope_penalty * slope_norm + sediment_term) * (1.0 - summit_thin);
+            let depth = (base - slope_penalty * slope_norm + sediment_term) * (1.0 - summit_thin);
             soil.set(x, z, depth.clamp(0.0, max_soil));
         }
     }

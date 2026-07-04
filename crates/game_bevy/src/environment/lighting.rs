@@ -1,19 +1,14 @@
 // crates/game_bevy/src/environment/lighting.rs
 use bevy::prelude::*;
 
-use crate::data::ConfigRegistryResource;
+use super::lighting_state::SyncEnvironmentLightingSet;
 use crate::player::Player;
 use crate::state::AppState;
 use crate::terrain::TerrainPipelineState;
-use crate::ui::LightingTweaks;
-use super::lighting_state::SyncEnvironmentLightingSet;
 use terrain_generation::RecipeDensitySource;
 
 #[derive(Component)]
 pub struct SunLight;
-
-#[derive(Component)]
-pub struct CaveAmbientZone;
 
 pub struct LightingPlugin;
 
@@ -22,29 +17,12 @@ impl Plugin for LightingPlugin {
         app.add_systems(
             Update,
             (
-                apply_lighting_hot_reload,
                 update_sky_visibility,
                 apply_cave_atmosphere.after(SyncEnvironmentLightingSet),
             )
                 .run_if(in_state(AppState::Running)),
         );
     }
-}
-
-fn apply_lighting_hot_reload(
-    registry: Res<ConfigRegistryResource>,
-    tweaks: Res<LightingTweaks>,
-    mut last_hash: Local<Option<String>>,
-    mut clear: ResMut<ClearColor>,
-) {
-    let hash = registry.0.hash.clone();
-    if last_hash.as_ref() == Some(&hash) && !tweaks.override_fog {
-        return;
-    }
-    *last_hash = Some(hash);
-
-    let _ = registry.0.active_lighting();
-    clear.0 = Color::BLACK;
 }
 
 fn update_sky_visibility(
@@ -59,13 +37,19 @@ fn update_sky_visibility(
         return;
     };
     let Some(source) = pipeline.density_source.as_ref() else {
-        sky_vis.0 = 1.0;
+        *sky_vis = super::lighting_state::SkyVisibility::default();
         return;
     };
-    sky_vis.0 = sky_visibility_at(source, player_tf.translation);
+    let cave = cave_depth_factor(source, player_tf.translation);
+    sky_vis.cave_depth = cave;
+    sky_vis.sky = sky_visibility_from_cave(cave, source, player_tf.translation);
 }
 
-pub fn sky_visibility_at(source: &RecipeDensitySource, position: Vec3) -> f32 {
+fn sky_visibility_from_cave(
+    cave_depth: f32,
+    source: &RecipeDensitySource,
+    position: Vec3,
+) -> f32 {
     let sea = source.recipe().sea_level;
     if position.y < sea - 2.0 {
         let density = source.density_at(position.x, position.y + 2.0, position.z);
@@ -73,33 +57,26 @@ pub fn sky_visibility_at(source: &RecipeDensitySource, position: Vec3) -> f32 {
             return 0.15;
         }
     }
-    1.0 - cave_depth_factor(source, position) * 0.85
+    1.0 - cave_depth * 0.85
 }
 
 fn apply_cave_atmosphere(
     pipeline: Res<TerrainPipelineState>,
-    player: Query<(&Transform, &super::lighting_state::SkyVisibility), With<Player>>,
-    mut zones: Query<(&Transform, &mut PointLight), With<CaveAmbientZone>>,
+    player: Query<&super::lighting_state::SkyVisibility, With<Player>>,
     mut ambient: ResMut<GlobalAmbientLight>,
     lighting_state: Res<super::lighting_state::EnvironmentLightingState>,
 ) {
-    let Ok((player_tf, sky_vis)) = player.single() else {
+    let Ok(sky_vis) = player.single() else {
+        ambient.brightness = 0.0;
         return;
     };
-    let Some(source) = pipeline.density_source.as_ref() else {
+    if pipeline.density_source.is_none() {
+        ambient.brightness = 0.0;
         return;
-    };
-
-    let cave_factor = cave_depth_factor(source, player_tf.translation);
-    let sky_factor = sky_vis.0;
-    for (tf, mut light) in &mut zones {
-        let dist = player_tf.translation.distance(tf.translation);
-        light.intensity = if dist < 25.0 {
-            120000.0 * (1.0 - dist / 25.0) * cave_factor
-        } else {
-            0.0
-        };
     }
+
+    let cave_factor = sky_vis.cave_depth;
+    let sky_factor = sky_vis.sky;
 
     let base = lighting_state.effective_ambient_brightness * sky_factor;
     if cave_factor > 0.05 {
@@ -125,52 +102,3 @@ fn cave_depth_factor(source: &RecipeDensitySource, position: Vec3) -> f32 {
     }
     ((sea - position.y + 4.0) / 10.0).clamp(0.0, 1.0)
 }
-
-/// Stub trait for future global illumination / light propagation.
-#[allow(dead_code)]
-pub trait LightPropagationBackend: Send + Sync {
-    fn propagate(&self, _origin: Vec3) -> f32 {
-        1.0
-    }
-}
-
-#[allow(dead_code)]
-pub struct StubLightPropagation;
-
-impl LightPropagationBackend for StubLightPropagation {}
-
-/// Extension-point traits for future lighting backends.
-/// Live day/night uses `environment::simulation_time::SimulationTime`.
-/// Fog is owned by `environment::fog::FogStack` (see `fog.yaml`).
-#[allow(dead_code)]
-pub trait SimulationTime: Send + Sync {
-    fn hours(&self) -> f32 {
-        10.5
-    }
-}
-
-#[allow(dead_code)]
-pub struct FixedMorningTime;
-
-impl SimulationTime for FixedMorningTime {}
-
-/// Celestial lighting stub (sun/moon orbit, phases).
-#[allow(dead_code)]
-pub trait CelestialLightingBackend: Send + Sync {
-    fn sun_direction(&self) -> Vec3 {
-        Vec3::new(-0.4, -0.85, -0.3).normalize_or_zero()
-    }
-
-    fn moon_direction(&self) -> Vec3 {
-        Vec3::new(0.5, 0.6, 0.2).normalize_or_zero()
-    }
-
-    fn moon_phase(&self) -> f32 {
-        0.25
-    }
-}
-
-#[allow(dead_code)]
-pub struct FixedCelestialLighting;
-
-impl CelestialLightingBackend for FixedCelestialLighting {}

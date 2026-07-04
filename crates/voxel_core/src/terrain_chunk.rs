@@ -1,7 +1,7 @@
 // crates/voxel_core/src/terrain_chunk.rs
 use crate::{
-    stable_hash::{fnv1a_update, quantize_density_mm, FNV_OFFSET},
-    ChunkCoord, LocalSample, MaterialId, TerrainSample, CHUNK_SAMPLES, SAMPLE_COUNT,
+    CHUNK_SAMPLES, ChunkCoord, LocalSample, MaterialId, SAMPLE_COUNT, TerrainSample,
+    stable_hash::{FNV_OFFSET, fnv1a_update, quantize_density_mm},
 };
 
 /// Density samples for one chunk: `17 × 17 × 17` corner values covering `16³` cells.
@@ -43,11 +43,7 @@ impl TerrainChunk {
 
     /// Sample on a chunk face shared with a neighbor (`axis`: 0=x, 1=y, 2=z; `high`: max face).
     pub fn border_sample(&self, axis: u8, high: bool, u: u8, v: u8) -> TerrainSample {
-        let edge = if high {
-            (CHUNK_SAMPLES - 1) as u8
-        } else {
-            0
-        };
+        let edge = if high { (CHUNK_SAMPLES - 1) as u8 } else { 0 };
         match axis {
             0 => self.get(LocalSample::new(edge, u, v)),
             1 => self.get(LocalSample::new(u, edge, v)),
@@ -158,12 +154,16 @@ mod tests {
 
     #[test]
     fn density_hash_sphere_chunk_is_stable() {
-        let chunk = fill_chunk_from_density(ChunkCoord::new(0, 0, 0), |x, y, z| {
-            let dx = x as f32 - 8.0;
-            let dy = y as f32 - 8.0;
-            let dz = z as f32 - 8.0;
-            dx * dx + dy * dy + dz * dz - 16.0
-        }, MaterialId(1));
+        let chunk = fill_chunk_from_density(
+            ChunkCoord::new(0, 0, 0),
+            |x, y, z| {
+                let dx = x as f32 - 8.0;
+                let dy = y as f32 - 8.0;
+                let dz = z as f32 - 8.0;
+                dx * dx + dy * dy + dz * dz - 16.0
+            },
+            MaterialId(1),
+        );
         assert_eq!(chunk.density_hash(), 9251488588076025822);
     }
 }

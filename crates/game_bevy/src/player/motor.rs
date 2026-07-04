@@ -77,7 +77,11 @@ pub fn resolve_facing_yaw(
 }
 
 /// Classify locomotion from grounded state and slope (VS2 §9.1).
-pub fn classify_locomotion(grounded: bool, slope_deg: f32, max_walkable_slope_deg: f32) -> LocomotionState {
+pub fn classify_locomotion(
+    grounded: bool,
+    slope_deg: f32,
+    max_walkable_slope_deg: f32,
+) -> LocomotionState {
     if !grounded {
         LocomotionState::Airborne
     } else if slope_deg >= max_walkable_slope_deg * 0.92 {

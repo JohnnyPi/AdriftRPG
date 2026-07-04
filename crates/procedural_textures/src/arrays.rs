@@ -1,8 +1,8 @@
 // crates/procedural_textures/src/arrays.rs
 use crate::cache::bake_recipe_with_cache;
 use crate::error::TextureGenerationError;
-use crate::material_recipe::{order_recipes_for_palette, TerrainMaterialRecipe};
 use crate::maps::GeneratedPbrMaps;
+use crate::material_recipe::{TerrainMaterialRecipe, order_recipes_for_palette};
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CpuTextureArrays {
@@ -93,11 +93,7 @@ fn apply_tint(maps: &mut GeneratedPbrMaps, tint: [f32; 3]) {
 
 fn validate_map_lengths(maps: &GeneratedPbrMaps) -> Result<(), TextureGenerationError> {
     let expected = maps.width as usize * maps.height as usize * 4;
-    for buffer in [
-        &maps.albedo_rgba8,
-        &maps.normal_rgba8,
-        &maps.ormh_rgba8,
-    ] {
+    for buffer in [&maps.albedo_rgba8, &maps.normal_rgba8, &maps.ormh_rgba8] {
         if buffer.len() != expected {
             return Err(TextureGenerationError::InvalidBufferLength);
         }

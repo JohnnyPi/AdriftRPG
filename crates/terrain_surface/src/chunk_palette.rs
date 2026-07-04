@@ -5,6 +5,8 @@ pub const CHUNK_LOCAL_SLOT_COUNT: usize = 8;
 pub const UNUSED_SLOT: u32 = u32::MAX;
 
 /// Per-chunk mapping from local vertex slot (0..7) to global texture-array layer.
+///
+/// See crate-level docs for where this sits in the palette hierarchy.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ChunkSlotPalette {
     local_to_global: [u32; CHUNK_LOCAL_SLOT_COUNT],

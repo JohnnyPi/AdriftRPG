@@ -55,12 +55,8 @@ pub fn update_camera_focus(
     );
 
     if camera.recenter_active {
-        camera.orbit_yaw_offset = smooth_angle(
-            camera.orbit_yaw_offset,
-            0.0,
-            config.rotation_sharpness,
-            dt,
-        );
+        camera.orbit_yaw_offset =
+            smooth_angle(camera.orbit_yaw_offset, 0.0, config.rotation_sharpness, dt);
         if camera.orbit_yaw_offset.abs() < 0.001 {
             camera.orbit_yaw_offset = 0.0;
             camera.recenter_active = false;

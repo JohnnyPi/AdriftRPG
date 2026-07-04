@@ -233,9 +233,17 @@ gates: []
             fs::copy(&src, dir.path().join(name)).unwrap();
         }
     }
+    let render_profile =
+        workspace_assets().join("terrain_materials/render_profiles/terrain_high.render.yaml");
+    if render_profile.exists() {
+        fs::copy(&render_profile, dir.path().join("terrain_high.render.yaml")).unwrap();
+    }
 
     let registry = load_registry_from_directory(dir.path()).expect("registry with biome stubs");
-    let biomes = registry.biomes.get(&shared::StableId::new("biomes.test")).unwrap();
+    let biomes = registry
+        .biomes
+        .get(&shared::StableId::new("biomes.test"))
+        .unwrap();
     assert_eq!(biomes.rules[0].gameplay_tags.len(), 2);
     assert!(biomes.rules[0].vegetation_profile_id.is_some());
 }
@@ -259,7 +267,10 @@ fn island_worlds_load_with_scale_appropriate_biomes() {
 
 #[test]
 fn rejects_invalid_combine_op() {
-    use game_data::{validate_definitions, RawDefinition, TerrainGenerationDefinition, TerrainOperationDefinition};
+    use game_data::{
+        RawDefinition, TerrainGenerationDefinition, TerrainOperationDefinition,
+        validate_definitions,
+    };
     use shared::{DefinitionHeader, StableId};
 
     let report = validate_definitions(&[RawDefinition::TerrainGeneration(
@@ -287,7 +298,10 @@ fn rejects_invalid_combine_op() {
 
 #[test]
 fn rejects_non_standard_chunk_cells() {
-    use game_data::{validate_definitions, RawDefinition, WorldChunksDefinition, WorldDefinition, WorldVoxelDefinition};
+    use game_data::{
+        RawDefinition, WorldChunksDefinition, WorldDefinition, WorldVoxelDefinition,
+        validate_definitions,
+    };
     use shared::{DefinitionHeader, StableId};
 
     let report = validate_definitions(&[RawDefinition::World(WorldDefinition {
@@ -333,13 +347,24 @@ fn expanded_slice_materials_v2_loads_with_layer_order() {
         .get(&shared::StableId::new("materials.expanded_slice"))
         .expect("expanded slice materials");
     assert!(materials.layer_order.len() >= 9);
-    assert!(materials.layer_for_key(&shared::StableId::new("flowstone")).is_some());
-    assert!(materials.layer_for_key(&shared::StableId::new("limestone")).is_some());
+    assert!(
+        materials
+            .layer_for_key(&shared::StableId::new("flowstone"))
+            .is_some()
+    );
+    assert!(
+        materials
+            .layer_for_key(&shared::StableId::new("limestone"))
+            .is_some()
+    );
 }
 
 #[test]
 fn rejects_duplicate_material_layers() {
-    use game_data::{validate_definitions, RawDefinition, TerrainMaterialEntryDefinition, TerrainMaterialsDefinition};
+    use game_data::{
+        RawDefinition, TerrainMaterialEntryDefinition, TerrainMaterialsDefinition,
+        validate_definitions,
+    };
     use shared::{DefinitionHeader, StableId};
 
     let report = validate_definitions(&[RawDefinition::TerrainMaterials(

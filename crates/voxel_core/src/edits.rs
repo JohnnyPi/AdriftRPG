@@ -67,12 +67,20 @@ impl TerrainEditStore {
         procedural_material: impl Fn(i32, i32, i32, f32) -> MaterialId,
     ) -> BTreeSet<ChunkCoord> {
         match command {
-            TerrainEditCommand::SubtractSphere { center, radius_m } => {
-                self.apply_sphere(*center, *radius_m, true, &procedural_density, &procedural_material)
-            }
-            TerrainEditCommand::AddSphere { center, radius_m } => {
-                self.apply_sphere(*center, *radius_m, false, &procedural_density, &procedural_material)
-            }
+            TerrainEditCommand::SubtractSphere { center, radius_m } => self.apply_sphere(
+                *center,
+                *radius_m,
+                true,
+                &procedural_density,
+                &procedural_material,
+            ),
+            TerrainEditCommand::AddSphere { center, radius_m } => self.apply_sphere(
+                *center,
+                *radius_m,
+                false,
+                &procedural_density,
+                &procedural_material,
+            ),
             TerrainEditCommand::PaintMaterial {
                 center,
                 radius_m,
@@ -161,13 +169,8 @@ impl TerrainEditStore {
                     if density > 0.0 {
                         continue;
                     }
-                    self.overrides.insert(
-                        (wx, wy, wz),
-                        TerrainSample {
-                            density,
-                            material,
-                        },
-                    );
+                    self.overrides
+                        .insert((wx, wy, wz), TerrainSample { density, material });
                     affected.insert(WorldSample::new(wx, wy, wz).chunk_coord());
                 }
             }
@@ -201,11 +204,7 @@ fn expand_neighbor_chunks(chunks: &mut BTreeSet<ChunkCoord>) {
         for dx in -1..=1 {
             for dy in -1..=1 {
                 for dz in -1..=1 {
-                    chunks.insert(ChunkCoord::new(
-                        coord.x + dx,
-                        coord.y + dy,
-                        coord.z + dz,
-                    ));
+                    chunks.insert(ChunkCoord::new(coord.x + dx, coord.y + dy, coord.z + dz));
                 }
             }
         }

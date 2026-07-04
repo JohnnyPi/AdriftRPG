@@ -1,12 +1,12 @@
 // crates/game_bevy/src/physics/mod.rs
-use bevy::prelude::*;
-use physics_bridge::{
-    CharacterController, CharacterControllerBundle, CharacterControllerPlugin,
-    CharacterPhysicsSystems, GroundedState, LinearVelocity, PhysicsBridgePlugin,
-    player_layers, CharacterCollisionQuery, GROUND_CONTACT_SKIN, terrain_ground_filter,
-};
 use avian3d::prelude::{Collider, CollisionLayers, SpatialQuery};
+use bevy::prelude::*;
 use game_data::CompiledPlayer;
+use physics_bridge::{
+    CharacterCollisionQuery, CharacterController, CharacterControllerBundle,
+    CharacterControllerPlugin, CharacterPhysicsSystems, GROUND_CONTACT_SKIN, GroundedState,
+    LinearVelocity, PhysicsBridgePlugin, player_layers, terrain_ground_filter,
+};
 
 mod props;
 mod water_physics;
@@ -21,24 +21,24 @@ pub struct NeedsGroundSnap {
 }
 
 use crate::camera::{
-    camera_forward_xz, camera_right_xz, CameraInputState, CharacterFacing, MmoCamera,
-    PlayerInterpolation,
+    CameraInputState, CharacterFacing, MmoCamera, PlayerInterpolation, camera_forward_xz,
+    camera_right_xz,
 };
 use crate::data::ConfigRegistryResource;
 use crate::data::UserSetupPrefs;
 use crate::player::{CharacterMotorState, MovementIntent, MovementSpeed, PlayerFacingMode};
 use crate::player::{
-    classify_locomotion, resolve_facing_yaw, Player, PlayerCapsuleVisual, PlayerMovementState,
+    Player, PlayerCapsuleVisual, PlayerMovementState, classify_locomotion, resolve_facing_yaw,
 };
 use crate::state::AppState;
 use crate::terrain::spawn_terrain_uploaded;
 use crate::terrain::{
-    effective_runtime_sea_level_m, spawn_terrain_collider_ready, TerrainFeatureRegistry,
-    TerrainPipelineState,
+    TerrainFeatureRegistry, TerrainPipelineState, effective_runtime_sea_level_m,
+    spawn_terrain_collider_ready,
 };
-use crate::ui::WaterTweaks;
-use crate::ui::MovementTweaks;
 use crate::ui::CameraTweaks;
+use crate::ui::MovementTweaks;
+use crate::ui::WaterTweaks;
 use crate::world::effective_world_from_prefs;
 use terrain_generation::WaterQuery;
 use voxel_core::ChunkCoord;
@@ -65,38 +65,43 @@ pub struct PlayerMoveIntent {
 
 impl Plugin for GamePhysicsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((PhysicsBridgePlugin, CharacterControllerPlugin, DynamicPropPlugin, WaterPhysicsPlugin))
-            .add_systems(
-                FixedUpdate,
-                (
-                    tag_player_awaiting_terrain,
-                    hold_player_until_spawn_terrain,
-                    snap_players_to_ground,
-                    gather_player_movement,
-                    detect_player_water,
-                    apply_water_sink_and_swim,
-                    apply_character_movement,
-                    water_physics::apply_shallow_water_movement,
-                )
-                    .chain()
-                    .before(CharacterPhysicsSystems)
-                    .run_if(in_state(AppState::Running)),
+        app.add_plugins((
+            PhysicsBridgePlugin,
+            CharacterControllerPlugin,
+            DynamicPropPlugin,
+            WaterPhysicsPlugin,
+        ))
+        .add_systems(
+            FixedUpdate,
+            (
+                tag_player_awaiting_terrain,
+                hold_player_until_spawn_terrain,
+                snap_players_to_ground,
+                gather_player_movement,
+                detect_player_water,
+                apply_water_sink_and_swim,
+                apply_character_movement,
+                water_physics::apply_shallow_water_movement,
             )
-            .add_systems(
-                FixedUpdate,
-                (
-                    update_character_facing,
-                    apply_player_water_physics,
-                    snapshot_player_interpolation,
-                )
-                    .chain()
-                    .after(CharacterPhysicsSystems)
-                    .run_if(in_state(AppState::Running)),
+                .chain()
+                .before(CharacterPhysicsSystems)
+                .run_if(in_state(AppState::Running)),
+        )
+        .add_systems(
+            FixedUpdate,
+            (
+                update_character_facing,
+                apply_player_water_physics,
+                snapshot_player_interpolation,
             )
-            .add_systems(
-                Update,
-                sync_capsule_visual_rotation.run_if(in_state(AppState::Running)),
-            );
+                .chain()
+                .after(CharacterPhysicsSystems)
+                .run_if(in_state(AppState::Running)),
+        )
+        .add_systems(
+            Update,
+            sync_capsule_visual_rotation.run_if(in_state(AppState::Running)),
+        );
     }
 }
 
@@ -140,7 +145,14 @@ fn tag_player_awaiting_terrain(
     mut commands: Commands,
     pipeline: Res<TerrainPipelineState>,
     colliders: Query<Entity, With<Collider>>,
-    players: Query<Entity, (With<Player>, Without<AwaitingSpawnTerrain>, Without<NeedsGroundSnap>)>,
+    players: Query<
+        Entity,
+        (
+            With<Player>,
+            Without<AwaitingSpawnTerrain>,
+            Without<NeedsGroundSnap>,
+        ),
+    >,
 ) {
     let Some(chunk) = pipeline.spawn_chunk else {
         return;
@@ -150,9 +162,13 @@ fn tag_player_awaiting_terrain(
 
     for entity in &players {
         if mesh_ready && collider_ready {
-            commands.entity(entity).insert(NeedsGroundSnap { attempts: 0 });
+            commands
+                .entity(entity)
+                .insert(NeedsGroundSnap { attempts: 0 });
         } else {
-            commands.entity(entity).insert(AwaitingSpawnTerrain { chunk });
+            commands
+                .entity(entity)
+                .insert(AwaitingSpawnTerrain { chunk });
         }
     }
 }
@@ -186,13 +202,7 @@ fn hold_player_until_spawn_terrain(
         let mesh_ready = spawn_terrain_uploaded(&pipeline, awaiting.chunk);
         let collider_ready = spawn_terrain_collider_ready(&pipeline, awaiting.chunk, &colliders);
         if mesh_ready && collider_ready {
-            place_capsule_on_physics_ground(
-                &spatial,
-                entity,
-                collider,
-                &mut transform,
-                player,
-            );
+            place_capsule_on_physics_ground(&spatial, entity, collider, &mut transform, player);
             commands.entity(entity).remove::<AwaitingSpawnTerrain>();
             commands
                 .entity(entity)
@@ -237,7 +247,13 @@ fn snap_players_to_ground(
     mut commands: Commands,
     registry: Res<ConfigRegistryResource>,
     mut players: Query<
-        (Entity, &mut NeedsGroundSnap, &mut Transform, &Collider, &GroundedState),
+        (
+            Entity,
+            &mut NeedsGroundSnap,
+            &mut Transform,
+            &Collider,
+            &GroundedState,
+        ),
         With<Player>,
     >,
 ) {
@@ -399,7 +415,8 @@ fn apply_character_movement(
     let yaw = camera.intent_yaw();
     let forward = camera_forward_xz(yaw);
     let right = camera_right_xz(yaw);
-    let world_dir = (forward * move_intent.direction.y + right * move_intent.direction.x).normalize_or_zero();
+    let world_dir =
+        (forward * move_intent.direction.y + right * move_intent.direction.x).normalize_or_zero();
     let mut desired_dir = Vec2::new(world_dir.x, world_dir.z);
     if grounded.grounded && grounded.ground_normal.y < 0.99 {
         let ground_normal = grounded.ground_normal;
@@ -443,10 +460,7 @@ fn apply_character_movement(
     motor.velocity = velocity.0;
     motor.grounded = grounded.grounded;
     motor.ground_normal = grounded.ground_normal;
-    motor.current_slope = grounded
-        .ground_normal
-        .angle_between(Vec3::Y)
-        .to_degrees();
+    motor.current_slope = grounded.ground_normal.angle_between(Vec3::Y).to_degrees();
     motor.locomotion_state = classify_locomotion(
         grounded.grounded,
         motor.current_slope,
@@ -564,7 +578,8 @@ fn apply_water_sink_and_swim(
                 velocity.y += gravity * wading.min(1.0) * tweaks.buoyancy_strength * 0.04;
             }
         } else if movement.submerged_depth > 0.05 {
-            velocity.y += gravity * movement.submerged_depth.min(1.2) * tweaks.buoyancy_strength * 0.08;
+            velocity.y +=
+                gravity * movement.submerged_depth.min(1.2) * tweaks.buoyancy_strength * 0.08;
             if velocity.y < 0.0 {
                 velocity.y *= 0.98;
             }
@@ -606,13 +621,9 @@ fn apply_player_water_physics(
         let feet_y = transform.translation.y - feet_offset;
         let deep_water = movement.submerged_depth > tweaks.shallow_depth_m;
 
-        if let Some(min_center_y) = physics_floor_center_y(
-            &spatial,
-            entity,
-            collider,
-            &transform,
-            player,
-        ) {
+        if let Some(min_center_y) =
+            physics_floor_center_y(&spatial, entity, collider, &transform, player)
+        {
             if transform.translation.y < min_center_y {
                 transform.translation.y = min_center_y;
                 if velocity.y < 0.0 {
@@ -648,7 +659,8 @@ fn update_character_facing(
     let yaw = camera.intent_yaw();
     let forward = camera_forward_xz(yaw);
     let right = camera_right_xz(yaw);
-    let world_dir = (forward * move_intent.direction.y + right * move_intent.direction.x).normalize_or_zero();
+    let world_dir =
+        (forward * move_intent.direction.y + right * move_intent.direction.x).normalize_or_zero();
     let movement_dir = Vec2::new(world_dir.x, world_dir.z);
 
     facing.desired_yaw = resolve_facing_yaw(

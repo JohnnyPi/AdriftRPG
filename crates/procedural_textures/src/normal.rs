@@ -19,7 +19,9 @@ pub fn normals_from_height_field(
             let dx = (right - left) * strength;
             let dy = (up - down) * strength;
             let mut n = [-dx, -dy, 1.0f32];
-            let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt().max(f32::EPSILON);
+            let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2])
+                .sqrt()
+                .max(f32::EPSILON);
             n[0] /= len;
             n[1] /= len;
             n[2] /= len;

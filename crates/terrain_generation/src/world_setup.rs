@@ -9,6 +9,7 @@
 //! construct atlas worlds should surface these messages instead of letting the
 //! generator absorb a contradictory configuration.
 
+use std::fmt;
 use std::path::Path;
 
 use game_data::{
@@ -16,15 +17,67 @@ use game_data::{
     GenerationResolutionDefinition, TerrainOperationDefinition,
 };
 use shared::StableId;
+use shared::{hash_unit, lerp};
 
-use crate::{
-    atlas_bake::try_load_baked_atlas,
-    build_island_atlas, default_vertical_slice_recipe, BeachParams, CaveParams, CoastParams,
-    CoastModifierKind, CombineOp, ErosionParams, GenerationResolution, HydrologyParams,
-    IslandGenParams, IslandShapeParams, RecipeDensitySource, RecipeOp, SurfaceNoiseParams,
-    TerrainRecipe, VolcanoParams, WorldVolumeBounds,
-};
 use crate::island_atlas::IslandAtlas;
+use crate::{
+    BeachParams, CaveParams, CoastModifierKind, CoastParams, CombineOp, ErosionParams,
+    GenerationResolution, HydrologyParams, IslandGenParams, IslandShapeParams, RecipeDensitySource,
+    RecipeOp, ResolutionError, SurfaceNoiseParams, TerrainRecipe, VolcanoParams, WorldVolumeBounds,
+    atlas_bake::{AtlasBakeError, try_load_baked_atlas},
+    build_island_atlas, default_vertical_slice_recipe,
+};
+
+/// Errors from world/recipe setup on paths that should surface to the UI instead of panicking.
+#[derive(Debug)]
+pub enum WorldSetupError {
+    AtlasLoad {
+        world_id: String,
+        path: String,
+        source: AtlasBakeError,
+    },
+    Resolution {
+        extent_m: f32,
+        source: ResolutionError,
+    },
+    MissingTerrainDefinition {
+        terrain_id: String,
+    },
+}
+
+impl fmt::Display for WorldSetupError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::AtlasLoad {
+                world_id,
+                path,
+                source,
+            } => write!(
+                f,
+                "failed to load baked island atlas for '{world_id}' at '{path}': {source}"
+            ),
+            Self::Resolution { extent_m, source } => {
+                write!(
+                    f,
+                    "generation resolution failed validation for extent {extent_m:.0} m: {source}"
+                )
+            }
+            Self::MissingTerrainDefinition { terrain_id } => {
+                write!(f, "missing terrain definition '{terrain_id}'")
+            }
+        }
+    }
+}
+
+impl std::error::Error for WorldSetupError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::AtlasLoad { source, .. } => Some(source),
+            Self::Resolution { source, .. } => Some(source),
+            Self::MissingTerrainDefinition { .. } => None,
+        }
+    }
+}
 
 /// Build or load the island atlas for a world (procedural unless `island_atlas_baked` is set).
 pub fn resolve_island_atlas(
@@ -33,45 +86,28 @@ pub fn resolve_island_atlas(
     seed: u64,
     sea_level_m: f32,
     assets_root: Option<&Path>,
-) -> IslandAtlas {
-    if let (Some(root), Some(ref baked_path)) = (assets_root, world.island_atlas_baked.as_ref())
-    {
+) -> Result<IslandAtlas, WorldSetupError> {
+    if let (Some(root), Some(ref baked_path)) = (assets_root, world.island_atlas_baked.as_ref()) {
         // Golden atlases are baked at the world's authored seed. User seed overrides
         // affect procedural recipe ops (caves) only, not the committed terrain shape.
         let atlas_seed = world.seed;
-        try_load_baked_atlas(root, baked_path, world.id.as_str(), atlas_seed).unwrap_or_else(
-            |e| {
-                panic!(
-                    "failed to load baked island atlas for '{}' at '{}': {e}",
-                    world.id.as_str(),
-                    baked_path
-                )
-            },
-        )
+        try_load_baked_atlas(root, baked_path, world.id.as_str(), atlas_seed).map_err(|source| {
+            WorldSetupError::AtlasLoad {
+                world_id: world.id.as_str().to_string(),
+                path: baked_path.to_string(),
+                source,
+            }
+        })
     } else {
-        let params = island_params_from_compiled(compiled, world, seed, sea_level_m);
-        build_island_atlas(&params)
+        let params = island_params_from_compiled(compiled, world, seed, sea_level_m)?;
+        Ok(build_island_atlas(&params))
     }
-}
-
-/// Convert authored recipe XZ to world XZ (atlas grid space).
-fn recipe_xz_to_world(recipe_x: f32, recipe_z: f32, world: &CompiledWorld) -> [f32; 2] {
-    world.recipe_xz_to_world(recipe_x, recipe_z)
-}
-
-/// Padding kept between the island footprint and the atlas rim when deriving
-/// extent from the chunk volume (see `CompiledWorld::DERIVED_OCEAN_PADDING_M`).
-pub const DERIVED_OCEAN_PADDING_M: f32 = game_data::CompiledWorld::DERIVED_OCEAN_PADDING_M;
-
-/// Atlas square extent that fully covers the world's horizontal chunk volume.
-pub fn effective_ocean_extent_m(world: &CompiledWorld) -> f32 {
-    world.effective_ocean_extent_m()
 }
 
 fn merge_resolution(
     yaml: &GenerationResolutionDefinition,
     extent_m: f32,
-) -> GenerationResolution {
+) -> Result<GenerationResolution, ResolutionError> {
     let defaults = GenerationResolution::for_extent(extent_m);
     let resolved = GenerationResolution {
         world_control_m: yaml.world_control_m.unwrap_or(defaults.world_control_m),
@@ -79,26 +115,23 @@ fn merge_resolution(
         local_m: yaml.local_m.unwrap_or(defaults.local_m),
         voxel_m: yaml.voxel_m.unwrap_or(defaults.voxel_m),
     };
-    if let Err(error) = resolved.validate(extent_m) {
-        panic!(
-            "generation resolution failed validation for extent {extent_m:.0} m: {error}"
-        );
-    }
-    resolved
+    resolved.validate(extent_m).map(|_| resolved)
 }
 
 fn resolve_generation_resolution(
     world: &CompiledWorld,
     compiled: &CompiledIslandGeneration,
-) -> GenerationResolution {
-    let extent_m = effective_ocean_extent_m(world);
+) -> Result<GenerationResolution, WorldSetupError> {
+    let extent_m = world.effective_ocean_extent_m();
     if let Some(ref island_res) = compiled.resolution {
-        return merge_resolution(island_res, extent_m);
+        return merge_resolution(island_res, extent_m)
+            .map_err(|source| WorldSetupError::Resolution { extent_m, source });
     }
     if let Some(ref world_res) = world.resolution {
-        return merge_resolution(world_res, extent_m);
+        return merge_resolution(world_res, extent_m)
+            .map_err(|source| WorldSetupError::Resolution { extent_m, source });
     }
-    GenerationResolution::for_extent(extent_m)
+    Ok(GenerationResolution::for_extent(extent_m))
 }
 
 pub fn effective_sea_level_m(
@@ -115,15 +148,15 @@ pub fn island_params_from_compiled(
     world: &CompiledWorld,
     seed: u64,
     sea_level_m: f32,
-) -> IslandGenParams {
+) -> Result<IslandGenParams, WorldSetupError> {
     let center = [0.0, 0.0];
     let volcano_center =
-        recipe_xz_to_world(compiled.volcano.center[0], compiled.volcano.center[1], world);
-    let resolution = resolve_generation_resolution(world, compiled);
-    IslandGenParams {
+        world.recipe_xz_to_world(compiled.volcano.center[0], compiled.volcano.center[1]);
+    let resolution = resolve_generation_resolution(world, compiled)?;
+    Ok(IslandGenParams {
         seed,
         center,
-        ocean_extent_m: effective_ocean_extent_m(world),
+        ocean_extent_m: world.effective_ocean_extent_m(),
         resolution,
         island: IslandShapeParams {
             playable_diameter_m: compiled.island.playable_diameter_m,
@@ -195,9 +228,8 @@ pub fn island_params_from_compiled(
             maximum_depth_m: compiled.caves.maximum_depth_m,
             overhang_enabled: compiled.caves.overhang_enabled,
         },
-    }
+    })
 }
-
 
 /// Validate that an authored island fits inside the world that hosts it.
 ///
@@ -224,7 +256,13 @@ pub fn validate_island_world_budget(
     water_sea_level_m: f32,
 ) -> Vec<String> {
     let mut messages = Vec::new();
-    let params = island_params_from_compiled(compiled, world, world.seed, water_sea_level_m);
+    let params = match island_params_from_compiled(compiled, world, world.seed, water_sea_level_m) {
+        Ok(params) => params,
+        Err(error) => {
+            messages.push(error.to_string());
+            return messages;
+        }
+    };
 
     let (mins, maxs) = world.axis_bounds_m();
     let (x_min, y_min, z_min) = (mins[0], mins[1], mins[2]);
@@ -243,11 +281,12 @@ pub fn validate_island_world_budget(
 
     // --- 1. Horizontal footprint vs. chunk volume and atlas -----------------
     let support_radius = params.island.footprint_support_radius_m();
-    let horizontal_budget = x_min
-        .abs()
-        .min(x_max)
-        .min(z_min.abs())
-        .min(z_max);
+    let center_x = (x_min + x_max) * 0.5;
+    let center_z = (z_min + z_max) * 0.5;
+    let horizontal_budget = (x_max - center_x)
+        .min(center_x - x_min)
+        .min(z_max - center_z)
+        .min(center_z - z_min);
     if support_radius > horizontal_budget {
         messages.push(format!(
             "island footprint support radius {support_radius:.1} m (diameter \
@@ -351,7 +390,7 @@ pub fn compile_terrain_recipe(
     world: &CompiledWorld,
     water: &CompiledWater,
     seed_override: Option<u64>,
-) -> TerrainRecipe {
+) -> Result<TerrainRecipe, WorldSetupError> {
     compile_terrain_recipe_with_island(registry, world, water, seed_override, None)
 }
 
@@ -370,11 +409,12 @@ pub fn compile_terrain_recipe_with_island(
     water: &CompiledWater,
     seed_override: Option<u64>,
     island_gen_override: Option<&CompiledIslandGeneration>,
-) -> TerrainRecipe {
-    let terrain = registry
-        .terrain
-        .get(&world.terrain)
-        .expect("terrain definition");
+) -> Result<TerrainRecipe, WorldSetupError> {
+    let terrain = registry.terrain.get(&world.terrain).ok_or_else(|| {
+        WorldSetupError::MissingTerrainDefinition {
+            terrain_id: world.terrain.as_str().to_string(),
+        }
+    })?;
 
     let mut ops = Vec::new();
     for op_def in &terrain.operations {
@@ -390,7 +430,12 @@ pub fn compile_terrain_recipe_with_island(
     let island_gen = island_gen_override.or_else(|| registry.island_generation_for_world(world));
     if let Some(island_gen) = island_gen {
         let sea_level_m = effective_sea_level_m(water, Some(island_gen));
-        append_generated_island_caves(&mut ops, island_gen, seed_override.unwrap_or(world.seed), sea_level_m);
+        append_generated_island_caves(
+            &mut ops,
+            island_gen,
+            seed_override.unwrap_or(world.seed),
+            sea_level_m,
+        );
     }
 
     // The hardcoded fallback slice exists so op-based worlds without any
@@ -399,10 +444,10 @@ pub fn compile_terrain_recipe_with_island(
     // superimposes a phantom surface on the generated island (and previously
     // did exactly that whenever generated caves were disabled).
     if ops.is_empty() && island_gen.is_none() {
-        return default_vertical_slice_recipe(
+        return Ok(default_vertical_slice_recipe(
             seed_override.unwrap_or(world.seed),
             water.sea_level_m,
-        );
+        ));
     }
 
     let (spawn_x, spawn_z) = terrain
@@ -412,14 +457,14 @@ pub fn compile_terrain_recipe_with_island(
 
     let sea_level_m = effective_sea_level_m(water, island_gen);
 
-    TerrainRecipe {
+    Ok(TerrainRecipe {
         seed: seed_override.unwrap_or(world.seed),
         sea_level: sea_level_m,
         spawn_x,
         spawn_z,
         coord_offset: world.coord_offset,
         ops,
-    }
+    })
 }
 
 /// Island-atlas density source matching the runtime compile path (for diagnostics/tests).
@@ -456,9 +501,7 @@ pub fn build_atlas_density_source_for_world(
     let base = registry
         .island_generation_for_world(world)
         .expect("island gen");
-    let mut merged = island_gen_override
-        .cloned()
-        .unwrap_or_else(|| base.clone());
+    let mut merged = island_gen_override.cloned().unwrap_or_else(|| base.clone());
     merged.seed = seed;
 
     let sea_level_m = effective_sea_level_m(water, Some(&merged));
@@ -471,18 +514,21 @@ pub fn build_atlas_density_source_for_world(
         );
     }
 
-    let params = island_params_from_compiled(&merged, world, seed, sea_level_m);
+    let params =
+        island_params_from_compiled(&merged, world, seed, sea_level_m).expect("island params");
     let bank_width_m = params.erosion.river_bank_width_m;
-    let atlas = resolve_island_atlas(&merged, world, seed, sea_level_m, assets_root);
+    let atlas =
+        resolve_island_atlas(&merged, world, seed, sea_level_m, assets_root).expect("island atlas");
     let recipe =
-        compile_terrain_recipe_with_island(registry, world, water, Some(seed), Some(&merged));
+        compile_terrain_recipe_with_island(registry, world, water, Some(seed), Some(&merged))
+            .expect("terrain recipe");
     let bounds = WorldVolumeBounds::from_compiled_world(world);
     RecipeDensitySource::new(recipe)
         .with_world_bounds(bounds)
         .with_atlas(atlas, bank_width_m)
 }
 
-pub fn append_generated_island_caves(
+fn append_generated_island_caves(
     ops: &mut Vec<RecipeOp>,
     island_gen: &CompiledIslandGeneration,
     seed: u64,
@@ -550,8 +596,11 @@ pub fn append_generated_island_caves(
         let mouth_radius = min_passage * 1.15;
         let mouth = [
             island_gen.volcano.center[0] + (base_radius + radius_span * 1.15) * base_angle.cos(),
-            (sea_level_m + caves.minimum_cover_m + mouth_radius)
-                .min(cave_center_height(island_gen, 0.1, sea_level_m)),
+            (sea_level_m + caves.minimum_cover_m + mouth_radius).min(cave_center_height(
+                island_gen,
+                0.1,
+                sea_level_m,
+            )),
             island_gen.volcano.center[1] + (base_radius + radius_span * 1.15) * base_angle.sin(),
         ];
         if let Some(last_center) = previous {
@@ -565,11 +614,7 @@ pub fn append_generated_island_caves(
     }
 }
 
-fn cave_center_height(
-    island_gen: &CompiledIslandGeneration,
-    t: f32,
-    sea_level_m: f32,
-) -> f32 {
+fn cave_center_height(island_gen: &CompiledIslandGeneration, t: f32, sea_level_m: f32) -> f32 {
     let caves = &island_gen.caves;
     let base = sea_level_m + caves.minimum_cover_m + 6.0;
     let depth_span = caves.maximum_depth_m * (0.18 + 0.18 * t);
@@ -578,166 +623,151 @@ fn cave_center_height(
     (base - depth_span).clamp(floor, ceiling_limit.max(floor + 2.0))
 }
 
-fn hash_unit(seed: u64, index: u32) -> f32 {
-    let mut value = seed
-        ^ (index as u64)
-            .wrapping_add(1)
-            .wrapping_mul(0x9E37_79B9_7F4A_7C15);
-    value ^= value >> 33;
-    value = value.wrapping_mul(0xff51_afd7_ed55_8ccd);
-    value ^= value >> 33;
-    ((value >> 40) as u32) as f32 / u32::MAX as f32
-}
-
-fn lerp(a: f32, b: f32, t: f32) -> f32 {
-    a + (b - a) * t
-}
-
 impl From<&TerrainOperationDefinition> for RecipeOp {
     fn from(def: &TerrainOperationDefinition) -> Self {
         match def {
-        TerrainOperationDefinition::CoastalSurface {
-            origin,
-            scale,
-            base_height,
-            height_range,
-            ridge_origin,
-            ridge_scale,
-            ridge_amplitude,
-            detail_frequency,
-            detail_amplitude,
-            detail_octaves,
-            regional_frequency,
-            regional_amplitude,
-            local_frequency,
-            local_amplitude,
-            ridged_amplitude,
-            domain_warp,
-        } => RecipeOp::CoastalSurface {
-            origin: *origin,
-            scale: *scale,
-            base_height: *base_height,
-            height_range: *height_range,
-            ridge_origin: *ridge_origin,
-            ridge_scale: *ridge_scale,
-            ridge_amplitude: *ridge_amplitude,
-            detail_frequency: *detail_frequency,
-            detail_amplitude: *detail_amplitude,
-            detail_octaves: *detail_octaves,
-            regional_frequency: *regional_frequency,
-            regional_amplitude: *regional_amplitude,
-            local_frequency: *local_frequency,
-            local_amplitude: *local_amplitude,
-            ridged_amplitude: *ridged_amplitude,
-            domain_warp: *domain_warp,
-        },
-        TerrainOperationDefinition::ValleyBasin {
-            origin,
-            scale,
-            depth_m,
-        } => RecipeOp::ValleyBasin {
-            origin: *origin,
-            scale: *scale,
-            depth_m: *depth_m,
-        },
-        TerrainOperationDefinition::CoastModifier {
-            kind,
-            center,
-            radius_m,
-            depth_m,
-            min_land_factor,
-            max_land_factor,
-        } => RecipeOp::CoastModifier {
-            kind: parse_coast_modifier_kind(kind),
-            center: *center,
-            radius_m: *radius_m,
-            depth_m: *depth_m,
-            min_land_factor: *min_land_factor,
-            max_land_factor: *max_land_factor,
-        },
-        TerrainOperationDefinition::Ellipsoid {
-            center,
-            radii,
-            peak_noise,
-            combine,
-        } => RecipeOp::Ellipsoid {
-            center: *center,
-            radii: *radii,
-            peak_noise: peak_noise.map(|p| (p[0], p[1])),
-            combine: parse_combine(combine),
-        },
-        TerrainOperationDefinition::Capsule {
-            start,
-            end,
-            radius,
-            combine,
-        } => RecipeOp::Capsule {
-            start: *start,
-            end: *end,
-            radius: *radius,
-            combine: parse_combine(combine),
-        },
-        TerrainOperationDefinition::NoisePerturb {
-            scale,
-            amplitude,
-            density_min,
-            density_max,
-        } => RecipeOp::NoisePerturb {
-            scale: *scale,
-            amplitude: *amplitude,
-            density_min: *density_min,
-            density_max: *density_max,
-        },
-        TerrainOperationDefinition::IslandMask {
-            center,
-            radius_m,
-            falloff_m,
-            ocean_floor_y,
-            domain_warp,
-        } => RecipeOp::IslandMask {
-            center: *center,
-            radius_m: *radius_m,
-            falloff_m: *falloff_m,
-            ocean_floor_y: *ocean_floor_y,
-            domain_warp: *domain_warp,
-        },
-        TerrainOperationDefinition::OceanFloor {
-            origin,
-            scale,
-            base_depth_m,
-            variation_m,
-            detail_frequency,
-            detail_octaves,
-        } => RecipeOp::OceanFloor {
-            origin: *origin,
-            scale: *scale,
-            base_depth_m: *base_depth_m,
-            variation_m: *variation_m,
-            detail_frequency: *detail_frequency,
-            detail_octaves: *detail_octaves,
-        },
-        TerrainOperationDefinition::MountainPeak {
-            center,
-            base_elevation_m,
-            base_radius_m,
-            peak_height_m,
-            steepness,
-            peak_noise,
-        } => RecipeOp::MountainPeak {
-            center: *center,
-            base_elevation_m: *base_elevation_m,
-            base_radius_m: *base_radius_m,
-            peak_height_m: *peak_height_m,
-            steepness: *steepness,
-            peak_noise: peak_noise.map(|p| (p[0], p[1])),
-        },
-        TerrainOperationDefinition::UnderwaterTrench { points, width_m } => {
-            RecipeOp::UnderwaterTrench {
-                points: points.clone(),
-                width_m: *width_m,
+            TerrainOperationDefinition::CoastalSurface {
+                origin,
+                scale,
+                base_height,
+                height_range,
+                ridge_origin,
+                ridge_scale,
+                ridge_amplitude,
+                detail_frequency,
+                detail_amplitude,
+                detail_octaves,
+                regional_frequency,
+                regional_amplitude,
+                local_frequency,
+                local_amplitude,
+                ridged_amplitude,
+                domain_warp,
+            } => RecipeOp::CoastalSurface {
+                origin: *origin,
+                scale: *scale,
+                base_height: *base_height,
+                height_range: *height_range,
+                ridge_origin: *ridge_origin,
+                ridge_scale: *ridge_scale,
+                ridge_amplitude: *ridge_amplitude,
+                detail_frequency: *detail_frequency,
+                detail_amplitude: *detail_amplitude,
+                detail_octaves: *detail_octaves,
+                regional_frequency: *regional_frequency,
+                regional_amplitude: *regional_amplitude,
+                local_frequency: *local_frequency,
+                local_amplitude: *local_amplitude,
+                ridged_amplitude: *ridged_amplitude,
+                domain_warp: *domain_warp,
+            },
+            TerrainOperationDefinition::ValleyBasin {
+                origin,
+                scale,
+                depth_m,
+            } => RecipeOp::ValleyBasin {
+                origin: *origin,
+                scale: *scale,
+                depth_m: *depth_m,
+            },
+            TerrainOperationDefinition::CoastModifier {
+                kind,
+                center,
+                radius_m,
+                depth_m,
+                min_land_factor,
+                max_land_factor,
+            } => RecipeOp::CoastModifier {
+                kind: parse_coast_modifier_kind(kind),
+                center: *center,
+                radius_m: *radius_m,
+                depth_m: *depth_m,
+                min_land_factor: *min_land_factor,
+                max_land_factor: *max_land_factor,
+            },
+            TerrainOperationDefinition::Ellipsoid {
+                center,
+                radii,
+                peak_noise,
+                combine,
+            } => RecipeOp::Ellipsoid {
+                center: *center,
+                radii: *radii,
+                peak_noise: peak_noise.map(|p| (p[0], p[1])),
+                combine: parse_combine(combine),
+            },
+            TerrainOperationDefinition::Capsule {
+                start,
+                end,
+                radius,
+                combine,
+            } => RecipeOp::Capsule {
+                start: *start,
+                end: *end,
+                radius: *radius,
+                combine: parse_combine(combine),
+            },
+            TerrainOperationDefinition::NoisePerturb {
+                scale,
+                amplitude,
+                density_min,
+                density_max,
+            } => RecipeOp::NoisePerturb {
+                scale: *scale,
+                amplitude: *amplitude,
+                density_min: *density_min,
+                density_max: *density_max,
+            },
+            TerrainOperationDefinition::IslandMask {
+                center,
+                radius_m,
+                falloff_m,
+                ocean_floor_y,
+                domain_warp,
+            } => RecipeOp::IslandMask {
+                center: *center,
+                radius_m: *radius_m,
+                falloff_m: *falloff_m,
+                ocean_floor_y: *ocean_floor_y,
+                domain_warp: *domain_warp,
+            },
+            TerrainOperationDefinition::OceanFloor {
+                origin,
+                scale,
+                base_depth_m,
+                variation_m,
+                detail_frequency,
+                detail_octaves,
+            } => RecipeOp::OceanFloor {
+                origin: *origin,
+                scale: *scale,
+                base_depth_m: *base_depth_m,
+                variation_m: *variation_m,
+                detail_frequency: *detail_frequency,
+                detail_octaves: *detail_octaves,
+            },
+            TerrainOperationDefinition::MountainPeak {
+                center,
+                base_elevation_m,
+                base_radius_m,
+                peak_height_m,
+                steepness,
+                peak_noise,
+            } => RecipeOp::MountainPeak {
+                center: *center,
+                base_elevation_m: *base_elevation_m,
+                base_radius_m: *base_radius_m,
+                peak_height_m: *peak_height_m,
+                steepness: *steepness,
+                peak_noise: peak_noise.map(|p| (p[0], p[1])),
+            },
+            TerrainOperationDefinition::UnderwaterTrench { points, width_m } => {
+                RecipeOp::UnderwaterTrench {
+                    points: points.clone(),
+                    width_m: *width_m,
+                }
             }
         }
-    }
     }
 }
 
@@ -753,6 +783,8 @@ fn parse_coast_modifier_kind(value: &str) -> CoastModifierKind {
     match value.to_ascii_lowercase().as_str() {
         "harbor" => CoastModifierKind::Harbor,
         "cove" => CoastModifierKind::Cove,
-        other => panic!("invalid coast modifier '{other}' (should have been rejected at validation)"),
+        other => {
+            panic!("invalid coast modifier '{other}' (should have been rejected at validation)")
+        }
     }
 }

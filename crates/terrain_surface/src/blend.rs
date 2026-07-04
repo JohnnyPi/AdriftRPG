@@ -1,4 +1,6 @@
 // crates/terrain_surface/src/blend.rs
+use std::collections::BTreeMap;
+
 use crate::chunk_palette::ChunkSlotRemapper;
 use crate::material_id::MaterialKey;
 use crate::registry::MaterialLayerRegistry;
@@ -35,6 +37,63 @@ impl SurfaceMaterialBlend {
             }
         }
         self
+    }
+}
+
+/// How unused blend slots are filled after ranking merged materials by weight.
+#[derive(Clone, Debug)]
+#[allow(dead_code)] // `Fixed` is used by the test-oracle island classifier only.
+pub enum MergeSlotPadding {
+    /// Pad empty slots with a fixed material.
+    Fixed(MaterialKey),
+    /// Pad empty slots with the top-ranked material (`fallback` when nothing merged).
+    TopRanked { fallback: MaterialKey },
+}
+
+/// Accumulate gated four-slot blends into a single blend ranked by total weight.
+///
+/// Does not normalize; callers invoke [`SurfaceMaterialBlend::normalize`] when needed.
+pub fn merge_weighted_blends(
+    parts: &[(f32, SurfaceMaterialBlend)],
+    padding: MergeSlotPadding,
+) -> SurfaceMaterialBlend {
+    let mut weights: BTreeMap<MaterialKey, f32> = BTreeMap::new();
+    for (gate, blend) in parts {
+        if *gate <= f32::EPSILON {
+            continue;
+        }
+        for i in 0..4 {
+            let w = blend.weights[i] * gate;
+            if w > 0.0 {
+                *weights.entry(blend.materials[i].clone()).or_default() += w;
+            }
+        }
+    }
+    let mut ranked: Vec<(MaterialKey, f32)> = weights.into_iter().collect();
+    ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    let slot_default = match padding {
+        MergeSlotPadding::Fixed(key) => key,
+        MergeSlotPadding::TopRanked { fallback } => ranked
+            .first()
+            .map(|(key, _)| key.clone())
+            .unwrap_or(fallback),
+    };
+
+    let mut materials = [
+        slot_default.clone(),
+        slot_default.clone(),
+        slot_default.clone(),
+        slot_default,
+    ];
+    let mut w = [0.0; 4];
+    for (i, (mat, wt)) in ranked.into_iter().take(4).enumerate() {
+        materials[i] = mat;
+        w[i] = wt;
+    }
+    SurfaceMaterialBlend {
+        materials,
+        weights: w,
     }
 }
 
@@ -93,7 +152,10 @@ pub fn remap_blend_to_local_slots(
 
 pub fn validate_blend(blend: &SurfaceMaterialBlend) {
     assert!(
-        blend.weights.iter().all(|value| value.is_finite() && *value >= 0.0),
+        blend
+            .weights
+            .iter()
+            .all(|value| value.is_finite() && *value >= 0.0),
         "invalid blend weights"
     );
     let sum: f32 = blend.weights.iter().sum();
@@ -149,5 +211,56 @@ mod tests {
         }
         let palette = remapper.finish();
         assert_eq!(palette.slot_count(), 8);
+    }
+
+    #[test]
+    fn merge_weighted_blends_ranks_by_accumulated_gate_weight() {
+        let grass = MaterialKey::new("grass");
+        let sand = MaterialKey::new("sand");
+        let rock = MaterialKey::new("rock");
+        let merged = merge_weighted_blends(
+            &[
+                (
+                    0.6,
+                    SurfaceMaterialBlend {
+                        materials: [sand.clone(), grass.clone(), grass.clone(), grass.clone()],
+                        weights: [1.0, 0.0, 0.0, 0.0],
+                    },
+                ),
+                (
+                    0.2,
+                    SurfaceMaterialBlend {
+                        materials: [rock.clone(), grass.clone(), grass.clone(), grass.clone()],
+                        weights: [1.0, 0.0, 0.0, 0.0],
+                    },
+                ),
+            ],
+            MergeSlotPadding::Fixed(grass.clone()),
+        )
+        .normalize();
+        assert_eq!(merged.materials[0], sand);
+        assert_eq!(merged.materials[1], rock);
+        assert!((merged.weights[0] - 0.75).abs() < 0.01);
+        assert!((merged.weights[1] - 0.25).abs() < 0.01);
+    }
+
+    #[test]
+    fn merge_top_ranked_padding_uses_highest_weight_material() {
+        let grass = MaterialKey::new("grass");
+        let sand = MaterialKey::new("sand");
+        let merged = merge_weighted_blends(
+            &[(
+                1.0,
+                SurfaceMaterialBlend {
+                    materials: [sand.clone(), grass.clone(), grass.clone(), grass.clone()],
+                    weights: [0.8, 0.2, 0.0, 0.0],
+                },
+            )],
+            MergeSlotPadding::TopRanked {
+                fallback: grass.clone(),
+            },
+        );
+        assert_eq!(merged.materials[2], sand);
+        assert_eq!(merged.weights[2], 0.0);
     }
 }

@@ -37,13 +37,7 @@ impl TerrainPipelineMetrics {
 }
 
 /// Overrides the procedural world seed (F9 increments, F8 keeps current).
-#[derive(Resource, Clone, Debug)]
+#[derive(Resource, Clone, Debug, Default)]
 pub struct WorldSeedOverride {
     pub seed: u64,
-}
-
-impl Default for WorldSeedOverride {
-    fn default() -> Self {
-        Self { seed: 0 }
-    }
 }

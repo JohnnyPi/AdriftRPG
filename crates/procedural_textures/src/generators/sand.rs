@@ -63,7 +63,8 @@ impl SandGenerator {
             for x in 0..w {
                 let u = x as f32 / w as f32;
                 let v = y as f32 / h as f32;
-                let ripple = (v * self.config.ripple_scale * std::f32::consts::TAU).sin() * 0.5 + 0.5;
+                let ripple =
+                    (v * self.config.ripple_scale * std::f32::consts::TAU).sin() * 0.5 + 0.5;
                 let grain = noise.fbm(
                     u * self.config.grain_scale,
                     v * self.config.grain_scale,

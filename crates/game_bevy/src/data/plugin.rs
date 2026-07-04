@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use bevy::prelude::*;
-use game_data::{load_registry_from_directory, ConfigRegistry};
+use game_data::{ConfigRegistry, load_registry_from_directory};
 use shared::DataError;
 use tracing::{error, info, warn};
 
@@ -33,7 +33,10 @@ impl Plugin for DataAssetPlugin {
             reload_count: 0,
         })
         .add_systems(Startup, initial_load)
-        .add_systems(Update, poll_yaml_watcher.run_if(in_state(AppState::Running)));
+        .add_systems(
+            Update,
+            poll_yaml_watcher.run_if(in_state(AppState::Running)),
+        );
     }
 }
 
@@ -111,16 +114,12 @@ pub fn format_load_error(error: &DataError) -> String {
             id,
             first_path,
             duplicate_path,
-        } => format!(
-            "duplicate id `{id}`\n  first: {first_path}\n  duplicate: {duplicate_path}"
-        ),
+        } => format!("duplicate id `{id}`\n  first: {first_path}\n  duplicate: {duplicate_path}"),
         DataError::UnsupportedSchemaVersion {
             id,
             found,
             expected,
-        } => format!(
-            "definition `{id}` has schema_version {found}; expected {expected}"
-        ),
+        } => format!("definition `{id}` has schema_version {found}; expected {expected}"),
         DataError::UnknownReference { reference, context } => {
             format!("unknown reference `{reference}` in {context}")
         }

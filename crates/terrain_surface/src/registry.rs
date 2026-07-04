@@ -15,7 +15,10 @@ impl MaterialLayerRegistry {
         for material in ordered_materials {
             let layer = registry.by_layer.len() as u32;
             assert!(
-                registry.by_material.insert(material.clone(), layer).is_none(),
+                registry
+                    .by_material
+                    .insert(material.clone(), layer)
+                    .is_none(),
                 "duplicate material {material}"
             );
             registry.by_layer.push(material);

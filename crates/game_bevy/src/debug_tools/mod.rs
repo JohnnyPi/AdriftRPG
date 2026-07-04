@@ -3,36 +3,39 @@ mod bindings;
 
 pub use bindings::DebugKeyBindings;
 
-use bevy::prelude::*;
-use bevy::pbr::wireframe::{Wireframe, WireframePlugin};
 use avian3d::prelude::*;
+use bevy::pbr::wireframe::{Wireframe, WireframePlugin};
+use bevy::prelude::*;
 
-use bindings::init_debug_bindings;
 use crate::camera::{CameraDebugSnapshot, MainGameCamera, MmoCamera};
 use crate::data::ConfigRegistryResource;
 use crate::data::UserSetupPrefs;
+use crate::environment::BiomeCatalog;
 use crate::environment::biome_context::BiomeSampleContext;
 use crate::environment::biomes::{
     biome_color, biome_discrete_debug_color, biome_scalar_debug_value, classify_biome,
 };
-use crate::environment::BiomeCatalog;
-use crate::environment::materials::{assign_material_color, material_for_world};
-use crate::state::AppState;
-use crate::terrain::{
-    regen_terrain_with_seed, TerrainChunkEntity, TerrainEditStore, TerrainFeatureRegistry,
-    TerrainMaterialHandle, TerrainPipelineMetrics, TerrainPipelineState, TerrainRecipeRevision,
-    TerrainRegenPending, TerrainRevision, TerrainSpawnPoint,
-    TerrainWorldRuntime, WorldSeedOverride,
-};
-use terrain_material_bevy::TerrainPbrMaterial;
-use crate::terrain::draw_residency_rings;
-use crate::terrain::chunk_world_center;
-use crate::lod::LodPolicy;
-use crate::staging::{AssetStagingQueue, StagingGate};
-use crate::world::{effective_world_from_prefs, semantic_tag_color, WorldSemanticRegistry, WorldSemanticTag};
 use crate::environment::fog::FogStack;
+use crate::environment::materials::{assign_material_color, material_for_world};
+use crate::lod::LodPolicy;
+use crate::vegetation::GrassPatch;
+use crate::staging::{AssetStagingQueue, StagingGate};
+use crate::state::AppState;
+use crate::terrain::chunk_world_center;
+use crate::terrain::draw_residency_rings;
+use crate::terrain::{
+    TerrainChunkEntity, TerrainEditStore, TerrainFeatureRegistry, TerrainMaterialHandle,
+    TerrainPipelineMetrics, TerrainPipelineState, TerrainRecipeRevision, TerrainRegenPending,
+    TerrainRevision, TerrainSpawnPoint, TerrainWorldRuntime, WorldSeedOverride,
+    regen_terrain_with_seed,
+};
 use crate::ui::{EcologyTweaks, RiverTweaks, TerrainTweaks, WorldTweaks};
+use crate::world::{
+    WorldSemanticRegistry, WorldSemanticTag, effective_world_from_prefs, semantic_tag_color,
+};
+use bindings::init_debug_bindings;
 use terrain_generation::build_coast_mask;
+use terrain_material_bevy::TerrainPbrMaterial;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum BiomeDebugView {
@@ -79,27 +82,60 @@ impl Plugin for DebugToolsPlugin {
             .init_resource::<DebugPanelLodStagingText>()
             .add_plugins(WireframePlugin::default())
             .add_systems(OnEnter(AppState::Running), init_debug_bindings)
-            .add_systems(Update, handle_debug_keys.run_if(in_state(AppState::Running)))
-            .add_systems(Update, draw_chunk_bounds.run_if(in_state(AppState::Running)))
-            .add_systems(Update, draw_colliders.run_if(in_state(AppState::Running)))
-            .add_systems(Update, draw_vertex_normals.run_if(in_state(AppState::Running)))
-            .add_systems(Update, draw_biome_labels.run_if(in_state(AppState::Running)))
-            .add_systems(Update, draw_material_gizmos.run_if(in_state(AppState::Running)))
-            .add_systems(Update, sync_terrain_debug_shader.run_if(in_state(AppState::Running)))
-            .add_systems(Update, toggle_wireframe.run_if(in_state(AppState::Running)))
-            .add_systems(Update, draw_camera_cast.run_if(in_state(AppState::Running)))
-            .add_systems(Update, draw_residency_and_river.run_if(in_state(AppState::Running)))
-            .add_systems(Update, draw_terrain_masks.run_if(in_state(AppState::Running)))
-            .add_systems(Update, draw_island_atlas_fields.run_if(in_state(AppState::Running)))
-            .add_systems(Update, draw_fog_contributors.run_if(in_state(AppState::Running)))
-            .add_systems(Update, draw_semantic_landmarks.run_if(in_state(AppState::Running)))
-            .add_systems(Update, draw_lod_tier_overlay.run_if(in_state(AppState::Running)))
             .add_systems(
                 Update,
-                (
-                    sync_debug_panel_lod_staging,
-                    update_debug_panel,
-                )
+                handle_debug_keys.run_if(in_state(AppState::Running)),
+            )
+            .add_systems(
+                Update,
+                draw_chunk_bounds.run_if(in_state(AppState::Running)),
+            )
+            .add_systems(Update, draw_colliders.run_if(in_state(AppState::Running)))
+            .add_systems(
+                Update,
+                draw_vertex_normals.run_if(in_state(AppState::Running)),
+            )
+            .add_systems(
+                Update,
+                draw_biome_labels.run_if(in_state(AppState::Running)),
+            )
+            .add_systems(
+                Update,
+                draw_material_gizmos.run_if(in_state(AppState::Running)),
+            )
+            .add_systems(
+                Update,
+                sync_terrain_debug_shader.run_if(in_state(AppState::Running)),
+            )
+            .add_systems(Update, toggle_wireframe.run_if(in_state(AppState::Running)))
+            .add_systems(Update, draw_camera_cast.run_if(in_state(AppState::Running)))
+            .add_systems(
+                Update,
+                draw_residency_and_river.run_if(in_state(AppState::Running)),
+            )
+            .add_systems(
+                Update,
+                draw_terrain_masks.run_if(in_state(AppState::Running)),
+            )
+            .add_systems(
+                Update,
+                draw_island_atlas_fields.run_if(in_state(AppState::Running)),
+            )
+            .add_systems(
+                Update,
+                draw_fog_contributors.run_if(in_state(AppState::Running)),
+            )
+            .add_systems(
+                Update,
+                draw_semantic_landmarks.run_if(in_state(AppState::Running)),
+            )
+            .add_systems(
+                Update,
+                draw_lod_tier_overlay.run_if(in_state(AppState::Running)),
+            )
+            .add_systems(
+                Update,
+                (sync_debug_panel_lod_staging, update_debug_panel)
                     .chain()
                     .run_if(in_state(AppState::Running)),
             );
@@ -340,7 +376,8 @@ fn draw_biome_labels(
     biomes: Res<BiomeCatalog>,
     mut gizmos: Gizmos,
 ) {
-    if !debug.show_biomes && !debug.show_density && debug.biome_debug_view == BiomeDebugView::Normal {
+    if !debug.show_biomes && !debug.show_density && debug.biome_debug_view == BiomeDebugView::Normal
+    {
         return;
     }
     let Some(source) = pipeline.density_source.as_ref() else {
@@ -437,7 +474,11 @@ fn draw_camera_cast(
     let end = focus + dir * camera.current_distance;
     gizmos.line(focus, end, Color::srgb(0.2, 0.8, 1.0));
     if let Some(hit) = snapshot.hit_position {
-        gizmos.sphere(Isometry3d::from_translation(hit), 0.2, Color::srgb(1.0, 0.3, 0.2));
+        gizmos.sphere(
+            Isometry3d::from_translation(hit),
+            0.2,
+            Color::srgb(1.0, 0.3, 0.2),
+        );
         gizmos.line(focus, hit, Color::srgb(1.0, 0.5, 0.2));
     }
 }
@@ -483,7 +524,7 @@ fn update_debug_panel(
     let budget_ok = metrics.within_vs_budget(ready.max(1));
     let landmark_lines = if world_tweaks.show_semantic_landmarks {
         let count = semantic.facts.len();
-        let focus = chunk_world_center(runtime.interest_center);
+        let focus = chunk_world_center(runtime.interest_center, runtime.cell_size_m);
         let nearest = semantic
             .nearest_fact_any(focus)
             .map(|(fact, dist)| format!("Nearest: {} ({dist:.0} m)", fact.label));
@@ -568,6 +609,8 @@ fn toggle_wireframe(
 fn draw_lod_tier_overlay(
     debug: Res<DebugOverlayState>,
     pipeline: Res<TerrainPipelineState>,
+    runtime: Res<TerrainWorldRuntime>,
+    grass_patches: Query<&GrassPatch>,
     mut gizmos: Gizmos,
 ) {
     if !debug.show_lod_tiers {
@@ -577,7 +620,7 @@ fn draw_lod_tier_overlay(
         if chunk.entity.is_none() {
             continue;
         }
-        let center = chunk_world_center(chunk.coord);
+        let center = chunk_world_center(chunk.coord, runtime.cell_size_m);
         let color = match chunk.lod_tier {
             0 => Color::srgba(0.2, 1.0, 0.3, 0.35),
             1 => Color::srgba(1.0, 0.85, 0.2, 0.35),
@@ -586,6 +629,21 @@ fn draw_lod_tier_overlay(
         };
         gizmos.cube(
             Transform::from_translation(center + Vec3::Y * 8.0).with_scale(Vec3::splat(14.0)),
+            color,
+        );
+    }
+    for patch in &grass_patches {
+        let center = chunk_world_center(patch.terrain_chunk, runtime.cell_size_m);
+        let color = match patch.lod_band {
+            0 => Color::srgba(0.1, 0.9, 0.2, 0.5),
+            1 => Color::srgba(0.9, 0.85, 0.1, 0.45),
+            2 => Color::srgba(0.9, 0.45, 0.1, 0.4),
+            _ => continue,
+        };
+        let radius = 4.0 + patch.instance_count as f32 * 0.05;
+        gizmos.sphere(
+            Isometry3d::from_translation(center + Vec3::Y * 2.0),
+            radius,
             color,
         );
     }
@@ -599,7 +657,12 @@ fn draw_residency_and_river(
     features: Res<TerrainFeatureRegistry>,
 ) {
     if world_tweaks.show_residency_rings {
-        draw_residency_rings(&mut gizmos, runtime.interest_center, &world_tweaks);
+        draw_residency_rings(
+            &mut gizmos,
+            runtime.interest_center,
+            runtime.cell_size_m,
+            &world_tweaks,
+        );
     }
     if river_tweaks.show_spline {
         if let Some(river) = features.rivers.get(&1) {
@@ -677,10 +740,7 @@ fn draw_island_atlas_fields(
     }
 }
 
-fn draw_terrain_masks(
-    terrain_tweaks: Res<TerrainTweaks>,
-    mut gizmos: Gizmos,
-) {
+fn draw_terrain_masks(terrain_tweaks: Res<TerrainTweaks>, mut gizmos: Gizmos) {
     if !terrain_tweaks.show_masks {
         return;
     }
@@ -720,7 +780,12 @@ fn draw_fog_contributors(
     for volume in &fog_stack.local_volumes {
         gizmos.cube(
             Transform::from_translation(volume.center).with_scale(volume.half_extents * 2.0),
-            Color::srgba(volume.color[0], volume.color[1], volume.color[2], volume.density),
+            Color::srgba(
+                volume.color[0],
+                volume.color[1],
+                volume.color[2],
+                volume.density,
+            ),
         );
     }
 }
@@ -734,17 +799,22 @@ fn draw_semantic_landmarks(
     if !world_tweaks.show_semantic_landmarks {
         return;
     }
-    let focus = chunk_world_center(runtime.interest_center);
+    let focus = chunk_world_center(runtime.interest_center, runtime.cell_size_m);
     let nearest = semantic.nearest_fact(focus, 200.0);
     for fact in &semantic.facts {
         let color = semantic_tag_color(fact.tag);
         let marker = fact.position + Vec3::Y * 0.5;
-        let radius = if nearest.is_some_and(|n| n.label == fact.label && n.position == fact.position) {
-            0.55
+        let radius =
+            if nearest.is_some_and(|n| n.label == fact.label && n.position == fact.position) {
+                0.55
+            } else {
+                0.35
+            };
+        let stem_height = if fact.tag == WorldSemanticTag::Shelter {
+            2.0
         } else {
-            0.35
+            1.5
         };
-        let stem_height = if fact.tag == WorldSemanticTag::Shelter { 2.0 } else { 1.5 };
         gizmos.sphere(Isometry3d::from_translation(marker), radius, color);
         gizmos.line(
             fact.position,

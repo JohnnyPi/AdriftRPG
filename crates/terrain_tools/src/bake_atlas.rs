@@ -57,7 +57,8 @@ fn main() {
         std::process::exit(1);
     }
 
-    let params = island_params_from_compiled(&merged, world, seed, water.sea_level_m);
+    let params =
+        island_params_from_compiled(&merged, world, seed, water.sea_level_m).expect("params");
     let atlas = build_island_atlas(&params);
 
     let output = args
@@ -82,6 +83,11 @@ fn main() {
         }
     }
     for (name, meta) in &manifest.fields {
-        println!("  field {name}: {}x{} sha256={}", meta.width, meta.height, &meta.sha256[..16]);
+        println!(
+            "  field {name}: {}x{} sha256={}",
+            meta.width,
+            meta.height,
+            &meta.sha256[..16]
+        );
     }
 }

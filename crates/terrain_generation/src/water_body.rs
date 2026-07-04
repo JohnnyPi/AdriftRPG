@@ -27,7 +27,10 @@ pub enum HorizontalFootprint {
 impl HorizontalFootprint {
     pub fn contains(&self, position_xz: [f32; 2]) -> bool {
         match self {
-            Self::Disc { center_xz, radius_m } => {
+            Self::Disc {
+                center_xz,
+                radius_m,
+            } => {
                 let dx = position_xz[0] - center_xz[0];
                 let dz = position_xz[1] - center_xz[1];
                 dx * dx + dz * dz <= radius_m.max(0.1).powi(2)

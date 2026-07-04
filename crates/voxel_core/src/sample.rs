@@ -1,7 +1,9 @@
 // crates/voxel_core/src/sample.rs
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
+)]
 pub struct MaterialId(pub u16);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

@@ -1,5 +1,5 @@
 // crates/voxel_core/tests/edit_boundary.rs
-use voxel_core::{MaterialId, TerrainEditCommand, TerrainEditStore, CHUNK_CELLS};
+use voxel_core::{CHUNK_CELLS, MaterialId, TerrainEditCommand, TerrainEditStore};
 
 #[test]
 fn cross_chunk_edit_produces_matching_face_density() {

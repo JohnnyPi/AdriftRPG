@@ -4,9 +4,10 @@
 
 use bevy::light::{FogVolume, VolumetricFog};
 use bevy::prelude::*;
+use shared::smoothstep;
 
 use super::celestial::CelestialState;
-use super::config_init::{sea_level_for_prefs, EnvironmentInitSet};
+use super::config_init::{EnvironmentInitSet, sea_level_for_prefs};
 use super::fog::FogStack;
 use super::sky_config::{SkyEffectsRevision, SkyPresentationConfig};
 use crate::camera::MainGameCamera;
@@ -116,8 +117,11 @@ fn spawn_god_ray_volume_entity(
             light_intensity: 1.0,
             ..default()
         },
-        Transform::from_translation(Vec3::new(0.0, center_y, 0.0))
-            .with_scale(Vec3::new(half_xz * 2.0, GOD_RAY_HALF_Y * 2.0, half_xz * 2.0)),
+        Transform::from_translation(Vec3::new(0.0, center_y, 0.0)).with_scale(Vec3::new(
+            half_xz * 2.0,
+            GOD_RAY_HALF_Y * 2.0,
+            half_xz * 2.0,
+        )),
         Visibility::default(),
     ));
 }
@@ -195,14 +199,6 @@ fn sync_volumetric_fog_ambient(
     }
 }
 
-fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
-    if edge0 >= edge1 {
-        return (x >= edge0) as u32 as f32;
-    }
-    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,6 +221,9 @@ mod tests {
     fn height_factor_fades_inside_volume() {
         let top = 14.0;
         assert_eq!(smoothstep(top, top + HEIGHT_FADE_RANGE_M, top), 0.0);
-        assert_eq!(smoothstep(top, top + HEIGHT_FADE_RANGE_M, top + HEIGHT_FADE_RANGE_M), 1.0);
+        assert_eq!(
+            smoothstep(top, top + HEIGHT_FADE_RANGE_M, top + HEIGHT_FADE_RANGE_M),
+            1.0
+        );
     }
 }

@@ -1,7 +1,7 @@
 // crates/terrain_surface/src/scoring.rs
 //! Weighted scoring curves for surface classification.
 
-use crate::context::{smoothstep, SurfaceContext};
+use crate::context::{SurfaceContext, smoothstep};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ScoreCurveKind {
@@ -25,9 +25,7 @@ impl ScoreCurve {
         let factor = match self.kind {
             ScoreCurveKind::Linear => value.clamp(0.0, 1.0),
             ScoreCurveKind::SmoothRamp => smoothstep(self.start, self.end, value),
-            ScoreCurveKind::InverseSmoothRamp => {
-                1.0 - smoothstep(self.start, self.end, value)
-            }
+            ScoreCurveKind::InverseSmoothRamp => 1.0 - smoothstep(self.start, self.end, value),
             ScoreCurveKind::SmoothBand => {
                 let enter = smoothstep(self.start, self.end, value);
                 let exit_end = self.band_exit.unwrap_or(self.end + 10.0);
@@ -145,10 +143,7 @@ mod tests {
 
     #[test]
     fn normalize_scores_sums_to_one() {
-        let mut scores = vec![
-            (MaterialKey::new("a"), 2.0),
-            (MaterialKey::new("b"), 1.0),
-        ];
+        let mut scores = vec![(MaterialKey::new("a"), 2.0), (MaterialKey::new("b"), 1.0)];
         normalize_scores(&mut scores);
         let sum: f32 = scores.iter().map(|(_, s)| *s).sum();
         assert!((sum - 1.0).abs() < 0.001);

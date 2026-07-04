@@ -12,7 +12,9 @@ use super::atmosphere::atmosphere_clear_color;
 use super::celestial::CelestialState;
 use super::fog::{DistanceFogLayer, FogStack, HeightFogLayer, LocalFogVolume};
 use super::lighting_state::EnvironmentLightingState;
-use super::sky_config::{apply_sky_profile, bump_sky_effects_revision, SkyEffectsRevision, SkyPresentationConfig};
+use super::sky_config::{
+    SkyEffectsRevision, SkyPresentationConfig, apply_sky_profile, bump_sky_effects_revision,
+};
 
 pub struct EnvironmentConfigPlugin;
 
@@ -55,63 +57,8 @@ fn init_presentation_from_registry(
     commands.insert_resource(atmosphere_clear_color());
 
     if let Some(atmo) = registry.0.active_atmosphere() {
-        lighting_state.sun_azimuth_deg = atmo.sun_azimuth_deg;
-        lighting_state.sun_elevation_deg = atmo.sun_elevation_deg;
-        lighting_state.sun_illuminance = atmo.sun_illuminance_lux;
-        lighting_state.sun_color = atmo.sun_color;
-        lighting_state.ambient_brightness = atmo.ambient_brightness;
-        lighting_state.ambient_color = atmo.ambient_color;
-        lighting_state.exposure_ev_min = atmo.exposure_ev_min;
-        lighting_state.exposure_ev_max = atmo.exposure_ev_max;
-        lighting_state.exposure_bias = atmo.exposure_bias;
-        lighting_state.exposure_adaptation_speed = atmo.exposure_adaptation_speed;
-        lighting_state.environment_intensity_scale = atmo.environment_intensity_scale;
-        lighting_state.moon_enabled = atmo.moon_enabled;
-        lighting_state.moon_illuminance = atmo.moon_illuminance;
-        lighting_state.moon_azimuth_deg = atmo.moon_azimuth_deg;
-        lighting_state.moon_elevation_deg = atmo.moon_elevation_deg;
-
-        atmosphere.exposure_ev_min = atmo.exposure_ev_min;
-        atmosphere.exposure_ev_max = atmo.exposure_ev_max;
-        atmosphere.exposure_bias = atmo.exposure_bias;
-        atmosphere.environment_intensity_scale = atmo.environment_intensity_scale;
-
-        lighting_state.current_exposure = crate::ui::exposure_ev_for_elevation(
-            atmo.sun_elevation_deg,
-            atmo.exposure_ev_min,
-            atmo.exposure_ev_max,
-            atmo.exposure_bias,
-        );
-
-        celestial.sun_azimuth_deg = atmo.sun_azimuth_deg;
-        celestial.sun_elevation_deg = atmo.sun_elevation_deg;
-        celestial.moon_azimuth_deg = atmo.moon_azimuth_deg;
-        celestial.moon_elevation_deg = atmo.moon_elevation_deg;
-        celestial.moon_phase = atmo.moon_phase;
-        celestial.moon_enabled = atmo.moon_enabled;
-        celestial.moon_illuminance = atmo.moon_illuminance;
-        celestial.moon_direction = super::lighting_state::sun_direction_from_angles(
-            atmo.moon_azimuth_deg,
-            atmo.moon_elevation_deg,
-        );
-        celestial.sun_direction = super::lighting_state::sun_direction_from_angles(
-            atmo.sun_azimuth_deg,
-            atmo.sun_elevation_deg,
-        );
-        celestial.sun_color = crate::ui::sun_color_for_elevation(atmo.sun_elevation_deg);
-        celestial.exposure_ev100 = crate::ui::exposure_ev_for_elevation(
-            atmo.sun_elevation_deg,
-            atmo.exposure_ev_min,
-            atmo.exposure_ev_max,
-            atmo.exposure_bias,
-        );
-        celestial.environment_intensity = crate::ui::environment_intensity_for_elevation(
-            atmo.sun_elevation_deg,
-            atmo.environment_intensity_scale,
-        );
-
-        atmosphere.sun_azimuth_deg = atmo.sun_azimuth_deg;
-        atmosphere.sun_elevation_deg = atmo.sun_elevation_deg;
+        lighting_state.apply_authored_atmosphere(atmo);
+        celestial.apply_authored_atmosphere(atmo);
     }
 
     if let Some(fog) = registry.0.active_fog() {
@@ -179,11 +126,8 @@ fn init_presentation_from_registry(
 
         fog_stack.local_volumes = volumes;
 
-        lighting_tweaks.fog_color = fog.distance_color;
-        lighting_tweaks.fog_start_m = fog.distance_start_m;
-        lighting_tweaks.fog_end_m = fog.distance_end_m;
-        atmosphere.height_fog_density = fog.height_density;
-        atmosphere.underwater_fog_density = fog.underwater_density;
+        lighting_tweaks.apply_authored_defaults(fog);
+        atmosphere.apply_authored_fog_densities(fog);
     }
 }
 

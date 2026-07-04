@@ -2,11 +2,11 @@
 mod collision;
 mod components;
 mod debug;
+mod environment;
 mod fly_cam;
 mod follow;
 mod input;
 mod orbit;
-mod environment;
 mod plugin;
 mod spawn;
 mod transform;
@@ -27,30 +27,15 @@ pub(crate) fn exp_smoothing_factor(sharpness: f32, delta_seconds: f32) -> f32 {
     1.0 - (-sharpness * delta_seconds).exp()
 }
 
-pub(crate) fn smooth_vec3(
-    current: Vec3,
-    target: Vec3,
-    sharpness: f32,
-    delta_seconds: f32,
-) -> Vec3 {
+pub(crate) fn smooth_vec3(current: Vec3, target: Vec3, sharpness: f32, delta_seconds: f32) -> Vec3 {
     current.lerp(target, exp_smoothing_factor(sharpness, delta_seconds))
 }
 
-pub(crate) fn smooth_scalar(
-    current: f32,
-    target: f32,
-    sharpness: f32,
-    delta_seconds: f32,
-) -> f32 {
+pub(crate) fn smooth_scalar(current: f32, target: f32, sharpness: f32, delta_seconds: f32) -> f32 {
     current + (target - current) * exp_smoothing_factor(sharpness, delta_seconds)
 }
 
-pub(crate) fn smooth_angle(
-    current: f32,
-    target: f32,
-    sharpness: f32,
-    delta_seconds: f32,
-) -> f32 {
+pub(crate) fn smooth_angle(current: f32, target: f32, sharpness: f32, delta_seconds: f32) -> f32 {
     let difference = components::wrap_angle(target - current);
     current + difference * exp_smoothing_factor(sharpness, delta_seconds)
 }

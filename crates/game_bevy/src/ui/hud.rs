@@ -2,7 +2,7 @@
 use bevy::prelude::*;
 use physics_bridge::GroundedState;
 
-use crate::environment::{biomes::classify_biome, BiomeCatalog};
+use crate::environment::{BiomeCatalog, biomes::classify_biome};
 use crate::player::{Player, PlayerMovementState};
 use crate::state::AppState;
 use crate::terrain::TerrainPipelineState;
@@ -57,18 +57,39 @@ fn update_hud(
     pipeline: Res<TerrainPipelineState>,
     biomes: Res<BiomeCatalog>,
     player: Query<(&Transform, &PlayerMovementState, &GroundedState), With<Player>>,
-    mut speed: Query<&mut Text, (With<HudSpeedText>, Without<HudGroundedText>, Without<HudBiomeText>)>,
+    mut speed: Query<
+        &mut Text,
+        (
+            With<HudSpeedText>,
+            Without<HudGroundedText>,
+            Without<HudBiomeText>,
+        ),
+    >,
     mut grounded: Query<
         &mut Text,
-        (With<HudGroundedText>, Without<HudSpeedText>, Without<HudBiomeText>),
+        (
+            With<HudGroundedText>,
+            Without<HudSpeedText>,
+            Without<HudBiomeText>,
+        ),
     >,
     mut biome_text: Query<
         &mut Text,
-        (With<HudBiomeText>, Without<HudSpeedText>, Without<HudGroundedText>, Without<HudWaterText>),
+        (
+            With<HudBiomeText>,
+            Without<HudSpeedText>,
+            Without<HudGroundedText>,
+            Without<HudWaterText>,
+        ),
     >,
     mut water_text: Query<
         &mut Text,
-        (With<HudWaterText>, Without<HudSpeedText>, Without<HudGroundedText>, Without<HudBiomeText>),
+        (
+            With<HudWaterText>,
+            Without<HudSpeedText>,
+            Without<HudGroundedText>,
+            Without<HudBiomeText>,
+        ),
     >,
     mut last_biome: Local<Option<(i32, i32, i32, String)>>,
 ) {
@@ -85,14 +106,11 @@ fn update_hud(
             if grounded_state.grounded { "yes" } else { "no" }
         );
     }
-    if let (Some(source), Ok(mut text)) = (pipeline.density_source.as_ref(), biome_text.single_mut())
+    if let (Some(source), Ok(mut text)) =
+        (pipeline.density_source.as_ref(), biome_text.single_mut())
     {
         let p = transform.translation;
-        let cell = (
-            p.x.floor() as i32,
-            p.y.floor() as i32,
-            p.z.floor() as i32,
-        );
+        let cell = (p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32);
         let label = if last_biome
             .as_ref()
             .is_some_and(|(x, y, z, _)| (*x, *y, *z) == cell)

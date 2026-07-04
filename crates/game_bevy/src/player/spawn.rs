@@ -3,8 +3,8 @@ use bevy::prelude::*;
 use game_data::{CompiledCamera, CompiledLighting, CompiledPlayer};
 
 use crate::camera::{
-    spawn_game_camera, CameraFollowTarget, CameraPivot, CameraRig, CharacterFacing,
-    PlayerInterpolation,
+    CameraFollowTarget, CameraPivot, CameraRig, CharacterFacing, PlayerInterpolation,
+    spawn_game_camera,
 };
 use crate::physics::attach_character_physics;
 
@@ -41,7 +41,7 @@ pub fn spawn_player(
             desired_yaw: 0.0,
             turn_speed: player.rotation_speed_deg_per_s.to_radians(),
         },
-        crate::environment::lighting_state::SkyVisibility(1.0),
+        crate::environment::lighting_state::SkyVisibility::default(),
         Transform::from_translation(spawn_center),
         Visibility::default(),
     ));

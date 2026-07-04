@@ -1,4 +1,20 @@
 //! Unified LOD policy loaded from world YAML.
+//!
+//! ## Three LOD domains
+//!
+//! The engine uses separate distance models per subsystem. Do not conflate them.
+//!
+//! 1. **Terrain mesh LOD** — chunk Chebyshev distance vs `world.lod.terrain` tiers
+//!    (`max_distance_chunks`, `mesh_resolution_scale`, collider mode). Applied in the
+//!    terrain pipeline via [`terrain_lod_with_hysteresis`].
+//!
+//! 2. **Vegetation / prop LOD** — chunk residency radii from `chunks.residency`
+//!    (`high_detail_radius`, `decoration_radius`). Near chunks get full meshes and
+//!    density; farther chunks within decoration radius get reduced scale/meshes.
+//!
+//! 3. **Grass patch LOD** — meter distance from the player vs `world.lod.content.grass_lod`
+//!    `[near, mid, far]`. Patch residency is still bounded by `decoration_radius`; band
+//!    selection controls blade count per chunk patch (Phase 1 cluster mesh).
 
 use bevy::prelude::*;
 use game_data::{
@@ -70,13 +86,20 @@ impl Default for LodPolicy {
             decoration_radius: 5,
             high_detail_radius: 4,
         };
-        Self::from_world_residency(&world, &CompiledContentLod {
-            vegetation_max_distance_m: 80.0,
-            grass_lod: [25.0, 70.0, 140.0],
-        }, &CompiledDistantLod {
-            horizon_skirt: true,
-            impostor_start_m: 400.0,
-        }, &[], StableId::new("render.terrain_high"), None)
+        Self::from_world_residency(
+            &world,
+            &CompiledContentLod {
+                vegetation_max_distance_m: 80.0,
+                grass_lod: [25.0, 70.0, 140.0],
+            },
+            &CompiledDistantLod {
+                horizon_skirt: true,
+                impostor_start_m: 400.0,
+            },
+            &[],
+            StableId::new("render.terrain_high"),
+            None,
+        )
     }
 }
 
@@ -125,11 +148,13 @@ impl LodPolicy {
     }
 
     pub fn apply_to_world_tweaks(&self, tweaks: &mut WorldTweaks) {
-        tweaks.density_radius = self.density_radius;
-        tweaks.render_radius = self.render_radius;
-        tweaks.physics_radius = self.physics_radius;
-        tweaks.decoration_radius = self.decoration_radius;
-        tweaks.high_detail_radius = self.high_detail_radius;
+        tweaks.apply_authored_residency(&game_data::CompiledChunkResidency {
+            density_radius: self.density_radius,
+            render_radius: self.render_radius,
+            physics_radius: self.physics_radius,
+            decoration_radius: self.decoration_radius,
+            high_detail_radius: self.high_detail_radius,
+        });
     }
 }
 
@@ -156,18 +181,15 @@ pub fn terrain_lod_for_distance(
     let dist = chunk_chebyshev_distance(center, coord);
     for (i, tier) in policy.terrain_tiers.iter().enumerate() {
         if dist <= tier.max_distance_chunks {
-            return (
-                i as u8,
-                tier.mesh_resolution_scale,
-                tier.collider,
-            );
+            return (i as u8, tier.mesh_resolution_scale, tier.collider);
         }
     }
     let last = policy.terrain_tiers.last();
     (
         policy.terrain_tiers.len().saturating_sub(1) as u8,
         last.map(|t| t.mesh_resolution_scale).unwrap_or(0.25),
-        last.map(|t| t.collider).unwrap_or(TerrainColliderLodDefinition::None),
+        last.map(|t| t.collider)
+            .unwrap_or(TerrainColliderLodDefinition::None),
     )
 }
 
@@ -265,4 +287,25 @@ fn init_lod_policy_from_registry(
     policy.preload_atlas = world.staging.preload_atlas;
     policy.preload_material_arrays = world.staging.preload_material_arrays;
     policy.apply_to_world_tweaks(&mut world_tweaks);
+}
+
+#[cfg(test)]
+mod residency_apply_tests {
+    use super::*;
+    use game_data::CompiledChunkResidency;
+
+    #[test]
+    fn world_tweaks_apply_authored_residency() {
+        let residency = CompiledChunkResidency {
+            density_radius: 12,
+            render_radius: 8,
+            physics_radius: 6,
+            decoration_radius: 5,
+            high_detail_radius: 3,
+        };
+        let mut tweaks = WorldTweaks::default();
+        tweaks.apply_authored_residency(&residency);
+        assert_eq!(tweaks.density_radius, 12);
+        assert_eq!(tweaks.high_detail_radius, 3);
+    }
 }

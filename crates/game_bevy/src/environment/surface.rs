@@ -4,27 +4,25 @@ use std::sync::Mutex;
 use game_data::{CompiledSurfaceRules, CompiledTerrainMaterials};
 use terrain_generation::{DensitySource, RecipeDensitySource};
 use terrain_surface::{
-    compute_overlay_state, overlay_response_for_material_name, remap_blend_to_local_slots,
-    resolve_blend, BiomeId, ChunkSlotPalette, ChunkSlotRemapper, EnvironmentSample, GeologyId,
-    MaterialKey, MaterialLayerRegistry, MaterialVertex, RuleSurfaceClassifier, SoftBiomeWeights,
-    SurfaceClassifier, SurfaceConditions, SurfaceContext, SurfaceGate, SurfaceGateWeights,
-    SurfaceMeshResolver, SurfaceRamp, SurfaceRuleSet,
+    ChunkSlotPalette, ChunkSlotRemapper, EnvironmentSample, GeologyId, MaterialKey,
+    MaterialLayerRegistry, MaterialVertex, RuleSurfaceClassifier, SurfaceClassifier,
+    SurfaceContext, SurfaceMeshResolver, SurfaceRuleSet, compute_overlay_state,
+    overlay_response_for_material_name, remap_blend_to_local_slots, resolve_blend,
 };
 
 use super::biome_context::ChunkColumnCache;
-use super::biomes::{biome_surface_tint, biome_surface_tint_from_soft, BiomeKind};
-use crate::environment::BiomeCatalog;
+use super::biomes::{biome_surface_tint, biome_surface_tint_from_soft};
 use super::materials::terrain_material_key_from_paint_material;
+use crate::environment::BiomeCatalog;
 use crate::terrain::TerrainEditStore;
 
 const ATLAS_BIOME_MIX: f32 = 0.30;
-const DEFAULT_WETNESS_NORMALIZATION: f32 = 600.0;
 
 fn wetness_normalization(source: &RecipeDensitySource) -> f32 {
     source
         .atlas()
         .map(|atlas| atlas.max_wetness())
-        .unwrap_or(DEFAULT_WETNESS_NORMALIZATION)
+        .unwrap_or_else(terrain_surface::default_wetness_normalization)
         .max(1.0)
 }
 const PAINT_DENSITY_MATCH_EPS: f32 = 0.001;
@@ -72,7 +70,7 @@ impl ChunkSurfaceResolver {
             column_cache,
             layer_registry: MaterialLayerRegistry::from_layer_order(&layer_order),
             classifier: RuleSurfaceClassifier::new(
-                surface_rules_from_compiled(rules),
+                SurfaceRuleSet::from_compiled(rules),
                 default_material,
             ),
             slot_remapper: Mutex::new(ChunkSlotRemapper::new()),
@@ -133,40 +131,46 @@ impl ChunkSurfaceResolver {
         let wz = (wz_m / self.cell_size_m).round() as i32;
         let elevation_m = wy_m;
 
-        let biome_ctx = self
-            .column_cache
-            .context_at(&self.source, wx, wy_m, wz);
+        let biome_ctx = self.column_cache.context_at(&self.source, wx, wy_m, wz);
 
         let mut effective_moisture = biome_ctx.effective_moisture;
         let mut coast_distance_m = biome_ctx.distance_to_water;
+        let mut slope_degrees = biome_ctx.slope_degrees;
         let mut soil_depth_m =
             fallback_soil_depth(elevation_m, self.sea_level_m, biome_ctx.slope_degrees);
 
         if let Some(atlas) = self.source.atlas() {
             coast_distance_m = atlas.sample_coast_distance(wx_m, wz_m);
+            slope_degrees = atlas.slope_at(wx_m, wz_m);
             soil_depth_m = atlas.sample_soil_depth(wx_m, wz_m);
-            let wetness = (atlas.sample_wetness(wx_m, wz_m) / wetness_normalization(&self.source))
-                .clamp(0.0, 1.0);
+            let wetness = terrain_surface::normalize_wetness(
+                atlas.sample_wetness(wx_m, wz_m),
+                wetness_normalization(&self.source),
+            );
             effective_moisture = (effective_moisture * 0.5 + wetness * 0.5).clamp(0.0, 1.0);
         }
 
         let env = EnvironmentSample {
             elevation: biome_ctx.elevation,
-            slope_degrees: terrain_surface::slope_degrees(normal),
+            slope_degrees,
             moisture: biome_ctx.moisture,
             effective_moisture,
             transition_noise: biome_ctx.transition_noise,
             temperature: biome_ctx.temperature,
-            distance_to_water: biome_ctx.distance_to_water,
+            distance_to_water: coast_distance_m,
             distance_to_river: biome_ctx.distance_to_river,
             cave_depth: biome_ctx.cave_depth,
             world_y: biome_ctx.world_y,
         };
         let mut soft = terrain_surface::compute_soft_biome_weights(&env);
         if let Some(atlas) = self.source.atlas() {
-            soft = merge_soft_with_atlas(soft, atlas.sample_biome_weights(wx_m, wz_m));
+            soft = terrain_surface::merge_soft_with_atlas(
+                soft,
+                atlas.sample_biome_weights(wx_m, wz_m),
+                ATLAS_BIOME_MIX,
+            );
         }
-        let biome = biome_kind_to_surface(biome_kind_from_soft(&soft));
+        let biome = soft.primary_biome();
 
         let water_depth_m = (self.sea_level_m - elevation_m).max(0.0);
         let wave_exposure = (1.0 - (coast_distance_m / 80.0).clamp(0.0, 1.0))
@@ -179,7 +183,7 @@ impl ChunkSurfaceResolver {
             elevation_m,
             sea_level_m: self.sea_level_m,
             water_depth_m,
-            slope_degrees: terrain_surface::slope_degrees(normal),
+            slope_degrees,
             moisture: effective_moisture,
             soil_depth_m,
             coast_distance_m,
@@ -194,133 +198,9 @@ impl ChunkSurfaceResolver {
     }
 }
 
-pub fn surface_rules_from_compiled(rules: &CompiledSurfaceRules) -> SurfaceRuleSet {
-    use game_data::{
-        SurfaceBlendEntryDefinition, SurfaceClassifierDefinition, SurfaceConditionsDefinition,
-        SurfaceGateDefinition,         SurfaceGateWeightDefinition, SurfaceRampDefinition,
-    };
-
-    fn map_ramp(ramp: &SurfaceRampDefinition) -> SurfaceRamp {
-        SurfaceRamp {
-            from: ramp.from,
-            to: ramp.to,
-            invert: ramp.invert,
-        }
-    }
-
-    fn map_conditions(when: &SurfaceConditionsDefinition) -> SurfaceConditions {
-        SurfaceConditions {
-            cave_exposure_min: when.cave_exposure_min,
-            water_depth_min: when.water_depth_min,
-            coast_distance_max: when.coast_distance_max,
-            river_distance_max: when.river_distance_max,
-            slope_min: when.slope_min,
-            slope_max: when.slope_max,
-            elevation_min: when.elevation_min,
-            elevation_max: when.elevation_max,
-            elevation_above_sea_min: when.elevation_above_sea_min,
-            elevation_above_sea_max: when.elevation_above_sea_max,
-            moisture_min: when.moisture_min,
-            moisture_max: when.moisture_max,
-            geology: when.geology.clone(),
-            biome: when.biome.clone(),
-            soft_grassland_min: when.soft_grassland_min,
-            soft_forest_min: when.soft_forest_min,
-            soft_wetland_min: when.soft_wetland_min,
-            soft_alpine_min: when.soft_alpine_min,
-            fallback: when.fallback,
-        }
-    }
-
-    fn map_gate_weights(weights: &SurfaceGateWeightDefinition) -> SurfaceGateWeights {
-        SurfaceGateWeights {
-            coast_distance: weights.coast_distance.as_ref().map(map_ramp),
-            river_distance: weights.river_distance.as_ref().map(map_ramp),
-            slope: weights.slope.as_ref().map(map_ramp),
-            elevation_above_sea: weights.elevation_above_sea.as_ref().map(map_ramp),
-            moisture: weights.moisture.as_ref().map(map_ramp),
-            cave_exposure: weights.cave_exposure.as_ref().map(map_ramp),
-            wave_exposure: weights.wave_exposure.as_ref().map(map_ramp),
-            soft_alpine: weights.soft_alpine.as_ref().map(map_ramp),
-            soft_wetland: weights.soft_wetland.as_ref().map(map_ramp),
-            constant: weights.constant,
-        }
-    }
-
-    fn map_blend(entries: &[SurfaceBlendEntryDefinition]) -> Vec<terrain_surface::SurfaceBlendEntry> {
-        entries
-            .iter()
-            .map(|entry| terrain_surface::SurfaceBlendEntry {
-                material: MaterialKey::new(entry.material.as_str()),
-                weight: entry.weight,
-            })
-            .collect()
-    }
-
-    fn map_classifier(def: &SurfaceClassifierDefinition) -> terrain_surface::SurfaceClassifierPreset {
-        terrain_surface::SurfaceClassifierPreset {
-            id: def.id.clone(),
-            blend: map_blend(&def.blend),
-            weighted_mix: def
-                .weighted_mix
-                .iter()
-                .map(|mix| terrain_surface::SurfaceWeightedMix {
-                    classifier: mix.classifier.clone(),
-                    weight: mix.weight,
-                })
-                .collect(),
-        }
-    }
-
-    let gates = rules
-        .gates
-        .iter()
-        .map(|gate: &SurfaceGateDefinition| SurfaceGate {
-            id: gate.id.clone(),
-            when: map_conditions(&gate.when),
-            gate_weight: map_gate_weights(&gate.gate_weight),
-            exclusive: gate.exclusive,
-            blend: map_blend(&gate.blend),
-            classifier: gate.classifier.clone(),
-        })
-        .collect();
-
-    let classifiers = rules
-        .classifiers
-        .iter()
-        .map(map_classifier)
-        .map(|preset| (preset.id.clone(), preset))
-        .collect();
-
-    SurfaceRuleSet {
-        gates,
-        classifiers,
-    }
-}
-
 fn fallback_soil_depth(elevation_m: f32, sea_level_m: f32, slope_degrees: f32) -> f32 {
     let relief = (elevation_m - sea_level_m).max(0.0);
     (1.5 - relief * 0.02 - slope_degrees * 0.02).clamp(0.2, 2.0)
-}
-
-fn merge_soft_with_atlas(
-    climate: SoftBiomeWeights,
-    atlas: terrain_generation::BiomeWeights,
-) -> SoftBiomeWeights {
-    let t = ATLAS_BIOME_MIX;
-    SoftBiomeWeights {
-        grassland: climate.grassland * (1.0 - t) + atlas.grassland * t,
-        forest: climate.forest * (1.0 - t) + atlas.rainforest * t,
-        scrub: climate.scrub * (1.0 - t)
-            + (atlas.volcanic_rock * 0.4 + atlas.grassland * 0.2) * t,
-        coastal_scrub: climate.coastal_scrub * (1.0 - t)
-            + (atlas.beach * 0.55 + atlas.grassland * 0.15) * t,
-        wetland: climate.wetland * (1.0 - t) + atlas.wetland * t,
-        beach: climate.beach * (1.0 - t) + atlas.beach * t,
-        alpine: climate.alpine * (1.0 - t) + atlas.volcanic_rock * 0.5 * t,
-        rocky: climate.rocky * (1.0 - t) + atlas.volcanic_rock * 0.55 * t,
-    }
-    .normalize()
 }
 
 fn resolve_geology(source: &RecipeDensitySource, cave_exposure: f32) -> GeologyId {
@@ -350,10 +230,7 @@ impl SurfaceMeshResolver for ChunkSurfaceResolver {
     fn vertex_blend(&self, position: [f32; 3], normal: [f32; 3]) -> MaterialVertex {
         if let Some(mut vertex) = self.paint_overlay_weights(position) {
             let context = self.build_context(position, normal);
-            vertex.tint = biome_surface_tint(
-                &self.biome_catalog,
-                biome_kind_from_surface(context.biome),
-            );
+            vertex.tint = biome_surface_tint(&self.biome_catalog, context.biome);
             return vertex;
         }
         let context = self.build_context(position, normal);
@@ -375,22 +252,6 @@ impl SurfaceMeshResolver for ChunkSurfaceResolver {
     }
 }
 
-pub fn biome_kind_from_surface(biome: terrain_surface::BiomeId) -> BiomeKind {
-    match biome {
-        terrain_surface::BiomeId::Grassland => BiomeKind::Grassland,
-        terrain_surface::BiomeId::Forest => BiomeKind::Forest,
-        terrain_surface::BiomeId::Scrub => BiomeKind::Scrub,
-        terrain_surface::BiomeId::CoastalScrub => BiomeKind::CoastalScrub,
-        terrain_surface::BiomeId::Wetland => BiomeKind::Wetland,
-        terrain_surface::BiomeId::Beach => BiomeKind::Beach,
-        terrain_surface::BiomeId::Alpine => BiomeKind::Alpine,
-        terrain_surface::BiomeId::RockyUpland => BiomeKind::RockyUpland,
-        terrain_surface::BiomeId::Cave => BiomeKind::Cave,
-        terrain_surface::BiomeId::Riverbank => BiomeKind::Riverbank,
-        terrain_surface::BiomeId::ShallowWater => BiomeKind::ShallowWater,
-    }
-}
-
 fn apply_vertex_overlay(
     vertex: &mut MaterialVertex,
     context: &SurfaceContext,
@@ -403,51 +264,15 @@ fn apply_vertex_overlay(
     vertex.tint[1] = (vertex.tint[1] * moss_green).min(1.2);
 }
 
-fn biome_kind_from_soft(soft: &SoftBiomeWeights) -> BiomeKind {
-    let channels = [
-        (BiomeKind::Grassland, soft.grassland),
-        (BiomeKind::Forest, soft.forest),
-        (BiomeKind::Scrub, soft.scrub),
-        (BiomeKind::CoastalScrub, soft.coastal_scrub),
-        (BiomeKind::Wetland, soft.wetland),
-        (BiomeKind::Beach, soft.beach),
-        (BiomeKind::Alpine, soft.alpine),
-        (BiomeKind::RockyUpland, soft.rocky),
-    ];
-    channels
-        .into_iter()
-        .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
-        .map(|(k, _)| k)
-        .unwrap_or(BiomeKind::Grassland)
-}
-
-fn biome_kind_to_surface(kind: BiomeKind) -> BiomeId {
-    match kind {
-        BiomeKind::Grassland => BiomeId::Grassland,
-        BiomeKind::Forest => BiomeId::Forest,
-        BiomeKind::Scrub => BiomeId::Scrub,
-        BiomeKind::CoastalScrub => BiomeId::CoastalScrub,
-        BiomeKind::Wetland => BiomeId::Wetland,
-        BiomeKind::Beach => BiomeId::Beach,
-        BiomeKind::Alpine => BiomeId::Alpine,
-        BiomeKind::RockyUpland => BiomeId::RockyUpland,
-        BiomeKind::Cave => BiomeId::Cave,
-        BiomeKind::Riverbank => BiomeId::Riverbank,
-        BiomeKind::ShallowWater | BiomeKind::DeepWater | BiomeKind::OffshoreShelf => {
-            BiomeId::Beach
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::environment::biome_context::ChunkColumnCache;
     use shared::StableId;
-    use terrain_generation::{default_vertical_slice_recipe, RecipeDensitySource};
     use terrain_generation::fill_padded_samples;
+    use terrain_generation::{RecipeDensitySource, default_vertical_slice_recipe};
     use terrain_meshing::{ChunkMeshingInput, SurfaceNetsMesher, TerrainMesher};
-    use voxel_core::{MaterialId, TerrainEditCommand, CHUNK_CELLS, TerrainChunk, WorldCell};
+    use voxel_core::{CHUNK_CELLS, MaterialId, TerrainChunk, TerrainEditCommand, WorldCell};
 
     fn test_palette() -> CompiledTerrainMaterials {
         CompiledTerrainMaterials {
@@ -598,8 +423,12 @@ mod tests {
         );
         assert!(!affected.is_empty());
 
-        let coord = WorldCell::new(wx.floor() as i32, surface_y.floor() as i32, wz.floor() as i32)
-            .chunk_coord();
+        let coord = WorldCell::new(
+            wx.floor() as i32,
+            surface_y.floor() as i32,
+            wz.floor() as i32,
+        )
+        .chunk_coord();
         let (ox, oy, oz) = TerrainChunk::new(coord).sample_origin();
         let samples = fill_padded_samples(coord, |ix, iy, iz| {
             if let Some(sample) = edits.0.sample_override(ix, iy, iz) {
@@ -708,7 +537,7 @@ mod tests {
             .get(&StableId::new("surface.expanded_slice"))
             .expect("expanded slice surface rules");
         let rule_classifier = RuleSurfaceClassifier::new(
-            surface_rules_from_compiled(rules),
+            SurfaceRuleSet::from_compiled(rules),
             MaterialKey::new("grass"),
         );
         let island = IslandSurfaceClassifier;
@@ -717,26 +546,35 @@ mod tests {
         cliff.slope_degrees = 72.0;
         cliff.moisture = 0.2;
         cliff.soil_depth_m = 0.1;
-        assert!(blend_has_material(&rule_classifier.classify(&cliff), "rock"));
+        assert!(blend_has_material(
+            &rule_classifier.classify(&cliff),
+            "rock"
+        ));
         assert!(blend_has_material(&island.classify(&cliff), "rock"));
 
         let mut coast = parity_context();
         coast.coast_distance_m = 10.0;
         coast.elevation_m = 0.5;
         coast.wave_exposure = 0.2;
-        assert!(blend_has_material(&rule_classifier.classify(&coast), "sand"));
+        assert!(blend_has_material(
+            &rule_classifier.classify(&coast),
+            "sand"
+        ));
         assert!(blend_has_material(&island.classify(&coast), "sand"));
 
         let mut cave = parity_context();
         cave.cave_exposure = 0.8;
         cave.geology = terrain_surface::GeologyId::Limestone;
         cave.mineral_deposition = 0.5;
-        assert!(blend_has_material(&rule_classifier.classify(&cave), "limestone"));
+        assert!(blend_has_material(
+            &rule_classifier.classify(&cave),
+            "limestone"
+        ));
         assert!(blend_has_material(&island.classify(&cave), "limestone"));
     }
 
     #[test]
-    fn biome_kind_surface_round_trip_for_land_biomes() {
+    fn biome_rule_id_round_trip_for_land_biomes() {
         use terrain_surface::BiomeId;
 
         let land_biomes = [
@@ -750,17 +588,16 @@ mod tests {
             BiomeId::RockyUpland,
             BiomeId::Cave,
             BiomeId::Riverbank,
+            BiomeId::ShallowWater,
+            BiomeId::DeepWater,
+            BiomeId::OffshoreShelf,
         ];
         for id in land_biomes {
             assert_eq!(
-                biome_kind_to_surface(biome_kind_from_surface(id)),
+                BiomeId::from_rule_id(id.as_rule_id()),
                 id,
                 "round-trip failed for {id:?}"
             );
         }
-        assert_eq!(
-            biome_kind_to_surface(biome_kind_from_surface(BiomeId::ShallowWater)),
-            BiomeId::Beach,
-        );
     }
 }
