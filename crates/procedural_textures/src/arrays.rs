@@ -1,7 +1,7 @@
 // crates/procedural_textures/src/arrays.rs
 use crate::cache::bake_recipe_with_cache;
 use crate::error::TextureGenerationError;
-use crate::maps::GeneratedPbrMaps;
+use crate::maps::{GeneratedPbrMaps, linear_to_srgb_u8};
 use crate::material_recipe::{TerrainMaterialRecipe, order_recipes_for_palette};
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -80,14 +80,24 @@ fn build_cpu_arrays_from_ordered(
     })
 }
 
+fn srgb_to_linear(byte: u8) -> f32 {
+    let c = byte as f32 / 255.0;
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
 fn apply_tint(maps: &mut GeneratedPbrMaps, tint: [f32; 3]) {
     if tint == [1.0, 1.0, 1.0] {
         return;
     }
     for chunk in maps.albedo_rgba8.chunks_exact_mut(4) {
-        chunk[0] = ((chunk[0] as f32 / 255.0 * tint[0]).clamp(0.0, 1.0) * 255.0) as u8;
-        chunk[1] = ((chunk[1] as f32 / 255.0 * tint[1]).clamp(0.0, 1.0) * 255.0) as u8;
-        chunk[2] = ((chunk[2] as f32 / 255.0 * tint[2]).clamp(0.0, 1.0) * 255.0) as u8;
+        for ch in 0..3 {
+            let linear = srgb_to_linear(chunk[ch]) * tint[ch];
+            chunk[ch] = linear_to_srgb_u8(linear);
+        }
     }
 }
 

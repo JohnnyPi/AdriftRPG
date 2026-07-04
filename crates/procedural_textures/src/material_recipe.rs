@@ -57,7 +57,7 @@ pub struct TerrainMaterialRecipe {
     pub generator: TextureRecipe,
     #[serde(default = "default_normal_strength")]
     pub normal_strength: f32,
-    #[serde(default)]
+    #[serde(default = "default_tint")]
     pub tint: [f32; 3],
 }
 
@@ -87,7 +87,22 @@ fn default_normal_strength() -> f32 {
     1.0
 }
 
-/// Canonical legacy island layer order.
+fn default_tint() -> [f32; 3] {
+    [1.0, 1.0, 1.0]
+}
+
+/// Layer order as declared in a procedural materials document (YAML list order).
+pub fn document_layer_order(doc: &ProceduralMaterialsDocument) -> Vec<String> {
+    doc.materials.iter().map(|recipe| recipe.id.clone()).collect()
+}
+
+pub fn order_recipes_for_document(
+    doc: &ProceduralMaterialsDocument,
+) -> Result<Vec<TerrainMaterialRecipe>, crate::error::TextureGenerationError> {
+    order_recipes_for_palette(&document_layer_order(doc), &doc.materials)
+}
+
+/// Canonical legacy island layer order (deprecated — prefer `document_layer_order`).
 pub const CORE_ISLAND_LAYER_ORDER: &[TerrainMaterialIdName] = &[
     TerrainMaterialIdName::FreshBasalt,
     TerrainMaterialIdName::WeatheredBasalt,
@@ -145,120 +160,21 @@ pub struct ProceduralMaterialsDocument {
 }
 
 pub fn default_island_recipes() -> Vec<TerrainMaterialRecipe> {
-    vec![
-        TerrainMaterialRecipe {
-            id: TerrainMaterialIdName::FreshBasalt.as_str().to_string(),
-            resolution: 512,
-            meters_per_repeat: 2.5,
-            generator: TextureRecipe::Rock(RockConfig {
-                seed: 1001,
-                color_light: [0.18, 0.17, 0.16],
-                color_dark: [0.05, 0.05, 0.055],
-                ..RockConfig::default()
-            }),
-            normal_strength: 1.15,
-            tint: [1.0, 1.0, 1.0],
-        },
-        TerrainMaterialRecipe {
-            id: TerrainMaterialIdName::WeatheredBasalt.as_str().to_string(),
-            resolution: 512,
-            meters_per_repeat: 3.5,
-            generator: TextureRecipe::Rock(RockConfig {
-                seed: 1002,
-                color_light: [0.25, 0.22, 0.18],
-                color_dark: [0.07, 0.06, 0.055],
-                ..RockConfig::default()
-            }),
-            normal_strength: 1.15,
-            tint: [1.0, 1.0, 1.0],
-        },
-        TerrainMaterialRecipe {
-            id: TerrainMaterialIdName::TropicalRedSoil.as_str().to_string(),
-            resolution: 512,
-            meters_per_repeat: 2.0,
-            generator: TextureRecipe::Ground(GroundConfig {
-                seed: 2001,
-                color_dry: [0.48, 0.17, 0.07],
-                color_moist: [0.32, 0.12, 0.05],
-                ..GroundConfig::default()
-            }),
-            normal_strength: 0.9,
-            tint: [1.0, 1.0, 1.0],
-        },
-        TerrainMaterialRecipe {
-            id: TerrainMaterialIdName::JungleLoam.as_str().to_string(),
-            resolution: 512,
-            meters_per_repeat: 2.0,
-            generator: TextureRecipe::Ground(GroundConfig {
-                seed: 2002,
-                color_dry: [0.22, 0.14, 0.06],
-                color_moist: [0.10, 0.08, 0.04],
-                ..GroundConfig::default()
-            }),
-            normal_strength: 0.95,
-            tint: [1.0, 1.0, 1.0],
-        },
-        TerrainMaterialRecipe {
-            id: TerrainMaterialIdName::JungleMoss.as_str().to_string(),
-            resolution: 512,
-            meters_per_repeat: 1.8,
-            generator: TextureRecipe::Ground(GroundConfig {
-                seed: 2003,
-                color_dry: [0.18, 0.28, 0.10],
-                color_moist: [0.08, 0.18, 0.06],
-                ..GroundConfig::default()
-            }),
-            normal_strength: 1.0,
-            tint: [0.9, 1.05, 0.85],
-        },
-        TerrainMaterialRecipe {
-            id: TerrainMaterialIdName::CoralSand.as_str().to_string(),
-            resolution: 512,
-            meters_per_repeat: 1.2,
-            generator: TextureRecipe::Sand(SandConfig {
-                seed: 3001,
-                color_light: [0.92, 0.86, 0.72],
-                color_dark: [0.78, 0.70, 0.55],
-                ..SandConfig::default()
-            }),
-            normal_strength: 0.8,
-            tint: [1.0, 1.0, 1.0],
-        },
-        TerrainMaterialRecipe {
-            id: TerrainMaterialIdName::RiverGravel.as_str().to_string(),
-            resolution: 512,
-            meters_per_repeat: 1.5,
-            generator: TextureRecipe::Cobblestone(CobblestoneConfig {
-                seed: 4001,
-                ..CobblestoneConfig::default()
-            }),
-            normal_strength: 1.2,
-            tint: [1.0, 1.0, 1.0],
-        },
-        TerrainMaterialRecipe {
-            id: TerrainMaterialIdName::RiverSilt.as_str().to_string(),
-            resolution: 512,
-            meters_per_repeat: 1.0,
-            generator: TextureRecipe::Sand(SandConfig {
-                seed: 3002,
-                ripple_scale: 4.0,
-                grain_scale: 24.0,
-                color_light: [0.42, 0.38, 0.28],
-                color_dark: [0.28, 0.24, 0.18],
-                roughness: 0.75,
-                ..SandConfig::default()
-            }),
-            normal_strength: 0.6,
-            tint: [0.95, 0.92, 0.88],
-        },
-    ]
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../assets/procedural/terrain/procedural_island.yaml");
+    let text = std::fs::read_to_string(&path).expect("read embedded island yaml");
+    let doc: ProceduralMaterialsDocument =
+        serde_yaml::from_str(strip_utf8_bom(&text)).expect("parse embedded island yaml");
+    order_recipes_for_document(&doc).expect("order embedded island recipes")
 }
 
-use crate::generators::{CobblestoneConfig, GroundConfig, RockConfig, SandConfig};
-
 pub fn document_fingerprint(doc: &ProceduralMaterialsDocument) -> [u8; 32] {
+    use crate::texture_graph::GENERATOR_VERSION;
     let json = serde_json::to_string(doc).unwrap_or_default();
-    *blake3::hash(json.as_bytes()).as_bytes()
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(&GENERATOR_VERSION.to_le_bytes());
+    hasher.update(json.as_bytes());
+    *hasher.finalize().as_bytes()
 }
 
 /// Strip UTF-8 BOM sometimes added by Windows editors.

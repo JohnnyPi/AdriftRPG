@@ -1,6 +1,6 @@
 // crates/game_bevy/src/player/spawn.rs
 use bevy::prelude::*;
-use game_data::{CompiledCamera, CompiledLighting, CompiledPlayer};
+use game_data::{CompiledCamera, CompiledPlayer};
 
 use crate::camera::{
     CameraFollowTarget, CameraPivot, CameraRig, CharacterFacing, PlayerInterpolation,
@@ -16,7 +16,6 @@ pub fn spawn_player(
     materials: &mut Assets<StandardMaterial>,
     player: &CompiledPlayer,
     camera: &CompiledCamera,
-    lighting: &CompiledLighting,
     spawn_position: Vec3,
 ) {
     let capsule_center_y = player.capsule_half_height_m + player.capsule_radius_m;
@@ -84,7 +83,6 @@ pub fn spawn_player(
         player_id,
         follow_target_id,
         camera,
-        lighting,
         spawn_focus,
     );
 }

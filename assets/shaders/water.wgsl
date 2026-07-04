@@ -25,8 +25,16 @@ struct WaterParams {
     animation: vec4<f32>,
 };
 
+struct WaterLightingParams {
+    sun_dir: vec4<f32>,
+    sky_tint: vec4<f32>,
+};
+
 @group(#{MATERIAL_BIND_GROUP}) @binding(0)
 var<uniform> params: WaterParams;
+
+@group(#{MATERIAL_BIND_GROUP}) @binding(1)
+var<uniform> lighting: WaterLightingParams;
 
 // Sum of a few directional gerstner-lite sine waves; returns height and
 // analytic XZ gradient so the normal is stable (no per-pixel noise "static").
@@ -58,6 +66,17 @@ fn wave_field(p: vec2<f32>, t: f32, speed: f32, amplitude: f32) -> vec3<f32> {
     return vec3<f32>(height, grad.x, grad.y);
 }
 
+// Normalize that never returns NaN: a zero-length input (e.g. an unset sun
+// direction before lighting is synced) falls back instead of poisoning the
+// pixel, which would otherwise render black.
+fn safe_normalize(v: vec3<f32>, fallback: vec3<f32>) -> vec3<f32> {
+    let len = length(v);
+    if (len > 1e-5) {
+        return v / len;
+    }
+    return fallback;
+}
+
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let world_pos = in.world_position.xyz;
@@ -70,10 +89,10 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // the mesh normal so river ribbons (non-horizontal) still behave.
     let w = wave_field(world_pos.xz, t, wave_speed, wave_amplitude);
     let wave_normal = normalize(vec3<f32>(-w.y, 1.0, -w.z));
-    let base_normal = normalize(in.world_normal);
-    let n = normalize(mix(base_normal, wave_normal, 0.85));
+    let base_normal = safe_normalize(in.world_normal, vec3<f32>(0.0, 1.0, 0.0));
+    let n = safe_normalize(mix(base_normal, wave_normal, 0.85), base_normal);
 
-    let view_dir = normalize(view.world_position.xyz - world_pos);
+    let view_dir = safe_normalize(view.world_position.xyz - world_pos, vec3<f32>(0.0, 1.0, 0.0));
     let n_dot_v = clamp(dot(n, view_dir), 0.0, 1.0);
 
     // Schlick fresnel, F0 ~ 0.02 for water.
@@ -85,12 +104,18 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let depth_factor = clamp(n_dot_v * 0.9 + 0.15 - crest * 0.18, 0.0, 1.0);
     var water_rgb = mix(params.shallow_color.rgb, params.deep_color.rgb, depth_factor);
 
-    // Sky-ish reflection tint at grazing angles.
-    let sky_tint = vec3<f32>(0.66, 0.78, 0.90);
-    water_rgb = mix(water_rgb, sky_tint, fresnel * 0.85);
+    // Sky-ish reflection tint at grazing angles (from celestial fog inscattering).
+    // Floor the reflected color to a dim fraction of the water's own tint: at
+    // grazing angles fresnel approaches 1, so an unset or nighttime sky_tint
+    // (which can be pure black before lighting is synced) would otherwise
+    // reflect the surface to black. The floor keeps a plausible dim reflection
+    // while still showing the real sky when it's brighter than the floor.
+    let sky_tint = lighting.sky_tint.xyz;
+    let reflection = max(sky_tint, water_rgb * 0.35);
+    water_rgb = mix(water_rgb, reflection, fresnel * 0.85);
 
-    // Cheap sun glint; direction roughly matches the late-morning lighting.
-    let sun_dir = normalize(vec3<f32>(0.35, 0.80, 0.30));
+    // Sun glint aligned with the live directional sun.
+    let sun_dir = safe_normalize(lighting.sun_dir.xyz, vec3<f32>(0.0, 1.0, 0.0));
     let refl = reflect(-view_dir, n);
     let glint = pow(clamp(dot(refl, sun_dir), 0.0, 1.0), 220.0);
     water_rgb = water_rgb + vec3<f32>(1.0, 0.98, 0.92) * glint * 0.8;
@@ -104,5 +129,5 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let foam = pow(1.0 - depth_factor, 2.5) * params.animation.y * foam_noise;
     water_rgb = mix(water_rgb, vec3<f32>(0.95, 0.98, 1.0), foam * 0.55);
 
-    return vec4<f32>(water_rgb, alpha);
+    return vec4<f32>(max(water_rgb, vec3<f32>(0.0)), alpha);
 }

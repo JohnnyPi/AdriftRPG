@@ -16,7 +16,8 @@ use crate::lod::LodPolicy;
 use crate::state::AppState;
 use crate::terrain::{
     TerrainChunkPalette, TerrainEditStore, TerrainMaterialHandle, TerrainPipelineState,
-    TerrainRegenPending, TerrainWorldRuntime, insert_terrain_material_attributes,
+    TerrainRegenPending, TerrainWorldRuntime, globalize_material_vertices,
+    insert_terrain_material_attributes,
 };
 use crate::ui::WorldTweaks;
 use crate::world::requested_world_id;
@@ -103,7 +104,7 @@ fn spawn_horizon_skirt_once(
     terrain_state: Res<TerrainProceduralMaterialState>,
     material_handle: Res<TerrainMaterialHandle>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<TerrainPbrMaterial>>,
+    _materials: ResMut<Assets<TerrainPbrMaterial>>,
 ) {
     // Procedural atmosphere renders the sky only where the depth buffer is still clear
     // (depth == 0). The opaque horizon skirt fills those pixels at low camera pitch and
@@ -187,11 +188,7 @@ fn spawn_horizon_skirt_once(
         origin_z,
         skirt_radius_chunks,
     );
-    let skirt_material = materials
-        .get(&material_handle.0)
-        .cloned()
-        .map(|template| materials.add(template.with_chunk_palette(palette.0)))
-        .unwrap_or_else(|| material_handle.0.clone());
+    let skirt_material = material_handle.0.clone();
 
     commands.spawn((
         HorizonSkirt,
@@ -207,15 +204,8 @@ fn spawn_horizon_skirt_once(
 fn refresh_horizon_skirt_material(
     handle: Res<TerrainMaterialHandle>,
     state: Res<TerrainProceduralMaterialState>,
-    mut materials: ResMut<Assets<TerrainPbrMaterial>>,
     mut last_fingerprint: Local<Option<[u8; 32]>>,
-    mut skirts: Query<
-        (
-            &mut MeshMaterial3d<TerrainPbrMaterial>,
-            &TerrainChunkPalette,
-        ),
-        With<HorizonSkirt>,
-    >,
+    mut skirts: Query<&mut MeshMaterial3d<TerrainPbrMaterial>, With<HorizonSkirt>>,
 ) {
     if !state.ready {
         *last_fingerprint = None;
@@ -225,13 +215,8 @@ fn refresh_horizon_skirt_material(
         return;
     }
     *last_fingerprint = Some(state.recipe_fingerprint);
-    let Some(template) = materials.get(&handle.0).cloned() else {
-        return;
-    };
-    for (mut mat_handle, palette) in &mut skirts {
-        let mut updated = template.with_chunk_palette(palette.0);
-        updated.settings.debug_mode = 0;
-        mat_handle.0 = materials.add(updated);
+    for mut mat_handle in &mut skirts {
+        mat_handle.0 = handle.0.clone();
     }
 }
 
@@ -310,6 +295,7 @@ fn build_skirt_mesh(
     }
 
     let palette = TerrainChunkPalette(resolver.chunk_palette());
+    globalize_material_vertices(&mut material_vertices, &palette.0);
     let mut mesh = Mesh::new(
         bevy::render::render_resource::PrimitiveTopology::TriangleList,
         bevy::asset::RenderAssetUsages::default(),

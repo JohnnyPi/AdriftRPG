@@ -84,7 +84,7 @@ impl MaterialRegionPalette {
     pub fn chunk_slot_palette(&self) -> ChunkSlotPalette {
         let mut remapper = crate::chunk_palette::ChunkSlotRemapper::new();
         for &global in &self.global_layers {
-            remapper.allocate_global(global);
+            remapper.allocate_global(global, 1.0);
         }
         remapper.finish()
     }

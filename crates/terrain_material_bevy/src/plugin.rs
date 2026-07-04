@@ -16,7 +16,7 @@ pub struct PendingTextureBake {
             procedural_textures::CpuTextureArrays,
             [u8; 32],
             Vec<TerrainMaterialRecipe>,
-            Option<Vec<String>>,
+            Vec<String>,
         )>,
     >,
 }
@@ -84,6 +84,23 @@ fn insert_fallback_material(
     state.ready = false;
 }
 
+fn resolve_bake_inputs(
+    yaml_path: &ProceduralMaterialYamlPath,
+    recipe_override: &ProceduralMaterialRecipeOverride,
+) -> Option<(Vec<TerrainMaterialRecipe>, Vec<String>)> {
+    if let Some(recipes) = recipe_override.recipes.clone() {
+        let layer_order = recipe_override
+            .layer_order
+            .clone()
+            .unwrap_or_else(|| recipes.iter().map(|recipe| recipe.id.clone()).collect());
+        return Some((recipes, layer_order));
+    }
+    yaml_path
+        .0
+        .as_ref()
+        .map(|path| recipes_for_world(Some(path)))
+}
+
 fn start_texture_bake(
     yaml_path: Res<ProceduralMaterialYamlPath>,
     recipe_override: Res<ProceduralMaterialRecipeOverride>,
@@ -94,31 +111,28 @@ fn start_texture_bake(
         return;
     }
 
-    let Some(recipes) = recipe_override.recipes.clone().or_else(|| {
-        yaml_path
-            .0
-            .as_ref()
-            .map(|path| recipes_for_world(Some(path)))
-    }) else {
+    let Some((recipes, layer_order)) = resolve_bake_inputs(&yaml_path, &recipe_override) else {
         return;
     };
-    let layer_order = recipe_override.layer_order.clone();
     let fingerprint = recipe_fingerprint_for(&recipes);
 
     if let Some(cached) = try_load_cache(fingerprint) {
-        pending.task = Some(
-            AsyncComputeTaskPool::get()
-                .spawn(async move { (cached, fingerprint, recipes, layer_order) }),
-        );
-        return;
+        if cached.layers as usize != layer_order.len() {
+            warn!(
+                "terrain material cache layer count {} != palette {} — rebaking",
+                cached.layers,
+                layer_order.len()
+            );
+        } else {
+            pending.task = Some(AsyncComputeTaskPool::get().spawn(async move {
+                (cached, fingerprint, recipes, layer_order)
+            }));
+            return;
+        }
     }
 
     pending.task = Some(AsyncComputeTaskPool::get().spawn(async move {
-        let arrays = if let Some(ref order) = layer_order {
-            crate::bake::bake_cpu_arrays_for_palette(order, &recipes)
-        } else {
-            bake_cpu_arrays(&recipes)
-        };
+        let arrays = bake_cpu_arrays(&layer_order, &recipes);
         write_cache(fingerprint, &arrays);
         (arrays, fingerprint, recipes, layer_order)
     }));
@@ -137,12 +151,15 @@ fn poll_texture_bake(
     if let Some((arrays, fingerprint, recipes, layer_order)) =
         bevy::tasks::block_on(bevy::tasks::futures_lite::future::poll_once(&mut task))
     {
+        let ordered = crate::bake::ordered_recipes_for_palette(&layer_order, &recipes);
+        if arrays.layers as usize != ordered.len() {
+            error!(
+                "baked texture array layer count {} != ordered palette {} — wrong textures may render",
+                arrays.layers,
+                ordered.len()
+            );
+        }
         let handles = crate::arrays::upload_texture_arrays(&arrays, &mut images);
-        let ordered = if let Some(ref order) = layer_order {
-            crate::bake::ordered_recipes_for_palette(order, &recipes)
-        } else {
-            recipes.clone()
-        };
         let material = build_material_from_arrays(&arrays, &ordered, &mut images, &mut materials);
         state.material = material;
         state.arrays = handles;

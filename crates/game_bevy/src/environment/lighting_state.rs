@@ -33,6 +33,10 @@ pub struct EnvironmentLightingState {
     pub environment_intensity_scale: f32,
     pub moon_enabled: bool,
     pub moon_illuminance: f32,
+    /// Phase offset into the lunar cycle (0..1) from authored atmosphere YAML.
+    pub moon_phase_offset: f32,
+    /// Scales peak sun lux relative to the elevation curve (`illuminance_lux / 100_000`).
+    pub sun_illuminance_lux_scale: f32,
     /// Last frame's sun-driven ambient (before cave dimming).
     pub effective_ambient_brightness: f32,
 }
@@ -42,7 +46,7 @@ impl Default for EnvironmentLightingState {
         Self {
             authored_sun_azimuth_deg: 132.0,
             authored_sun_elevation_deg: 48.0,
-            drive_sun_from_time_of_day: false,
+            drive_sun_from_time_of_day: true,
             override_sun_angles: false,
             override_sun_azimuth_deg: 145.0,
             override_sun_elevation_deg: 42.0,
@@ -56,6 +60,8 @@ impl Default for EnvironmentLightingState {
             environment_intensity_scale: 1.0,
             moon_enabled: false,
             moon_illuminance: 2.0,
+            moon_phase_offset: 0.0,
+            sun_illuminance_lux_scale: 1.0,
             effective_ambient_brightness: 0.0,
         }
     }
@@ -77,6 +83,9 @@ impl EnvironmentLightingState {
         self.environment_intensity_scale = atmo.environment_intensity_scale;
         self.moon_enabled = atmo.moon_enabled;
         self.moon_illuminance = atmo.moon_illuminance;
+        self.moon_phase_offset = atmo.moon_phase.clamp(0.0, 1.0);
+        self.sun_illuminance_lux_scale = (atmo.sun_illuminance_lux / 100_000.0).max(0.0);
+        self.drive_sun_from_time_of_day = true;
         self.current_exposure = crate::ui::exposure_ev_for_elevation(
             atmo.sun_elevation_deg,
             atmo.exposure_ev_min,
@@ -154,8 +163,11 @@ fn sync_environment_lighting(
     let cloud_transmission = sun_cloud_transmission(celestial.cloud_cover);
     let daylight =
         crate::ui::sun_illuminance_for_elevation(celestial.sun_elevation_deg) / 100_000.0;
-    let sun_illuminance =
-        lux::RAW_SUNLIGHT * daylight.clamp(0.0, 1.0) * cloud_transmission * SUN_PEAK_SCALE;
+    let sun_illuminance = lux::RAW_SUNLIGHT
+        * daylight.clamp(0.0, 1.0)
+        * cloud_transmission
+        * SUN_PEAK_SCALE
+        * state.sun_illuminance_lux_scale;
 
     for (entity, mut light, mut transform, volumetric) in &mut sun {
         light.illuminance = sun_illuminance;
@@ -229,6 +241,7 @@ fn sync_environment_lighting(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::sun_illuminance_for_elevation;
 
     #[test]
     fn cloud_cover_attenuates_sun_transmission() {
@@ -241,5 +254,15 @@ mod tests {
         let clear = environment_intensity_with_clouds(1.0, 0.0);
         let overcast = environment_intensity_with_clouds(1.0, 1.0);
         assert!(overcast < clear);
+    }
+
+    #[test]
+    fn sun_lux_scale_multiplies_peak_illuminance() {
+        let scale = 0.5;
+        let daylight = sun_illuminance_for_elevation(45.0) / 100_000.0;
+        let scaled = 100_000.0 * daylight * scale * crate::ui::SUN_PEAK_SCALE;
+        let full = 100_000.0 * daylight * crate::ui::SUN_PEAK_SCALE;
+        assert!(scaled < full);
+        assert!((scaled / full - scale).abs() < 1e-4);
     }
 }

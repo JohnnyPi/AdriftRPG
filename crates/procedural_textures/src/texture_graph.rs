@@ -1,19 +1,23 @@
 // crates/procedural_textures/src/texture_graph.rs
 //! Composable texture graph compiler and executor.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use blake3::Hasher;
 use serde::{Deserialize, Serialize};
 
 use crate::curves::{ColorStop, parse_hex_color, remap, sample_color_ramp, smoothstep};
 use crate::error::TextureGenerationError;
-use crate::maps::{GeneratedPbrMaps, encode_height_u8, linear_to_srgb_u8, pack_ormh};
+use crate::maps::{
+    GeneratedPbrMaps, encode_albedo_rgba8_dithered, encode_emissive_rgba8_dithered,
+    encode_height_u8_dithered, encode_scalar_u8_dithered, pack_ormh,
+};
 use crate::noise::SeamlessNoise;
 use crate::normal::normals_from_height_field;
 use crate::seam::{DEFAULT_SEAM_TOLERANCE, assert_seamless};
 
-pub const GENERATOR_VERSION: u32 = 1;
+pub const GENERATOR_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct TextureGraphDefinition {
@@ -198,7 +202,65 @@ fn validate_graph(graph: &TextureGraphDefinition) -> Result<(), TextureGeneratio
     for (name, node) in &graph.nodes {
         validate_node_refs(name, node, &graph.nodes)?;
     }
+    detect_cycles(graph)?;
     Ok(())
+}
+
+fn detect_cycles(graph: &TextureGraphDefinition) -> Result<(), TextureGenerationError> {
+    let mut visiting = BTreeSet::new();
+    let mut visited = BTreeSet::new();
+    for name in graph.nodes.keys() {
+        visit_node(name, graph, &mut visiting, &mut visited)?;
+    }
+    Ok(())
+}
+
+fn visit_node(
+    name: &str,
+    graph: &TextureGraphDefinition,
+    visiting: &mut BTreeSet<String>,
+    visited: &mut BTreeSet<String>,
+) -> Result<(), TextureGenerationError> {
+    if visited.contains(name) {
+        return Ok(());
+    }
+    if !visiting.insert(name.to_owned()) {
+        return Err(TextureGenerationError::InvalidConfig(format!(
+            "texture graph cycle detected at node `{name}`"
+        )));
+    }
+    if let Some(node) = graph.nodes.get(name) {
+        for dep in node_dependencies(node) {
+            visit_node(&dep, graph, visiting, visited)?;
+        }
+    }
+    visiting.remove(name);
+    visited.insert(name.to_owned());
+    Ok(())
+}
+
+fn node_dependencies(node: &GraphNodeDefinition) -> Vec<String> {
+    match node {
+        GraphNodeDefinition::Subtract { a, b }
+        | GraphNodeDefinition::Multiply { a, b }
+        | GraphNodeDefinition::Min { a, b }
+        | GraphNodeDefinition::Max { a, b } => vec![a.clone(), b.clone()],
+        GraphNodeDefinition::Clamp { input, .. }
+        | GraphNodeDefinition::Remap { input, .. }
+        | GraphNodeDefinition::SmoothStep { input, .. }
+        | GraphNodeDefinition::SlopeFilter { input, .. }
+        | GraphNodeDefinition::Invert { input }
+        | GraphNodeDefinition::Power { input, .. }
+        | GraphNodeDefinition::ColorRamp { input, .. }
+        | GraphNodeDefinition::Cavity { input, .. } => vec![input.clone()],
+        GraphNodeDefinition::DomainWarp {
+            input,
+            warp_source,
+            ..
+        } => vec![input.clone(), warp_source.clone()],
+        GraphNodeDefinition::Add { inputs } => inputs.iter().map(|i| i.source.clone()).collect(),
+        _ => Vec::new(),
+    }
 }
 
 fn validate_node_refs(
@@ -251,7 +313,7 @@ struct GraphExecutor {
     seed: u32,
     width: u32,
     height: u32,
-    scalar_cache: BTreeMap<String, Vec<f32>>,
+    scalar_cache: BTreeMap<String, Arc<[f32]>>,
     color_cache: BTreeMap<String, Vec<[f32; 3]>>,
 }
 
@@ -286,6 +348,7 @@ impl GraphExecutor {
         let mut roughness = vec![recipe.roughness; self.pixel_count()];
         let mut metallic = vec![recipe.metallic; self.pixel_count()];
         let mut ao = vec![1.0f32; self.pixel_count()];
+        let mut emissive = vec![0.0f32; self.pixel_count()];
 
         for (name, output) in &self.graph.outputs.clone() {
             match name.as_str() {
@@ -314,39 +377,29 @@ impl GraphExecutor {
                         ao = values;
                     }
                 }
+                "emissive" => {
+                    if let Some(values) = self.resolve_scalar_output(output)? {
+                        emissive = values;
+                    }
+                }
                 _ => {}
             }
         }
 
-        let albedo_rgba8: Vec<u8> = base_color
-            .iter()
-            .flat_map(|rgb| {
-                [
-                    linear_to_srgb_u8(rgb[0]),
-                    linear_to_srgb_u8(rgb[1]),
-                    linear_to_srgb_u8(rgb[2]),
-                    255,
-                ]
-            })
-            .collect();
+        // All channels are dithered on quantization so smooth procedural
+        // gradients don't band into 8-bit contour steps. The dither is
+        // sub-tolerance and periodic, so the maps stay seamless (see `maps`).
+        let albedo_rgba8 = encode_albedo_rgba8_dithered(&base_color, self.width);
 
         let normal_rgba8 =
             normals_from_height_field(self.width, self.height, &height, recipe.normal_strength);
 
-        let height_u8 = encode_height_u8(&height, 0.0, 1.0);
-        let roughness_u8: Vec<u8> = roughness
-            .iter()
-            .map(|r| (r.clamp(0.0, 1.0) * 255.0) as u8)
-            .collect();
-        let metallic_u8: Vec<u8> = metallic
-            .iter()
-            .map(|m| (m.clamp(0.0, 1.0) * 255.0) as u8)
-            .collect();
-        let ao_u8: Vec<u8> = ao
-            .iter()
-            .map(|a| (a.clamp(0.0, 1.0) * 255.0) as u8)
-            .collect();
+        let height_u8 = encode_height_u8_dithered(&height, 0.0, 1.0, self.width);
+        let roughness_u8 = encode_scalar_u8_dithered(&roughness, self.width);
+        let metallic_u8 = encode_scalar_u8_dithered(&metallic, self.width);
+        let ao_u8 = encode_scalar_u8_dithered(&ao, self.width);
         let ormh_rgba8 = pack_ormh(&ao_u8, &roughness_u8, &metallic_u8, &height_u8);
+        let emissive_rgba8 = encode_emissive_rgba8_dithered(&emissive, self.width);
 
         Ok(GeneratedPbrMaps {
             width: self.width,
@@ -354,7 +407,7 @@ impl GraphExecutor {
             albedo_rgba8,
             normal_rgba8,
             ormh_rgba8,
-            emissive_rgba8: None,
+            emissive_rgba8: Some(emissive_rgba8),
             mip_level_count: 1,
         })
     }
@@ -364,7 +417,9 @@ impl GraphExecutor {
         output: &GraphOutputDefinition,
     ) -> Result<Option<Vec<f32>>, TextureGenerationError> {
         match output {
-            GraphOutputDefinition::NodeRef(name) => Ok(Some(self.eval_scalar_node(name)?)),
+            GraphOutputDefinition::NodeRef(name) => {
+                Ok(Some(self.eval_scalar_node(name)?.to_vec()))
+            }
             GraphOutputDefinition::Typed { kind, source, .. } if kind == "normal_from_height" => {
                 let _ = self.eval_scalar_node(source)?;
                 Ok(None)
@@ -378,7 +433,9 @@ impl GraphExecutor {
                 let v = constant.unwrap_or(0.0);
                 Ok(Some(vec![v; self.pixel_count()]))
             }
-            GraphOutputDefinition::Typed { source, .. } => Ok(Some(self.eval_scalar_node(source)?)),
+            GraphOutputDefinition::Typed { source, .. } => {
+                Ok(Some(self.eval_scalar_node(source)?.to_vec()))
+            }
         }
     }
 
@@ -429,16 +486,18 @@ impl GraphExecutor {
         }
     }
 
-    fn eval_scalar_node(&mut self, name: &str) -> Result<Vec<f32>, TextureGenerationError> {
+    fn eval_scalar_node(&mut self, name: &str) -> Result<Arc<[f32]>, TextureGenerationError> {
         if let Some(cached) = self.scalar_cache.get(name) {
-            return Ok(cached.clone());
+            return Ok(Arc::clone(cached));
         }
         let node = self.graph.nodes.get(name).cloned().ok_or_else(|| {
             TextureGenerationError::InvalidConfig(format!("unknown graph node `{name}`"))
         })?;
         let values = self.eval_node(&node)?;
-        self.scalar_cache.insert(name.to_string(), values.clone());
-        Ok(values)
+        let cached = Arc::from(values.into_boxed_slice());
+        self.scalar_cache
+            .insert(name.to_string(), Arc::clone(&cached));
+        Ok(cached)
     }
 
     fn eval_node(
@@ -538,7 +597,10 @@ impl GraphExecutor {
                 edge1,
             } => {
                 let src = self.eval_scalar_node(input)?;
-                Ok(src.iter().map(|v| smoothstep(*edge0, *edge1, *v)).collect())
+                Ok(src
+                    .iter()
+                    .map(|v| smoothstep(*edge0, *edge1, *v))
+                    .collect())
             }
             GraphNodeDefinition::SlopeFilter {
                 input,
@@ -546,7 +608,7 @@ impl GraphExecutor {
                 upper,
             } => {
                 let src = self.eval_scalar_node(input)?;
-                Ok(src.iter().map(|v| smoothstep(*lower, *upper, *v)).collect())
+                Ok(slope_from_height(&src, self.width, self.height, *lower, *upper))
             }
             GraphNodeDefinition::Invert { input } => {
                 let src = self.eval_scalar_node(input)?;
@@ -556,19 +618,16 @@ impl GraphExecutor {
                 let src = self.eval_scalar_node(input)?;
                 Ok(src.iter().map(|v| v.powf(*exponent)).collect())
             }
-            GraphNodeDefinition::ColorRamp { input, .. } => self.eval_scalar_node(input),
+            GraphNodeDefinition::ColorRamp { input, .. } => {
+                Ok(self.eval_scalar_node(input)?.to_vec())
+            }
             GraphNodeDefinition::DomainWarp {
                 input,
                 warp_source,
                 strength,
             } => {
-                let base = self.eval_scalar_node(input)?;
                 let warp = self.eval_scalar_node(warp_source)?;
-                Ok(base
-                    .iter()
-                    .zip(warp.iter())
-                    .map(|(b, w)| (b + (w - 0.5) * strength).clamp(0.0, 1.0))
-                    .collect())
+                sample_domain_warped(self, input, &warp, *strength)
             }
             GraphNodeDefinition::Cavity { input, radius } => {
                 let src = self.eval_scalar_node(input)?;
@@ -666,7 +725,7 @@ fn sample_voronoi(width: u32, height: u32, frequency: f32, jitter: f32, seed: u3
                 for dx in -1..=1 {
                     let cx = u.floor() as i32 + dx;
                     let cy = v.floor() as i32 + dy;
-                    let hash = hash_cell(cx, cy, seed);
+                    let hash = hash_cell(cx, cy, seed, cells);
                     let px = cx as f32 + hash.0 * jitter + 0.5 * (1.0 - jitter);
                     let py = cy as f32 + hash.1 * jitter + 0.5 * (1.0 - jitter);
                     let dist = ((u - px).powi(2) + (v - py).powi(2)).sqrt();
@@ -680,16 +739,117 @@ fn sample_voronoi(width: u32, height: u32, frequency: f32, jitter: f32, seed: u3
     out
 }
 
-fn hash_cell(x: i32, y: i32, seed: u32) -> (f32, f32) {
+fn hash_cell(x: i32, y: i32, seed: u32, cells: i32) -> (f32, f32) {
+    let cx = x.rem_euclid(cells.max(1)) as u32;
+    let cy = y.rem_euclid(cells.max(1)) as u32;
     let mut h = seed
         .wrapping_mul(374761393)
-        .wrapping_add(x as u32)
+        .wrapping_add(cx)
         .wrapping_mul(668265263)
-        .wrapping_add(y as u32);
+        .wrapping_add(cy);
     h = (h ^ (h >> 13)).wrapping_mul(1274126177);
     let hx = (h & 0xFFFF) as f32 / 65535.0;
     let hy = ((h >> 16) & 0xFFFF) as f32 / 65535.0;
     (hx, hy)
+}
+
+fn slope_from_height(
+    height: &[f32],
+    width: u32,
+    height_px: u32,
+    lower: f32,
+    upper: f32,
+) -> Vec<f32> {
+    let w = width as usize;
+    let h = height_px as usize;
+    let mut out = vec![0.0f32; height.len()];
+    for y in 0..h {
+        for x in 0..w {
+            let idx = y * w + x;
+            let left = height[y * w + x.saturating_sub(1)];
+            let right = height[y * w + (x + 1).min(w - 1)];
+            let up = height[y.saturating_sub(1) * w + x];
+            let down = height[(y + 1).min(h - 1) * w + x];
+            let slope = ((right - left).abs() + (down - up).abs()) * 0.5;
+            out[idx] = smoothstep(lower, upper, slope);
+        }
+    }
+    out
+}
+
+/// Toroidal bilinear sample of a tileable scalar field at normalized coords.
+///
+/// Coordinates wrap on both axes, so warped lookups near the texture edge stay
+/// seamless. Samples sit at integer texel positions; the field is smooth enough
+/// that the half-texel bias is immaterial.
+fn sample_bilinear_toroidal(field: &[f32], width: u32, height: u32, u: f32, v: f32) -> f32 {
+    let w = width as usize;
+    let h = height as usize;
+    if w == 0 || h == 0 {
+        return 0.0;
+    }
+    let fx = u.rem_euclid(1.0) * width as f32;
+    let fy = v.rem_euclid(1.0) * height as f32;
+    let x0 = (fx.floor() as usize) % w;
+    let y0 = (fy.floor() as usize) % h;
+    let x1 = (x0 + 1) % w;
+    let y1 = (y0 + 1) % h;
+    let tx = fx - fx.floor();
+    let ty = fy - fy.floor();
+
+    let s00 = field[y0 * w + x0];
+    let s10 = field[y0 * w + x1];
+    let s01 = field[y1 * w + x0];
+    let s11 = field[y1 * w + x1];
+    let top = s00 + (s10 - s00) * tx;
+    let bottom = s01 + (s11 - s01) * tx;
+    top + (bottom - top) * ty
+}
+
+/// Domain warp: resample the input field at coordinates displaced by the warp
+/// field.
+///
+/// This evaluates the input node's field **once** (O(N), and cached) and then
+/// looks it up at warped coordinates via seamless bilinear sampling. It works
+/// for any input node — not just raw noise — and replaces the previous version
+/// that recomputed the entire input field per pixel (O(N²)) while discarding
+/// the warped coordinates entirely. The two warp components are decorrelated by
+/// reading the warp field at the pixel and at a toroidal half-shift, instead of
+/// the old adjacent-pixel read that made the displacement near-diagonal.
+fn sample_domain_warped(
+    executor: &mut GraphExecutor,
+    input: &str,
+    warp: &[f32],
+    strength: f32,
+) -> Result<Vec<f32>, TextureGenerationError> {
+    let width = executor.width;
+    let height = executor.height;
+    let count = executor.pixel_count();
+    let src = executor.eval_scalar_node(input)?;
+
+    if warp.len() != count || src.len() != count {
+        return Err(TextureGenerationError::InvalidConfig(
+            "domain warp field size mismatch".to_owned(),
+        ));
+    }
+
+    let w = width as usize;
+    let h = height as usize;
+    let mut out = vec![0.0f32; count];
+    for y in 0..h {
+        for x in 0..w {
+            let idx = y * w + x;
+            let u = x as f32 / width as f32;
+            let v = y as f32 / height as f32;
+            // Second warp component comes from a half-texture toroidal shift so
+            // horizontal and vertical displacement aren't the same field value.
+            let shifted = ((y + h / 2) % h) * w + ((x + w / 2) % w);
+            let wu = u + (warp[idx] - 0.5) * strength * 0.15;
+            let wv = v + (warp[shifted] - 0.5) * strength * 0.15;
+            out[idx] = sample_bilinear_toroidal(&src, width, height, wu, wv);
+        }
+    }
+    Ok(out)
 }
 
 fn apply_cavity(src: &[f32], width: u32, height: u32, radius: u32) -> Vec<f32> {

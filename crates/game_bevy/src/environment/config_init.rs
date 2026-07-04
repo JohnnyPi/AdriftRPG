@@ -2,6 +2,7 @@
 //! Bootstrap atmosphere, fog, and sky from compiled YAML (VS2 §18).
 
 use bevy::prelude::*;
+use tracing::warn;
 
 use crate::data::{ConfigRegistryResource, UserSetupPrefs};
 use crate::state::AppState;
@@ -59,6 +60,11 @@ fn init_presentation_from_registry(
     if let Some(atmo) = registry.0.active_atmosphere() {
         lighting_state.apply_authored_atmosphere(atmo);
         celestial.apply_authored_atmosphere(atmo);
+        log_atmosphere_presentation_warnings(atmo);
+    }
+
+    if let Some(sky) = registry.0.active_sky() {
+        log_sky_presentation_warnings(sky);
     }
 
     if let Some(fog) = registry.0.active_fog() {
@@ -167,4 +173,40 @@ pub fn sea_level_for_prefs(registry: &ConfigRegistryResource, prefs: &UserSetupP
         .ok()
         .and_then(|world| registry.0.water.get(&world.water).map(|w| w.sea_level_m))
         .unwrap_or(0.0)
+}
+
+fn log_atmosphere_presentation_warnings(atmo: &game_data::CompiledAtmosphere) {
+    let (expected_az, expected_el) = super::celestial::moon_angles_from_sun(
+        atmo.sun_azimuth_deg,
+        atmo.sun_elevation_deg,
+    );
+    if (atmo.moon_azimuth_deg - expected_az).abs() > 1.0
+        || (atmo.moon_elevation_deg - expected_el).abs() > 1.0
+    {
+        warn!(
+            target: "sky_lighting",
+            moon_azimuth_deg = atmo.moon_azimuth_deg,
+            moon_elevation_deg = atmo.moon_elevation_deg,
+            expected_azimuth_deg = expected_az,
+            expected_elevation_deg = expected_el,
+            "atmosphere.yaml moon azimuth/elevation differ from runtime opposite-sun tracking and are ignored"
+        );
+    }
+}
+
+fn log_sky_presentation_warnings(sky: &game_data::CompiledSky) {
+    if sky.mie_strength > 0.0 {
+        warn!(
+            target: "sky_lighting",
+            mie_strength = sky.mie_strength,
+            "sky.yaml mie_strength is stored for fog/cloud tinting only; Bevy ScatteringMedium::earth is fixed"
+        );
+    }
+    if sky.sun_disc_radius > 0.0 {
+        warn!(
+            target: "sky_lighting",
+            sun_disc_radius = sky.sun_disc_radius,
+            "sky.yaml sun_disc_radius is not wired to the active Bevy atmosphere renderer"
+        );
+    }
 }

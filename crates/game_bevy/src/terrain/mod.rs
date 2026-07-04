@@ -14,7 +14,7 @@ pub use features::{
     CameraWaterState, TerrainFeaturePlugin, TerrainFeatureRegistry, effective_runtime_sea_level_m,
 };
 pub use material::{TerrainMaterialHandle, TerrainMaterialPlugin, queue_compiled_palette_reload};
-pub use mesh_convert::insert_terrain_material_attributes;
+pub use mesh_convert::{globalize_material_vertices, insert_terrain_material_attributes};
 pub use metrics::{TerrainPipelineMetrics, WorldSeedOverride};
 pub use recipe::{build_density_source, build_density_source_from_prefs};
 pub use terrain_generation::compile_terrain_recipe;

@@ -8,7 +8,7 @@ use bevy::shader::ShaderRef;
 
 use super::celestial::CelestialState;
 use super::config_init::EnvironmentInitSet;
-use super::sky_config::SkyPresentationConfig;
+use super::sky_config::{SkyEffectsRevision, SkyPresentationConfig};
 use crate::camera::MainGameCamera;
 use crate::state::AppState;
 
@@ -39,18 +39,27 @@ impl Material for StarMaterial {
 #[derive(Component)]
 struct StarfieldDome;
 
+#[derive(Resource, Default)]
+struct StarfieldSpawned(bool);
+
 pub struct StarfieldPlugin;
 
 impl Plugin for StarfieldPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(MaterialPlugin::<StarMaterial>::default())
+            .init_resource::<StarfieldSpawned>()
             .add_systems(
                 OnEnter(AppState::Running),
-                spawn_starfield.in_set(EnvironmentInitSet),
+                spawn_starfield.after(EnvironmentInitSet),
             )
             .add_systems(
                 Update,
-                (follow_starfield_camera, update_starfield_params)
+                (
+                    sync_starfield_on_revision,
+                    follow_starfield_camera,
+                    update_starfield_params,
+                )
+                    .chain()
                     .run_if(in_state(AppState::Running)),
             );
     }
@@ -61,7 +70,14 @@ fn spawn_starfield(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StarMaterial>>,
     sky: Res<SkyPresentationConfig>,
+    mut spawned: ResMut<StarfieldSpawned>,
+    existing: Query<Entity, With<StarfieldDome>>,
 ) {
+    for entity in existing.iter() {
+        commands.entity(entity).despawn();
+    }
+    spawned.0 = false;
+
     if !sky.stars_enabled {
         return;
     }
@@ -84,6 +100,28 @@ fn spawn_starfield(
         Transform::IDENTITY,
         Visibility::default(),
     ));
+    spawned.0 = true;
+}
+
+fn sync_starfield_on_revision(
+    revision: Res<SkyEffectsRevision>,
+    mut last: Local<Option<u32>>,
+    commands: Commands,
+    meshes: ResMut<Assets<Mesh>>,
+    materials: ResMut<Assets<StarMaterial>>,
+    sky: Res<SkyPresentationConfig>,
+    spawned: ResMut<StarfieldSpawned>,
+    existing: Query<Entity, With<StarfieldDome>>,
+) {
+    if last.is_none() {
+        *last = Some(revision.0);
+        return;
+    }
+    if *last == Some(revision.0) {
+        return;
+    }
+    *last = Some(revision.0);
+    spawn_starfield(commands, meshes, materials, sky, spawned, existing);
 }
 
 fn follow_starfield_camera(

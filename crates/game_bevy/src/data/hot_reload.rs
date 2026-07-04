@@ -22,8 +22,7 @@ impl Plugin for VisualConfigHotReloadPlugin {
             Update,
             (
                 reload_biome_catalog,
-                reload_terrain_material,
-                reload_procedural_terrain_material,
+                reload_terrain_materials,
                 reload_water_material,
             )
                 .run_if(in_state(AppState::Running)),
@@ -46,52 +45,41 @@ fn reload_biome_catalog(
     commands.insert_resource(BiomeCatalog::from_registry(&registry.0, Some(&world_id)));
 }
 
-fn reload_terrain_material(
+fn reload_terrain_materials(
     registry: Res<ConfigRegistryResource>,
     prefs: Res<UserSetupPrefs>,
     mut last_hash: Local<Option<String>>,
     mut override_recipes: ResMut<ProceduralMaterialRecipeOverride>,
     mut pending: ResMut<PendingTextureBake>,
     mut proc_state: ResMut<TerrainProceduralMaterialState>,
+    yaml_path: Option<Res<ProceduralMaterialYamlPath>>,
 ) {
     let hash = registry.0.hash.clone();
     if last_hash.as_ref() == Some(&hash) {
         return;
     }
     *last_hash = Some(hash);
+
     let world_id = crate::world::requested_world_id(&prefs);
-    let _ = queue_compiled_palette_reload(
+    if !queue_compiled_palette_reload(
         &registry.0,
         &world_id,
         &mut override_recipes,
         &mut pending,
         &mut proc_state,
-    );
-}
-
-fn reload_procedural_terrain_material(
-    registry: Res<ConfigRegistryResource>,
-    mut last_hash: Local<Option<String>>,
-    recipe_override: Option<Res<ProceduralMaterialRecipeOverride>>,
-    yaml_path: Option<Res<ProceduralMaterialYamlPath>>,
-    mut proc_state: ResMut<TerrainProceduralMaterialState>,
-    mut pending: ResMut<PendingTextureBake>,
-) {
-    let hash = registry.0.hash.clone();
-    if last_hash.as_ref() == Some(&hash) {
-        return;
+    ) {
+        warn!("terrain material hot reload: compiled palette reload failed");
     }
-    *last_hash = Some(hash);
+
     proc_state.ready = false;
     pending.task = None;
-    if let Some(override_recipes) = recipe_override
-        .as_ref()
-        .and_then(|override_recipes| override_recipes.recipes.as_ref())
-    {
+
+    if let Some(recipes) = override_recipes.recipes.as_ref() {
         proc_state.recipe_fingerprint =
-            terrain_material_bevy::recipe_fingerprint_for(override_recipes);
+            terrain_material_bevy::recipe_fingerprint_for(recipes);
         return;
     }
+
     let Some(yaml_path) = yaml_path else {
         return;
     };
@@ -99,10 +87,15 @@ fn reload_procedural_terrain_material(
         return;
     };
     let Ok(text) = std::fs::read_to_string(path) else {
+        warn!("terrain material hot reload: failed to read {}", path.display());
         return;
     };
     let text = procedural_textures::strip_utf8_bom(&text);
     let Ok(doc) = serde_yaml::from_str::<ProceduralMaterialsDocument>(text) else {
+        warn!(
+            "terrain material hot reload: failed to parse YAML at {}",
+            path.display()
+        );
         return;
     };
     proc_state.recipe_fingerprint = procedural_textures::document_fingerprint(&doc);

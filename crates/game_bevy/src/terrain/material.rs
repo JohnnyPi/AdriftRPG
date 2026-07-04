@@ -19,7 +19,7 @@ use crate::data::UserSetupPrefs;
 use crate::lod::{LodPolicy, render_lod_tier_for_distance};
 use crate::state::AppState;
 use crate::terrain::TerrainWorldRuntime;
-use crate::terrain::{TerrainChunkEntity, TerrainChunkPalette};
+use crate::terrain::TerrainChunkEntity;
 use crate::ui::TerrainMaterialTweaks;
 use crate::world::requested_world_id;
 
@@ -75,6 +75,7 @@ impl Plugin for TerrainMaterialPlugin {
                 sync_world_terrain_material_recipes,
                 sync_terrain_material_handle,
                 sync_render_distance_lod,
+                sync_catalog_material_defaults,
                 sync_terrain_material_tweaks,
                 refresh_chunk_terrain_materials,
             )
@@ -87,39 +88,19 @@ impl Plugin for TerrainMaterialPlugin {
 fn refresh_chunk_terrain_materials(
     handle: Res<TerrainMaterialHandle>,
     state: Res<TerrainProceduralMaterialState>,
-    mut materials: ResMut<Assets<TerrainPbrMaterial>>,
     mut last_fingerprint: Local<Option<[u8; 32]>>,
-    mut last_chunk_count: Local<usize>,
-    chunks: Query<
-        (&MeshMaterial3d<TerrainPbrMaterial>, &TerrainChunkPalette),
-        With<TerrainChunkEntity>,
-    >,
+    mut chunks: Query<&mut MeshMaterial3d<TerrainPbrMaterial>, With<TerrainChunkEntity>>,
 ) {
     if !state.ready {
         *last_fingerprint = None;
-        *last_chunk_count = 0;
         return;
     }
-
-    let chunk_count = chunks.iter().count();
-    let fingerprint_changed = last_fingerprint.as_ref() != Some(&state.recipe_fingerprint);
-    let new_chunks = chunk_count > *last_chunk_count;
-    if !fingerprint_changed && !new_chunks {
+    if last_fingerprint.as_ref() == Some(&state.recipe_fingerprint) {
         return;
     }
     *last_fingerprint = Some(state.recipe_fingerprint);
-    *last_chunk_count = chunk_count;
-
-    let Some(template) = materials.get(&handle.0).cloned() else {
-        return;
-    };
-
-    for (mat_handle, palette) in &chunks {
-        if let Some(mut mat) = materials.get_mut(&mat_handle.0) {
-            let mut updated = template.with_chunk_palette(palette.0);
-            updated.settings.debug_mode = 0;
-            *mat = updated;
-        }
+    for mut mat in &mut chunks {
+        mat.0 = handle.0.clone();
     }
 }
 
@@ -162,6 +143,43 @@ fn sync_render_distance_lod(
         2 => 6.0,
         _ => 4.0,
     };
+}
+
+fn sync_catalog_material_defaults(
+    registry: Res<ConfigRegistryResource>,
+    prefs: Res<UserSetupPrefs>,
+    handle: Res<TerrainMaterialHandle>,
+    state: Res<TerrainProceduralMaterialState>,
+    mut materials: ResMut<Assets<TerrainPbrMaterial>>,
+    mut last_hash: Local<Option<String>>,
+) {
+    if !state.ready {
+        return;
+    }
+    let hash = registry.0.hash.clone();
+    if last_hash.as_ref() == Some(&hash) {
+        return;
+    }
+    *last_hash = Some(hash);
+    let Ok(world) = registry.0.effective_world(Some(&requested_world_id(&prefs))) else {
+        return;
+    };
+    let Some(render_profile) = registry
+        .0
+        .render_profiles
+        .get(&world.lod.materials.render_profile)
+    else {
+        return;
+    };
+    let Some(mut material) = materials.get_mut(&handle.0) else {
+        return;
+    };
+    if render_profile.macro_variation {
+        material.settings.macro_variation_scale = 42.0;
+        material.settings.macro_variation_strength = 0.10;
+    } else {
+        material.settings.macro_variation_strength = 0.0;
+    }
 }
 
 fn sync_terrain_material_tweaks(

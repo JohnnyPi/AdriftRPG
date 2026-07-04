@@ -155,14 +155,41 @@ fn sample_triplanar_normal(
     return normalize(nx * blend.x + ny * blend.y + nz * blend.z);
 }
 
+// sin()-based hashes sparkle on some GPUs; use a polynomial hash instead.
 fn hash21(p: vec2<f32>) -> f32 {
-    return fract(sin(dot(p, vec2<f32>(127.1, 311.7))) * 43758.5453);
+    var p3 = fract(vec3<f32>(p.x, p.y, p.x) * 0.1031);
+    p3 += dot(p3, p3.yzx + vec3<f32>(33.33));
+    return fract((p3.x + p3.x) * p3.y);
+}
+
+// Smooth (C1) value noise. The previous macro variation floored to integer
+// cells and returned a per-cell constant, which painted the terrain with
+// hard-edged square tint tiles — the "static banding" seen on the surface.
+// Interpolating the four corner hashes with a quintic fade removes those hard
+// edges so the macro tint varies gradually.
+fn value_noise(p: vec2<f32>) -> f32 {
+    let cell = floor(p);
+    let f = fract(p);
+    // Quintic smootherstep fade (zero 1st and 2nd derivative at cell edges).
+    let u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+    let a = hash21(cell);
+    let b = hash21(cell + vec2<f32>(1.0, 0.0));
+    let c = hash21(cell + vec2<f32>(0.0, 1.0));
+    let d = hash21(cell + vec2<f32>(1.0, 1.0));
+    let top = mix(a, b, u.x);
+    let bottom = mix(c, d, u.x);
+    return mix(top, bottom, u.y);
 }
 
 fn macro_noise(world_xz: vec2<f32>) -> f32 {
     let scale = max(settings.macro_variation_scale, 1.0);
     let p = world_xz / scale;
-    return hash21(floor(p)) * 0.6 + hash21(floor(p + vec2<f32>(17.0, 31.0))) * 0.4;
+    // Two smooth octaves preserve the original two-frequency character while
+    // staying continuous. Output stays in [0, 1) so the downstream
+    // `(macro_n - 0.5)` centering is unchanged.
+    let n0 = value_noise(p);
+    let n1 = value_noise(p * 2.17 + vec2<f32>(17.0, 31.0));
+    return n0 * 0.65 + n1 * 0.35;
 }
 
 fn strongest_four_weights(w: vec4<f32>) -> vec4<f32> {
@@ -191,31 +218,34 @@ fn strongest_four_weights(w: vec4<f32>) -> vec4<f32> {
 }
 
 fn global_layer_for_local(local: u32) -> u32 {
-    if local >= 8u {
-        return 0u;
-    }
-    let chunk = local / 4u;
-    let component = local % 4u;
-    let row = chunk_slots.local_to_global[chunk];
-    var mapped: u32;
-    if component == 0u {
-        mapped = row.x;
-    } else if component == 1u {
-        mapped = row.y;
-    } else if component == 2u {
-        mapped = row.z;
-    } else {
-        mapped = row.w;
-    }
-    if mapped >= 4294967295u {
-        return 0u;
-    }
-    return mapped;
+    // Vertex UV channels carry pre-globalized layer indices (see mesh_convert.rs).
+    return local;
+}
+
+// Layer indices live in uv/uv_b and must not be interpolated across triangles —
+// smooth interpolation between different layer IDs caused random layer lookups
+// (visible as texture static). Blend weights in @color are still smooth.
+struct TerrainVertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) world_position: vec4<f32>,
+    @location(1) world_normal: vec3<f32>,
+#ifdef VERTEX_UVS_A
+    @location(2) @interpolate(flat) uv: vec2<f32>,
+#endif
+#ifdef VERTEX_UVS_B
+    @location(3) @interpolate(flat) uv_b: vec2<f32>,
+#endif
+#ifdef VERTEX_TANGENTS
+    @location(4) world_tangent: vec4<f32>,
+#endif
+#ifdef VERTEX_COLORS
+    @location(5) color: vec4<f32>,
+#endif
 }
 
 @vertex
-fn vertex(vertex: Vertex) -> VertexOutput {
-    var out: VertexOutput;
+fn vertex(vertex: Vertex) -> TerrainVertexOutput {
+    var out: TerrainVertexOutput;
     let world_from_local = mesh_functions::get_world_from_local(vertex.instance_index);
     let world_position =
         mesh_functions::mesh_position_local_to_world(world_from_local, vec4<f32>(vertex.position, 1.0));
@@ -243,7 +273,7 @@ fn vertex(vertex: Vertex) -> VertexOutput {
 }
 
 @fragment
-fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
+fn fragment(in: TerrainVertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
     let world_pos = in.world_position.xyz;
     let world_normal = normalize(in.world_normal);
 
@@ -281,10 +311,10 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     var detail_normal = vec3<f32>(0.0, 0.0, 0.0);
 
     var local_indices = array<u32, 4>(
-        u32(idx01.x),
-        u32(idx01.y),
-        u32(idx23.x),
-        u32(idx23.y),
+        u32(round(idx01.x)),
+        u32(round(idx01.y)),
+        u32(round(idx23.x)),
+        u32(round(idx23.y)),
     );
     var blend_weights = strongest_four_weights(weights);
 
@@ -394,7 +424,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     pbr_input.world_position = in.world_position;
     let normal_mix = clamp(settings.normal_strength * 0.75, 0.0, 1.0);
     let shading_normal = normalize(mix(world_normal, detail_normal, normal_mix));
-    let prepared_normal = prepare_world_normal(shading_normal, false, is_front);
+    let prepared_normal = prepare_world_normal(shading_normal, true, is_front);
     pbr_input.world_normal = prepared_normal;
     pbr_input.N = normalize(prepared_normal);
     pbr_input.material.base_color = vec4<f32>(albedo, 1.0);

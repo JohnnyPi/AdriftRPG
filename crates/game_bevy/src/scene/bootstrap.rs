@@ -74,9 +74,11 @@ fn spawn_bootstrap_scene(
                 illuminance: lux::RAW_SUNLIGHT,
                 color: Color::srgb(sun_color[0], sun_color[1], sun_color[2]),
                 shadow_maps_enabled: lighting.sun_shadows_enabled && performance.shadows_enabled,
+                shadow_depth_bias: performance.shadow_depth_bias,
+                shadow_normal_bias: performance.shadow_normal_bias,
                 ..default()
             },
-            cascade_shadow_config(&performance.shadow_quality),
+            cascade_shadow_config(performance),
             Transform::from_rotation(Quat::from_rotation_arc(-Vec3::Z, sun_dir)),
         ))
         .id();
@@ -106,7 +108,6 @@ fn spawn_bootstrap_scene(
         &mut materials,
         player,
         camera,
-        lighting,
         spawn_point.0,
     );
 
@@ -118,26 +119,22 @@ fn spawn_bootstrap_scene(
     );
 }
 
-fn cascade_shadow_config(quality: &str) -> CascadeShadowConfig {
-    let builder = match quality.to_ascii_lowercase().as_str() {
-        "low" => CascadeShadowConfigBuilder {
-            num_cascades: 2,
-            minimum_distance: 0.5,
-            maximum_distance: 80.0,
-            ..default()
-        },
-        "medium" => CascadeShadowConfigBuilder {
-            num_cascades: 3,
-            minimum_distance: 0.5,
-            maximum_distance: 120.0,
-            ..default()
-        },
-        _ => CascadeShadowConfigBuilder {
-            num_cascades: 4,
-            minimum_distance: 0.5,
-            maximum_distance: 180.0,
-            ..default()
-        },
+fn cascade_shadow_config(performance: &game_data::CompiledPerformance) -> CascadeShadowConfig {
+    let (num_cascades, default_max_distance) = match performance.shadow_quality.to_ascii_lowercase().as_str() {
+        "low" => (2, 80.0),
+        "medium" => (3, 120.0),
+        _ => (4, 180.0),
     };
-    builder.into()
+    let maximum_distance = if performance.shadow_maximum_distance_m > 0.0 {
+        performance.shadow_maximum_distance_m
+    } else {
+        default_max_distance
+    };
+    CascadeShadowConfigBuilder {
+        num_cascades,
+        minimum_distance: 0.5,
+        maximum_distance,
+        ..default()
+    }
+    .into()
 }

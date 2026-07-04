@@ -80,7 +80,7 @@ impl GroundGenerator {
                     u * self.config.micro_scale,
                     v * self.config.micro_scale,
                     self.config.micro_octaves,
-                    2.2,
+                    2.0,
                     0.45,
                 );
                 let height_val =

@@ -254,14 +254,66 @@ impl Default for RiverTweaks {
     }
 }
 
-/// Map clock hours (0–24) to sun azimuth/elevation for lighting tests.
+/// Map clock hours (0–24) to sun azimuth/elevation using latitude-aware splined keyframes.
 pub fn sun_angles_from_time_of_day(hours: f32) -> (f32, f32) {
-    use std::f32::consts::TAU;
+    sun_angles_from_time_and_latitude(hours, DEFAULT_LATITUDE_DEG)
+}
+
+/// Default observer latitude for the tropical island setting (degrees north).
+pub const DEFAULT_LATITUDE_DEG: f32 = 18.0;
+
+/// Synodic lunar month length in in-game days.
+pub const LUNAR_CYCLE_DAYS: f32 = 29.53;
+
+/// Moon phase in 0..1 where 0=new, 0.5=full, 1=new again.
+pub fn moon_phase_from_simulation_days(days: f32, phase_offset: f32) -> f32 {
+    let cycle = (days + phase_offset * LUNAR_CYCLE_DAYS).rem_euclid(LUNAR_CYCLE_DAYS);
+    let angle = cycle / LUNAR_CYCLE_DAYS * std::f32::consts::TAU;
+    (1.0 - angle.cos()) * 0.5
+}
+
+/// Splined sun path for a given latitude (degrees north).
+pub fn sun_angles_from_time_and_latitude(hours: f32, latitude_deg: f32) -> (f32, f32) {
     let hour = hours.rem_euclid(24.0);
-    let phase = (hour - 6.0) / 24.0 * TAU;
-    let elevation = phase.sin() * 62.0;
-    let azimuth = 55.0 + hour * 15.0;
+
+    // Keyframes: (hour, azimuth_deg, elevation_deg) tuned for a mid-latitude tropical arc.
+    let keyframes: &[(f32, f32, f32)] = &[
+        (0.0, 12.0, -18.0),
+        (5.0, 68.0, -6.0),
+        (6.5, 82.0, 2.0),
+        (8.0, 105.0, 22.0),
+        (12.0, 145.0, 62.0),
+        (16.0, 195.0, 28.0),
+        (18.5, 248.0, 2.0),
+        (20.0, 272.0, -6.0),
+        (24.0, 12.0, -18.0),
+    ];
+
+    let mut segment = 0usize;
+    for i in 0..keyframes.len() - 1 {
+        if hour >= keyframes[i].0 && hour <= keyframes[i + 1].0 {
+            segment = i;
+            break;
+        }
+    }
+    let (h0, az0, el0) = keyframes[segment];
+    let (h1, az1, el1) = keyframes[segment + 1];
+    let span = (h1 - h0).max(1e-3);
+    let t = ((hour - h0) / span).clamp(0.0, 1.0);
+    let t = t * t * (3.0 - 2.0 * t);
+
+    let azimuth = lerp_angle_deg(az0, az1, t);
+    let mut elevation = el0 + (el1 - el0) * t;
+    elevation += latitude_deg.clamp(-60.0, 60.0) * 0.08;
     (azimuth.rem_euclid(360.0), elevation)
+}
+
+fn lerp_angle_deg(from: f32, to: f32, t: f32) -> f32 {
+    let mut delta = (to - from).rem_euclid(360.0);
+    if delta > 180.0 {
+        delta -= 360.0;
+    }
+    from + delta * t
 }
 
 /// Directional lux from sun elevation (matches perceived day/night).

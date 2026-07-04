@@ -10,6 +10,8 @@ use terrain_generation::water_body::{
 
 use crate::data::ConfigRegistryResource;
 use crate::data::UserSetupPrefs;
+use crate::environment::celestial::CelestialState;
+use crate::environment::lighting_state::SyncEnvironmentLightingSet;
 use crate::state::AppState;
 use crate::terrain::{
     TerrainFeatureRegistry, TerrainPipelineState, TerrainWorldInitSet, TerrainWorldRuntime,
@@ -25,10 +27,20 @@ pub struct WaterParams {
     pub animation: Vec4,
 }
 
+#[derive(ShaderType, Clone, Copy, Debug, Default)]
+pub struct WaterLightingParams {
+    /// Sun direction (xyz) for glint; w unused.
+    pub sun_dir: Vec4,
+    /// Sky reflection tint (rgb); w unused.
+    pub sky_tint: Vec4,
+}
+
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
 pub struct WaterMaterial {
     #[uniform(0)]
     pub params: WaterParams,
+    #[uniform(1)]
+    pub lighting: WaterLightingParams,
 }
 
 impl Material for WaterMaterial {
@@ -124,6 +136,7 @@ impl Plugin for WaterPlugin {
                 Update,
                 (
                     animate_water,
+                    sync_water_lighting.after(SyncEnvironmentLightingSet),
                     sync_ocean_tiles,
                     sync_ocean_plane_with_profile,
                     sync_inland_lakes_on_hydrology_change,
@@ -562,7 +575,23 @@ fn make_water_material(
             wave: Vec4::new(elevation, wave_speed, wave_amplitude * 0.6, transparency),
             animation: Vec4::new(0.0, layout.foam_strength, layout.wave_count as f32, 0.0),
         },
+        lighting: WaterLightingParams::default(),
     })
+}
+
+fn sync_water_lighting(
+    celestial: Res<CelestialState>,
+    mut materials: ResMut<Assets<WaterMaterial>>,
+) {
+    let sun = celestial.sun_direction;
+    let sky = celestial.fog_inscattering;
+    let lighting = WaterLightingParams {
+        sun_dir: Vec4::new(sun.x, sun.y, sun.z, 0.0),
+        sky_tint: Vec4::new(sky[0], sky[1], sky[2], 0.0),
+    };
+    for (_, mat) in materials.iter_mut() {
+        mat.lighting = lighting;
+    }
 }
 
 fn build_river_ribbon_mesh(river: &terrain_generation::RiverSpline) -> Option<Mesh> {

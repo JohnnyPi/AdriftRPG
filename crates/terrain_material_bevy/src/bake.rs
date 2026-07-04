@@ -40,20 +40,50 @@ impl Default for TerrainProceduralMaterialState {
     }
 }
 
-pub fn load_recipes_from_yaml(path: &PathBuf) -> Option<Vec<TerrainMaterialRecipe>> {
-    let text = std::fs::read_to_string(path).ok()?;
+pub fn load_recipes_from_yaml(path: &PathBuf) -> Option<(Vec<TerrainMaterialRecipe>, Vec<String>)> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(err) => {
+            warn!("failed to read procedural materials YAML at {}: {err}", path.display());
+            return None;
+        }
+    };
     let text = procedural_textures::strip_utf8_bom(&text);
-    let doc: ProceduralMaterialsDocument = serde_yaml::from_str(text).ok()?;
-    procedural_textures::order_recipes_for_core_layers(&doc.materials).ok()
-}
-
-pub fn recipes_for_world(yaml_path: Option<&PathBuf>) -> Vec<TerrainMaterialRecipe> {
-    if let Some(path) = yaml_path {
-        if let Some(recipes) = load_recipes_from_yaml(path) {
-            return recipes;
+    let doc: ProceduralMaterialsDocument = match serde_yaml::from_str(text) {
+        Ok(doc) => doc,
+        Err(err) => {
+            warn!(
+                "failed to parse procedural materials YAML at {}: {err}",
+                path.display()
+            );
+            return None;
+        }
+    };
+    match procedural_textures::order_recipes_for_document(&doc) {
+        Ok(recipes) => Some((recipes, procedural_textures::document_layer_order(&doc))),
+        Err(err) => {
+            warn!(
+                "failed to order procedural materials from {}: {err}",
+                path.display()
+            );
+            None
         }
     }
-    default_island_recipes()
+}
+
+pub fn recipes_for_world(yaml_path: Option<&PathBuf>) -> (Vec<TerrainMaterialRecipe>, Vec<String>) {
+    if let Some(path) = yaml_path {
+        if let Some((recipes, order)) = load_recipes_from_yaml(path) {
+            return (recipes, order);
+        }
+        warn!(
+            "falling back to built-in island recipes after YAML load failure: {}",
+            path.display()
+        );
+    }
+    let recipes = default_island_recipes();
+    let order = recipes.iter().map(|r| r.id.clone()).collect();
+    (recipes, order)
 }
 
 pub fn recipe_fingerprint_for(recipes: &[TerrainMaterialRecipe]) -> [u8; 32] {
@@ -86,16 +116,12 @@ pub fn write_cache(fingerprint: [u8; 32], arrays: &procedural_textures::CpuTextu
     }
 }
 
-pub fn bake_cpu_arrays(recipes: &[TerrainMaterialRecipe]) -> procedural_textures::CpuTextureArrays {
-    procedural_textures::build_cpu_arrays_in_core_order(recipes).expect("bake cpu arrays")
-}
-
-pub fn bake_cpu_arrays_for_palette(
+pub fn bake_cpu_arrays(
     layer_order: &[String],
     recipes: &[TerrainMaterialRecipe],
 ) -> procedural_textures::CpuTextureArrays {
     procedural_textures::build_cpu_arrays_for_palette(layer_order, recipes)
-        .expect("bake cpu arrays for palette")
+        .expect("bake cpu arrays")
 }
 
 pub fn ordered_recipes_for_palette(
@@ -114,15 +140,10 @@ pub fn build_material_from_arrays(
 ) -> Handle<TerrainPbrMaterial> {
     let handles = upload_texture_arrays(arrays, images);
     let layer_scales = layer_scales_from_recipes(recipes);
-    let normal_strength = if recipes.is_empty() {
-        0.0
-    } else {
-        recipes
-            .iter()
-            .map(|recipe| recipe.normal_strength)
-            .sum::<f32>()
-            / recipes.len() as f32
-    };
+    let normal_strength = recipes
+        .iter()
+        .map(|recipe| recipe.normal_strength)
+        .fold(0.0f32, f32::max);
     materials.add(TerrainPbrMaterial {
         albedo_array: handles.albedo.clone(),
         normal_array: handles.normal.clone(),

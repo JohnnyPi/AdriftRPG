@@ -16,7 +16,9 @@ pub fn texture_cache_key(recipe: &TerrainMaterialRecipe) -> [u8; 32] {
     hasher.update(recipe.id.as_bytes());
     hasher.update(&recipe.generator.fingerprint());
     hasher.update(&recipe.meters_per_repeat.to_le_bytes());
-    hasher.update(&recipe.normal_strength.to_le_bytes());
+    hasher.update(&recipe.tint[0].to_le_bytes());
+    hasher.update(&recipe.tint[1].to_le_bytes());
+    hasher.update(&recipe.tint[2].to_le_bytes());
     *hasher.finalize().as_bytes()
 }
 
@@ -36,6 +38,11 @@ pub fn write_texture_cache(key: [u8; 32], maps: &GeneratedPbrMaps) {
     if let Ok(bytes) = bincode::serialize(maps) {
         let _ = std::fs::write(path, bytes);
     }
+}
+
+pub fn invalidate_texture_cache(recipe: &TerrainMaterialRecipe) {
+    let path = texture_cache_path(texture_cache_key(recipe));
+    let _ = std::fs::remove_file(path);
 }
 
 pub fn bake_recipe_with_cache(

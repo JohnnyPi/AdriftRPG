@@ -41,10 +41,25 @@ pub struct PerformanceTerrainDefinition {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, default)]
 pub struct PerformanceShadowsDefinition {
     pub enabled: bool,
     pub quality: String,
+    pub depth_bias: f32,
+    pub normal_bias: f32,
+    pub maximum_distance_m: f32,
+}
+
+impl Default for PerformanceShadowsDefinition {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            quality: "high".to_string(),
+            depth_bias: 0.02,
+            normal_bias: 2.0,
+            maximum_distance_m: 180.0,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

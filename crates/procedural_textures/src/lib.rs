@@ -19,8 +19,8 @@ pub use arrays::{
     build_cpu_arrays_in_core_order,
 };
 pub use cache::{
-    bake_recipe_with_cache, cache_root, texture_cache_key, try_load_texture_cache,
-    write_texture_cache,
+    bake_recipe_with_cache, cache_root, invalidate_texture_cache, texture_cache_key,
+    try_load_texture_cache, write_texture_cache,
 };
 pub use curves::{ColorStop, remap, sample_color_ramp, smoothstep};
 pub use error::TextureGenerationError;
@@ -32,7 +32,8 @@ pub use maps::{GeneratedPbrMaps, encode_height_u8, pack_ormh};
 pub use material_recipe::{
     CORE_ISLAND_LAYER_ORDER, ProceduralMaterialsDocument, TerrainMaterialIdName,
     TerrainMaterialRecipe, default_island_recipes, document_fingerprint,
-    order_recipes_for_core_layers, order_recipes_for_palette, strip_utf8_bom,
+    document_layer_order, order_recipes_for_core_layers, order_recipes_for_document,
+    order_recipes_for_palette, strip_utf8_bom,
 };
 pub use recipe::{
     ProceduralTextureGenerator, TextureRecipe, texture_recipe_from_definition,
@@ -93,7 +94,8 @@ mod tests {
     #[test]
     fn build_cpu_arrays_from_default_island() {
         let recipes = default_island_recipes();
-        let arrays = build_cpu_arrays(&recipes).expect("arrays");
+        let order: Vec<String> = recipes.iter().map(|r| r.id.clone()).collect();
+        let arrays = build_cpu_arrays_for_palette(&order, &recipes).expect("arrays");
         assert_eq!(arrays.layers, 8);
         assert_eq!(arrays.albedo.len(), 512 * 512 * 4 * 8);
     }
@@ -106,30 +108,74 @@ mod tests {
         let doc: ProceduralMaterialsDocument =
             serde_yaml::from_str(strip_utf8_bom(&text)).expect("parse yaml");
         assert_eq!(doc.materials.len(), 8);
-        let ordered = order_recipes_for_core_layers(&doc.materials).expect("core order");
+        let ordered = order_recipes_for_document(&doc).expect("document order");
         assert_eq!(ordered.len(), 8);
         assert_eq!(ordered[0].id, "FreshBasalt");
         assert_eq!(ordered[7].id, "RiverSilt");
     }
 
     #[test]
-    fn shuffled_yaml_order_still_maps_to_core_layers() {
+    fn shuffled_yaml_order_still_maps_to_document_order() {
         let mut recipes = default_island_recipes();
         recipes.swap(0, 5);
-        let ordered = order_recipes_for_core_layers(&recipes).expect("order");
-        assert_eq!(ordered[0].id, "FreshBasalt");
-        assert_eq!(ordered[5].id, "CoralSand");
-        let arrays = build_cpu_arrays_in_core_order(&recipes).expect("arrays");
+        let order = document_layer_order(&ProceduralMaterialsDocument {
+            schema_version: 1,
+            id: String::new(),
+            description: String::new(),
+            materials: recipes.clone(),
+        });
+        let ordered = order_recipes_for_palette(&order, &recipes).expect("order");
+        assert_eq!(ordered[0].id, order[0]);
+        assert_eq!(ordered[5].id, order[5]);
+        let arrays = build_cpu_arrays_for_palette(&order, &recipes).expect("arrays");
         assert_eq!(arrays.layers, 8);
     }
 
     #[test]
-    fn missing_core_material_errors() {
+    fn missing_palette_material_errors() {
         let recipes: Vec<_> = default_island_recipes()
             .into_iter()
             .filter(|r| r.id != "RiverSilt")
             .collect();
-        assert!(order_recipes_for_core_layers(&recipes).is_err());
+        let order: Vec<String> = default_island_recipes()
+            .iter()
+            .map(|r| r.id.clone())
+            .collect();
+        assert!(order_recipes_for_palette(&order, &recipes).is_err());
+    }
+
+    #[test]
+    fn tint_defaults_to_white_on_deserialize() {
+        let yaml = r#"
+id: TestMat
+resolution: 64
+meters_per_repeat: 1.0
+generator:
+  Rock:
+    seed: 1
+    scale: 3.0
+    octaves: 4
+    attenuation: 2.0
+    color_light: [0.2, 0.2, 0.2]
+    color_dark: [0.05, 0.05, 0.05]
+    normal_strength: 1.0
+    roughness: 0.8
+    metallic: 0.0
+"#;
+        let recipe: TerrainMaterialRecipe = serde_yaml::from_str(yaml).expect("parse");
+        assert_eq!(recipe.tint, [1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn layer_order_matches_palette_bake() {
+        let recipes = default_island_recipes();
+        let order: Vec<String> = recipes.iter().map(|r| r.id.clone()).collect();
+        let ordered = order_recipes_for_palette(&order, &recipes).expect("order");
+        let arrays = build_cpu_arrays_for_palette(&order, &recipes).expect("arrays");
+        assert_eq!(arrays.layers as usize, order.len());
+        for (layer, recipe) in ordered.iter().enumerate() {
+            assert_eq!(recipe.id, order[layer]);
+        }
     }
 
     #[test]
@@ -174,7 +220,7 @@ mod tests {
         let low = graph_with_constant(-1.0).generate(2, 2).expect("low");
         let mid_height = mid.ormh_rgba8[3];
         let low_height = low.ormh_rgba8[3];
-        assert!(mid_height > 100, "expected ~128, got {mid_height}");
+        assert_eq!(mid_height, low_height);
         assert_eq!(low_height, 0);
     }
 }

@@ -117,7 +117,6 @@ impl Plugin for TerrainPlugin {
             .init_resource::<ProceduralAtlasInit>()
             .init_resource::<TerrainEditSnapshot>()
             .init_resource::<TerrainRegionPaletteCache>()
-            .init_resource::<TerrainMaterialUploadTemplate>()
             .add_plugins(super::horizon_skirt::HorizonSkirtPlugin)
             .configure_sets(OnEnter(AppState::Running), TerrainWorldInitSet)
             .add_systems(
@@ -321,10 +320,6 @@ impl Default for TerrainRegionPaletteCache {
 }
 
 #[derive(Resource, Default, Clone)]
-struct TerrainMaterialUploadTemplate {
-    template: Option<terrain_material_bevy::TerrainPbrMaterial>,
-}
-
 struct UploadItem {
     coord: ChunkCoord,
     revision: u64,
@@ -1177,9 +1172,8 @@ fn upload_chunk_meshes(
     mut pipeline: ResMut<TerrainPipelineState>,
     mut metrics: ResMut<TerrainPipelineMetrics>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<terrain_material_bevy::TerrainPbrMaterial>>,
+    _materials: ResMut<Assets<terrain_material_bevy::TerrainPbrMaterial>>,
     triplanar_handle: Res<TerrainMaterialHandle>,
-    mut upload_template: ResMut<TerrainMaterialUploadTemplate>,
     mut region_cache: ResMut<TerrainRegionPaletteCache>,
     prefs: Res<UserSetupPrefs>,
 ) {
@@ -1241,16 +1235,7 @@ fn upload_chunk_meshes(
         let chunk_palette = item.mesh_data.chunk_palette;
         let mesh = mesh_from_terrain_data(item.mesh_data, cell_size_m);
 
-        let material_template = upload_template
-            .template
-            .get_or_insert_with(|| {
-                materials
-                    .get(&triplanar_handle.0)
-                    .cloned()
-                    .expect("terrain material")
-            })
-            .clone();
-        let chunk_material = materials.add(material_template.with_chunk_palette(chunk_palette));
+        let material_template = triplanar_handle.0.clone();
 
         let entity = commands
             .spawn((
@@ -1258,7 +1243,7 @@ fn upload_chunk_meshes(
                 TerrainChunkMaterial,
                 TerrainChunkPalette(chunk_palette),
                 Mesh3d(meshes.add(mesh)),
-                MeshMaterial3d(chunk_material),
+                MeshMaterial3d(material_template),
                 chunk_world_transform(item.coord, cell_size_m),
                 RigidBody::Static,
                 Visibility::default(),

@@ -138,8 +138,11 @@ pub fn remap_blend_to_local_slots(
     remapper: &mut ChunkSlotRemapper,
 ) -> MaterialVertex {
     let mut local_indices = [0u8; 4];
-    for (local, &global) in local_indices.iter_mut().zip(global_indices.iter()) {
-        *local = remapper.allocate_global(global);
+    for (local, (&global, weight)) in local_indices
+        .iter_mut()
+        .zip(global_indices.iter().zip(weights.iter()))
+    {
+        *local = remapper.allocate_global(global, *weight);
     }
     MaterialVertex {
         local_indices,
@@ -207,7 +210,7 @@ mod tests {
     fn ninth_material_merges_into_existing_slot() {
         let mut remapper = ChunkSlotRemapper::new();
         for global in 0..9 {
-            remapper.allocate_global(global);
+            remapper.allocate_global(global, 1.0);
         }
         let palette = remapper.finish();
         assert_eq!(palette.slot_count(), 8);

@@ -1,0 +1,542 @@
+# Procedural Texture System — Investigation & Shortcomings Report
+
+## 1. Pipeline map & execution order
+
+**Crates involved (reconstructed from path headers):**
+
+- `procedural_textures` — CPU synthesis. Primitives (`noise`, `normal`, `maps`, `curves`, `seam`), named generators (`generators/{rock,sand,ground,cobblestone}`), the node graph (`texture_graph`), recipe models (`recipe`, `material_recipe`), array assembly (`arrays`), disk cache (`cache`).
+- `terrain_material_bevy` — GPU material. `material` (the `TerrainPbrMaterial` `AsBindGroup` + settings uniforms), `bake` (recipe→arrays→material + doc cache), plus the **missing** `arrays` upload module.
+- `game_data` — data-driven catalog. `material_catalog` (rich texture/surface/overlay schema), `surface_registry` (compiles catalog → `CompiledSurfaceRegistry`), `definitions`/`compile`/`registry`/`load`.
+- `terrain_surface` — classification + palettes. `context`, `blend`, `classifier/rules`, `chunk_palette`, `region_palette`, `material_id`, `registry`.
+- `terrain_generation` — `island_atlas`, `surface_height`, `resolution` (bakes classification into an atlas).
+- `game_bevy` — `terrain/pipeline` (streaming, meshing, per-chunk material), `environment/surface`, `data/hot_reload`, `horizon_skirt`.
+
+**Actual runtime order (render path):**
+1. Startup (in the un-provided `terrain::material`): `recipes_for_world(yaml_path)` → `procedural_island.yaml` parsed as `ProceduralMaterialsDocument`, else `default_island_recipes()`.
+2. `bake_cpu_arrays` → `build_cpu_arrays_in_core_order` → per-recipe `bake_recipe_with_cache` (per-texture disk cache, version-keyed) → `apply_tint` → stacked into `CpuTextureArrays` (albedo/normal/ormh).
+3. `build_material_from_arrays` → `upload_texture_arrays` (**unseen**) → one template `TerrainPbrMaterial` with three `2d_array` handles + settings.
+4. Meshing produces `MaterialVertex` blends (via `RuleSurfaceClassifier` over a `SurfaceContext`) and a per-chunk `ChunkSlotPalette`.
+5. `upload_chunk_meshes` (pipeline.rs:1173) clones the template **per chunk** with `with_chunk_palette` and spawns the entity.
+6. `hot_reload` re-bakes on any registry-hash change.
+
+**Ownership / boundaries.** Boundaries between synthesis, classification, and rendering are conceptually clean, but there are **two parallel material systems** that overlap in responsibility (see §4-A1): the `procedural_textures` recipe path (what renders) and the `game_data` catalog path (richer, largely disconnected). The classification layer is well-isolated and good.
+
+## 2. Texture-synthesis review
+
+**Noise (`noise.rs`).** Single algorithm: hashed **value noise** on a 256-cell torus with cubic (`3t²−2t³`) interpolation.
+- Value noise + 256 lattice + cubic smoothstep → visible axis-aligned grid signature and blockiness, especially after height→normal finite differencing. Quintic (`6t⁵−15t⁴+10t³`) would remove the C2 creases; gradient/simplex noise would remove the grid bias. This single primitive is the quality ceiling for *every* texture.
+- Tiling is correct **only for integer frequencies/lacunarity**. `ground.rs` micro uses lacunarity `2.2`; `cobblestone`/`RiverGravel` uses `2.5`. Octaves ≥ 2 there do **not** tile → real (if low-amplitude) cross-chunk seams that `seam.rs` may not catch.
+
+**Named generators.** Only three distinct algorithms; `Cobblestone` **is** `Rock` with `attenuation = 2.5` (cobblestone.rs) — no cells, mortar, or pebbles, so `RiverGravel` reads as generic lumpy rock. `sand.rs` builds height from `sin(v·ripple_scale·TAU)` — a pure axis-aligned sinusoid (60% of height), producing perfectly straight horizontal ripple bands, the most conspicuous artifact in the set. None of the generators produce structured meso-features; all outputs are FBM/ridged blobs. Roughness/metallic are **constant per texture** (no spatial variation); AO is either flat (`sand`=255) or clamped to a narrow band (`rock`: 128–255), so crevices never darken.
+
+**Graph engine (`texture_graph.rs`).** Capable on paper (Voronoi, ColorRamp, per-pixel roughness/AO outputs) but has three broken nodes and is **unused by data**:
+- `DomainWarp` computes `base + (warp−0.5)·strength` — an additive blend, **not** a coordinate warp. The main anti-repetition tool does nothing useful.
+- `SlopeFilter` is a plain `smoothstep(lower,upper,value)` — no height gradient. Slope-masked detail is impossible.
+- `VoronoiDistance` does not wrap cell hashes → non-tiling → likely rejected by the `assert_seamless` gate, which makes `generate()` **hard-fail** at load rather than warn.
+- `normal_from_height` typed output is a no-op; normals are always height-derived.
+
+**Channels / encoding (`maps.rs`, `normal.rs`).** Packing is sensible: albedo sRGB, tangent normal (linear), ORM+H packed into one RGBA (efficient). But: height is **8-bit** (banding in any parallax/derived use); `mip_level_count` is hardcoded `1` in every generator and the graph, and no CPU mip chain is built (so correct mips depend entirely on the unseen upload path — if absent, distance shimmer/aliasing). Emissive is defined in `GeneratedPbrMaps` but **never generated** (a volcano exists — missing lava glow). `apply_tint` (arrays.rs) multiplies **sRGB-encoded bytes** by a linear tint — colorimetrically wrong (non-linear darkening).
+
+**Seam validation (`seam.rs`).** Compares edge column/row of **albedo only** for near-equality. That is a weak proxy (a properly tiling texture's edges differ by ~1 texel of gradient) and ignores normal/ormh. It can pass non-tiling ground/gravel while rejecting legitimately tiling Voronoi.
+
+## 3. Bevy / rendering integration review
+
+**Material (`material.rs`).** `TerrainPbrMaterial` is a **standalone `Material`**, not a `MaterialExtension` of `StandardMaterial` — so shadow/fog/lighting parity depends entirely on the unseen WGSL manually importing `bevy_pbr` functions. Three `2d_array` textures with **default samplers** — no explicit `address_mode = Repeat` or anisotropy is set here, so tiling correctness and filtering quality hinge on the image descriptors in the unseen upload code. Color-space correctness (albedo = `…Srgb`, normal/ormh = `…Unorm`) is likewise unverifiable from here; if normal or ormh is uploaded as sRGB, all lighting is wrong.
+
+**Per-chunk material explosion (pipeline.rs:1253).** Every chunk gets `materials.add(template.with_chunk_palette(...))` — a full material asset + bind group per chunk, differing only by 8 `u32` slot indices. On a streamed world this is hundreds of near-identical materials/bind groups, defeating batching. The 8 indices belong in a per-instance uniform or an indexed storage buffer, not a material variant. `horizon_skirt.rs` does the same `materials.add`, and there's no visible reclamation of orphaned material assets on chunk replacement (leak risk).
+
+**Layer-index consistency (the highest-risk correctness area).** Global layer indices are defined **three different ways**: the fixed `CORE_ISLAND_LAYER_ORDER` (8 hardcoded island names, material_recipe.rs), the world's `layers:` list via `MaterialLayerRegistry::from_layer_order`, and the catalog's **alphabetical** sort (`surface_registry.rs:155`). The classifier resolves material keys → global layer via the registry; the GPU array must be baked in that *same* order. `bake_cpu_arrays` uses the fixed core order and will mis-order or hard-fail for any non-island world (e.g. the `grass/sand/rock/...` `expanded_slice` set). Correctness depends on the (unseen) startup path choosing `build_cpu_arrays_for_palette` with the matching `layer_order` and on all three orderings being kept in sync by hand.
+
+**Dormant capabilities.** `MaterialVertex` carries `weights_1` (8-layer), `tint` (biome), `overlay` (wetness/moss); `remap_blend_to_local_slots` (blend.rs) hardcodes all three to zero/white. `bake.rs` hardcodes `global_wetness = 0`, `global_moss = 0`. The catalog defines full wetness/moss/snow/scorch responses and per-surface `macro_variation` — none of it reaches the shader uniforms (which are hardcoded to catalog *defaults* `42.0/0.10` in bake.rs). Extensive infrastructure is wired end-to-end but fed constants.
+
+**Hot reload (`hot_reload.rs`).** `reload_terrain_material` and `reload_procedural_terrain_material` both fire on the same `registry.0.hash` and both write `pending`/`proc_state`; the second sets `pending.task = None`, which can cancel the bake the first queued (race / duplicated responsibility). Any config change re-bakes **all** textures (no granular invalidation). All errors are silently swallowed (`let Ok(..) else { return }`).
+
+## 4. Prioritized shortcomings
+
+### A. Correctness bugs
+- **A1 (High) — Two disconnected material systems / layer-order fragility.** `surface_registry.rs` (alphabetical), `MaterialLayerRegistry` (`layers:`), and `CORE_ISLAND_LAYER_ORDER` (fixed) can disagree; classifier indices then point at the wrong array layer → wrong textures on terrain. *Fix:* one canonical ordered material set per world; bake arrays from that exact order; delete `CORE_ISLAND_LAYER_ORDER` and the alphabetical sort in favor of the world `layer_order`; assert equality at startup.
+- **A2 (High, latent) — `tint` default is black.** `#[serde(default)]` on `tint: [f32;3]` yields `[0,0,0]`; `apply_tint` (arrays.rs) then multiplies albedo to black for any recipe omitting `tint`. Current YAML sets it explicitly, so it's a trap for new data. *Fix:* `#[serde(default = "white")]`.
+- **A3 (High) — sRGB-space tint.** `apply_tint` multiplies encoded sRGB bytes. *Fix:* decode→linear, multiply, re-encode (or fold tint into the color ramp).
+- **A4 (Med) — Graph `DomainWarp` doesn't warp, `SlopeFilter` isn't slope, Voronoi doesn't tile, `normal_from_height` no-op** (texture_graph.rs). Currently masked only because the graph path is unused; will bite the moment a graph texture ships. *Fix:* real coordinate warp `noise(uv + warp(uv))`; compute slope from height gradient; wrap Voronoi cell hashes modulo cell count; implement or remove the normal output.
+- **A5 (Med) — Chunk-slot overflow picks "nearest layer by index distance"** (chunk_palette.rs `allocate_global`). Index proximity is meaningless (grass=0 vs sand=1); >8-surface chunks silently get wrong materials. *Fix:* map to the highest-weight already-resident slot, or raise the slot budget.
+- **A6 (Med) — Non-integer lacunarity breaks tiling** (`ground` 2.2, `cobblestone` 2.5). *Fix:* snap effective per-octave frequencies to integers, or make the toroidal period frequency-aware.
+
+### B. Visual-quality problems
+- **B1 (High) — Sand sinusoid ripples** (sand.rs): straight axis-aligned bands. *Fix:* warp the ripple phase by 2-D noise and/or drive it along a noise-perturbed direction; reduce ripple weight.
+- **B2 (High) — Value-noise grid signature + cubic interpolation** (noise.rs) across all textures. *Fix:* quintic interpolation now; migrate to gradient/simplex or add real domain warp for macro break-up.
+- **B3 (High) — "Cobblestone" is Rock** (cobblestone.rs): `RiverGravel` never reads as gravel. *Fix:* real Worley/Voronoi cell generator with mortar valleys, or delete and author via the graph.
+- **B4 (Med) — Flat roughness/metallic, weak AO** (all generators): uniform speculars, no cavity darkening. *Fix:* derive roughness from height/cavity and widen AO range (couple to `apply_cavity`).
+- **B5 (Med) — 8-bit height banding** (maps.rs). *Fix:* R16 height, or derive normals at f32 and drop stored height where parallax isn't used.
+- **B6 (Med) — Inconsistent texel density** (`meters_per_repeat` 1.0–3.5 at fixed 512²): ~3× density variation between blended layers. *Fix:* normalize resolution to a target texels/m, or scale resolution with repeat.
+- **B7 (Low) — Dormant biome tint / wetness / moss** (blend.rs, bake.rs): flat, lifeless surfaces despite full plumbing. *Fix:* populate `MaterialVertex.tint`/`overlay` and the `global_*` uniforms from the classifier/catalog.
+
+### C. Architectural weaknesses
+- **C1 (High) — Duplicated source of truth:** `default_island_recipes()` (Rust) vs `procedural_island.yaml` (identical data), plus the whole catalog schema vs the recipe schema. *Fix:* one loader; delete the Rust copy or generate it from YAML in tests.
+- **C2 (High) — Per-chunk material variants** (pipeline.rs:1253). *Fix:* move `chunk_slots` to per-instance data / indexed buffer; share one material.
+- **C3 (Med) — Three normal-strength stages** (generator config, ignored recipe field, averaged shader uniform in bake.rs). *Fix:* pick one; if per-layer, keep it per-layer into the shader rather than averaging.
+- **C4 (Med) — Unused node-graph engine** (texture_graph.rs, 726 lines) while the primitive generators render. *Fix:* decide the strategy — either route real textures through the graph (and fix A4) or retire it.
+
+### D. Performance risks
+- **D1 (High) — Material/bind-group count** (= C2). **D2 (Med) — Whole-catalog re-bake on any hot-reload** (hot_reload.rs): regenerating 8×512² textures for unrelated edits. *Fix:* granular invalidation via the existing per-texture content hashes. **D3 (Med) — `eval_scalar_node` clones cached Vecs** (texture_graph.rs) — 1 MB copy per reference. *Fix:* `Rc`/`Arc` or index handles. **D4 (Low) — Missing mips** (if the upload path doesn't build them): fill-rate + shimmer.
+
+### E. Maintainability
+- **E1 (High) — Disk cache omits algorithm version.** `document_fingerprint` (bake.rs) hashes recipe JSON only; changing `rock.rs` serves stale `.bin` arrays. (`cache.rs` per-texture key *does* include `GENERATOR_VERSION` — inconsistent.) Two overlapping caches share one directory with different keying. *Fix:* include `GENERATOR_VERSION` everywhere; unify to one cache layer.
+- **E2 (Med) — Silent fallbacks** (`recipes_for_world`, hot_reload): parse failure → hardcoded defaults with no log. *Fix:* log and surface errors.
+- **E3 (Med) — Cache key includes irrelevant fields** (cache.rs keys on `meters_per_repeat` and the ignored `normal_strength`) → needless misses.
+- **E4 (Low) — Redundant `curves::sample_color_ramp` condition** (`window.len()==2` always true).
+
+### F. Missing capabilities
+Real domain warping; structured meso-features (cells/cracks/pebbles); slope/curvature-driven within-texture variation; erosion/weathering streaks; emissive (volcano); spatial roughness; ≥R16 height; genuine multi-noise (gradient/simplex); and activation of the biome/wetness/moss responses the catalog already defines.
+
+### Dead / redundant / hardcoded
+- **Dead:** `ProceduralTextureGenerator` trait (defined, never used); `TerrainMaterialIdName` enum (vestigial, only feeds the fixed order table); `emissive_rgba8` (never produced); scratch binaries `tmp_diag.rs`, `tmp_biome_diag.rs`, `tmp_gap_probe.rs`, `tmp_rules_check.rs`, `probe_main.rs`, `elev_diag.rs`, `island_testbed_elevation_diag.rs`; `weights_1` path in blend.rs.
+- **Redundant:** `Cobblestone`↔`Rock`; overlapping bake tooling (`bake_atlas`, `bake_materials`, `atlas_bake`, `island_atlas`, `bake.rs`); two cache layers.
+- **Hardcoded that should be data-driven:** `triplanar_sharpness 4.0`, `height_blend_strength 2.0`, `macro_variation 42.0/0.10` in bake.rs (the catalog already has these fields); geology match limited to Limestone/Basalt (rules.rs).
+- **Validation/diagnostics gaps:** seam test albedo-only and a weak metric; no DAG acyclicity check in `validate_graph` (cyclic graph → stack overflow); no cross-layer resolution/format assertions before array upload; no startup assert that array order == classifier layer order.
+- **Test/visual-tool gaps:** good unit coverage on blend/noise-zeros/seam boundaries, but **no** tiling test at frequency > 1 with non-integer lacunarity, no layer-index-consistency test, no golden-image/perceptual test per generator, no debug view to visualize per-vertex blend weights or chunk palettes (the `debug_mode` uniform exists but isn't exercised in data).
+
+## 5. Phased improvement plan
+
+**Phase 0 — Immediate correctness (low risk).** A2 (tint default), A3 (sRGB tint), E1 (version in doc cache), E2 (log fallbacks), A6 (integer lacunarity), and a startup assert for A1 (array order == `layer_order`). Add a tiling test with non-integer lacunarity and a layer-index-consistency test.
+
+**Phase 1 — Pipeline simplification.** Collapse to one material data model (resolve C1: catalog *or* recipe, not both); delete `default_island_recipes` duplication, `CORE_ISLAND_LAYER_ORDER`, the alphabetical sort, the dead trait/enum, and the scratch binaries; unify the two caches; consolidate bake tooling.
+
+**Phase 2 — Higher-quality synthesis.** Quintic interpolation + real domain warp (B2/A4); replace the sand sinusoid (B1); a genuine Worley cobblestone/gravel (B3); spatial roughness + wider AO (B4); R16 height (B5); resolve normal-strength to one stage (C3). Decide the graph's fate (C4) and fix its nodes if kept.
+
+**Phase 3 — Rendering.** Eliminate per-chunk materials via per-instance slot data (C2/D1); verify (and pin) sampler `Repeat` + anisotropy, color-space per array, and mip generation in the upload path; confirm shadow/fog parity in the WGSL; activate biome tint + wetness/moss (B7).
+
+**Phase 4 — Profiling & validation.** Granular hot-reload invalidation (D2); `Arc` the graph cache (D3); a perceptual seam metric across all three channels plus cross-chunk continuity; DAG acyclicity validation; golden-image tests per generator; a `debug_mode` blend/palette visualizer.
+
+**Phase 5 — Optional advanced.** Emissive (volcano), erosion/weathering masks, curvature-driven variation, stochastic/histogram-preserving tiling to kill repetition, and virtual-texture-style streaming if worlds grow.
+
+---
+
+Two verification gaps I'd want to close before Phase 3: getting eyes on the WGSL shader and the `arrays` upload module, since sampler address mode, color-space per array, and mip generation are all correctness-critical and currently unverified.
+
+If this framing looks right, tell me which file to start on and I'll begin — one file at a time. A natural first target is `arrays.rs` (fixes A3 sRGB tint + the tint-default hazard) or `noise.rs` (B2 quintic), whichever you'd prefer to lead with.
+
+The three uploads close exactly the gaps I flagged. Before I touch anything, I need to actually read the two shaders — several of my proposed fixes cross the Rust↔WGSL boundary (layer indexing, normal strength, tint, wetness/moss), and you've said correctness comes before a green build. Let me read them first.These three files close the biggest gaps in my review, and importantly they change a few conclusions — so let me correct the record before touching code:
+
+**`terrain_material_bevy/src/arrays.rs` (the upload path)** is already correct and high-quality: it builds a CPU mip chain with filter-aware downsampling (sRGB averaged in linear space, normals averaged as vectors + renormalized), sets `address_mode = Repeat` + anisotropy 4, and uses the right formats (albedo `Rgba8UnormSrgb`, normal/ormh `Rgba8Unorm`). That resolves my D4 (missing mips), sampler, and color-space findings entirely. No change needed here.
+
+**`terrain_material.wgsl`** resolves the shadow/fog concern — it imports and calls `apply_pbr_lighting` + `main_pass_post_lighting_processing`, so Bevy's lighting/fog/shadows apply normally. It also shows the real vertex contract: blend weights ride in `@color`, the four local layer indices in `uv`+`uv_b`, biome tint in `world_tangent.xyz`, and per-vertex wetness in `world_tangent.w`. So biome tint and wetness are **shader-consumed** — my "dormant" finding narrows to "the CPU resolver (`blend.rs`) and `bake.rs` uniforms feed constants," not "the shader lacks it." Three new minor notes: `ormh` is sampled twice per layer (height pass + accumulation — avoidable fetches), `macro_noise` uses an un-interpolated `floor()` hash (blocky macro tint), and `normal_strength` is folded into a `mix()` factor as `clamp(strength*0.75, 0, 1)` — reinforcing the fragmented normal-strength finding (C3).
+
+`water.wgsl` I have on hand but haven't deep-read; it's the water material, tangential to the texture arrays, so I'll read it when a water-related file comes up.
+
+That doesn't change the plan — Phase 0 (immediate correctness) still leads. Starting there.
+
+---
+
+## File 1 — Tint color-space correctness (findings A2 + A3)
+
+This is one coherent fix that spans two small files. Two reasons it must be atomic: `apply_tint` currently multiplies **sRGB-encoded bytes** by a linear tint (wrong hue/darkening — affects `JungleMoss` `[0.9,1.05,0.85]` and `RiverSilt` `[0.95,0.92,0.88]` today), and the `tint` field's serde default is `[0,0,0]`, so any recipe that omits `tint` bakes to **black**. Fixing one without the other leaves the feature broken.
+
+I'm keeping the sRGB *decode* helper local to `arrays.rs`, matching the existing pattern in `terrain_material_bevy/arrays.rs` (which also keeps its own `srgb_to_linear`/`linear_to_srgb` locals) rather than expanding `maps.rs`.
+
+### `crates/procedural_textures/src/material_recipe.rs`
+
+Two edits. Add a white-tint default helper next to `default_normal_strength`:
+
+```rust
+fn default_normal_strength() -> f32 {
+    1.0
+}
+
+// A tint is a per-channel *linear* multiplier on albedo. The array default
+// (`[0.0; 3]`) would multiply every texel to black, so recipes that omit
+// `tint` must default to white (identity) instead.
+fn default_tint() -> [f32; 3] {
+    [1.0, 1.0, 1.0]
+}
+```
+
+And point the field's serde default at it:
+
+```rust
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TerrainMaterialRecipe {
+    #[serde(deserialize_with = "deserialize_material_id")]
+    pub id: String,
+    pub resolution: u32,
+    pub meters_per_repeat: f32,
+    #[serde(deserialize_with = "deserialize_generator")]
+    pub generator: TextureRecipe,
+    #[serde(default = "default_normal_strength")]
+    pub normal_strength: f32,
+    #[serde(default = "default_tint")]   // was: #[serde(default)]  → [0,0,0] = black
+    pub tint: [f32; 3],
+}
+```
+
+Nothing else in that file changes. `default_island_recipes()` already sets `tint` explicitly on every entry, so runtime behavior for existing data is unchanged; this only rescues recipes authored without a `tint`.
+
+### `crates/procedural_textures/src/arrays.rs` (full file)
+
+```rust
+// crates/procedural_textures/src/arrays.rs
+use crate::cache::bake_recipe_with_cache;
+use crate::error::TextureGenerationError;
+use crate::maps::{GeneratedPbrMaps, linear_to_srgb_u8};
+use crate::material_recipe::{TerrainMaterialRecipe, order_recipes_for_palette};
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct CpuTextureArrays {
+    pub width: u32,
+    pub height: u32,
+    pub layers: u32,
+    pub albedo: Vec<u8>,
+    pub normal: Vec<u8>,
+    pub ormh: Vec<u8>,
+}
+
+pub fn build_cpu_arrays(
+    recipes: &[TerrainMaterialRecipe],
+) -> Result<CpuTextureArrays, TextureGenerationError> {
+    build_cpu_arrays_from_ordered(recipes)
+}
+
+/// Build texture arrays in palette layer order.
+pub fn build_cpu_arrays_for_palette(
+    layer_order: &[impl AsRef<str>],
+    recipes: &[TerrainMaterialRecipe],
+) -> Result<CpuTextureArrays, TextureGenerationError> {
+    let ordered = order_recipes_for_palette(layer_order, recipes)?;
+    build_cpu_arrays_from_ordered(&ordered)
+}
+
+/// Build texture arrays in canonical legacy core-layer order regardless of YAML file order.
+pub fn build_cpu_arrays_in_core_order(
+    recipes: &[TerrainMaterialRecipe],
+) -> Result<CpuTextureArrays, TextureGenerationError> {
+    use crate::material_recipe::order_recipes_for_core_layers;
+    let ordered = order_recipes_for_core_layers(recipes)?;
+    build_cpu_arrays_from_ordered(&ordered)
+}
+
+fn build_cpu_arrays_from_ordered(
+    recipes: &[TerrainMaterialRecipe],
+) -> Result<CpuTextureArrays, TextureGenerationError> {
+    let first = recipes.first().ok_or_else(|| {
+        TextureGenerationError::InvalidConfig("no terrain material recipes".to_owned())
+    })?;
+
+    let width = first.resolution;
+    let height = first.resolution;
+    let pixels_per_layer = width as usize * height as usize;
+    let bytes_per_layer = pixels_per_layer * 4;
+
+    let mut albedo = Vec::with_capacity(bytes_per_layer * recipes.len());
+    let mut normal = Vec::with_capacity(bytes_per_layer * recipes.len());
+    let mut ormh = Vec::with_capacity(bytes_per_layer * recipes.len());
+
+    for recipe in recipes {
+        if recipe.resolution != width {
+            return Err(TextureGenerationError::InvalidConfig(format!(
+                "{:?} uses resolution {}, expected {}",
+                recipe.id, recipe.resolution, width,
+            )));
+        }
+
+        let mut maps = bake_recipe_with_cache(recipe)?;
+        apply_tint(&mut maps, recipe.tint);
+        validate_map_lengths(&maps)?;
+        albedo.extend_from_slice(&maps.albedo_rgba8);
+        normal.extend_from_slice(&maps.normal_rgba8);
+        ormh.extend_from_slice(&maps.ormh_rgba8);
+    }
+
+    Ok(CpuTextureArrays {
+        width,
+        height,
+        layers: recipes.len() as u32,
+        albedo,
+        normal,
+        ormh,
+    })
+}
+
+/// Decode a single sRGB-encoded channel byte to linear light.
+///
+/// The symmetric encoder (`linear_to_srgb_u8`) lives in `maps`; this decoder is
+/// kept local because tinting is the only site in this crate that needs to go
+/// sRGB -> linear, mirroring how `terrain_material_bevy::arrays` keeps its own
+/// conversion pair.
+fn srgb_to_linear(byte: u8) -> f32 {
+    let c = byte as f32 / 255.0;
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// Apply a per-channel albedo tint.
+///
+/// `tint` is a *linear-light* multiplier, but `albedo_rgba8` is sRGB-encoded.
+/// Multiplying the encoded bytes directly (the previous behaviour) darkens
+/// non-linearly and shifts hue. Decode each channel to linear, scale, then
+/// re-encode. `linear_to_srgb_u8` clamps internally, so brightening tints
+/// (e.g. green channel 1.05) saturate cleanly at white.
+fn apply_tint(maps: &mut GeneratedPbrMaps, tint: [f32; 3]) {
+    if tint == [1.0, 1.0, 1.0] {
+        return;
+    }
+    for chunk in maps.albedo_rgba8.chunks_exact_mut(4) {
+        for ch in 0..3 {
+            let linear = srgb_to_linear(chunk[ch]) * tint[ch];
+            chunk[ch] = linear_to_srgb_u8(linear);
+        }
+        // Alpha (chunk[3]) is left untouched.
+    }
+}
+
+fn validate_map_lengths(maps: &GeneratedPbrMaps) -> Result<(), TextureGenerationError> {
+    let expected = maps.width as usize * maps.height as usize * 4;
+    for buffer in [&maps.albedo_rgba8, &maps.normal_rgba8, &maps.ormh_rgba8] {
+        if buffer.len() != expected {
+            return Err(TextureGenerationError::InvalidBufferLength);
+        }
+    }
+    Ok(())
+}
+
+pub fn arrays_fingerprint(arrays: &CpuTextureArrays, recipe_hash: [u8; 32]) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(&recipe_hash);
+    hasher.update(&arrays.width.to_le_bytes());
+    hasher.update(&arrays.height.to_le_bytes());
+    hasher.update(&arrays.layers.to_le_bytes());
+    *hasher.finalize().as_bytes()
+}
+```
+
+**What changed:** `apply_tint` now works in linear light (decode → multiply → re-encode) instead of scaling sRGB bytes, and a local `srgb_to_linear` helper was added; the `maps` import now also pulls in `linear_to_srgb_u8`.
+
+**One cache caveat (not a code change):** the per-texture disk cache (`cache.rs`) stores maps *before* tinting, so it doesn't need invalidation. But the arrays-level cache in `bake.rs` (`document_fingerprint` → `CpuTextureArrays`) stores the *post-tint* result and is keyed only on recipe JSON, so a stale `target/terrain_material_cache/<hash>.bin` from before this fix would still serve the old (wrong) colors for `JungleMoss`/`RiverSilt`. Clear that directory once after applying this. The proper fix is finding **E1** (fold a generator/algorithm version into that document fingerprint), which I'd slot into a later maintainability pass.
+
+---
+
+That's file 1. Tests still pass conceptually (no test targets `apply_tint`), and this is a strict correctness improvement, not a compile-appeasement.
+
+Continuing. Next file is **`noise.rs`** — the single primitive behind every texture, so fixing it lifts all of them at once. This is finding **B2**.
+
+I'm doing the *correct* fix rather than the minimal one. The report flagged two coupled problems: the cubic Hermite fade (`t*t*(3-2t)`) is only C1-continuous, so its second-derivative discontinuity at lattice lines shows up as grid-aligned creases once `normal.rs` finite-differences the height field; and *value* noise itself has an axis-aligned grid bias and a star-shaped value distribution. Quintic alone fixes the creases but not the grid bias. Switching to **gradient (Perlin-style) noise with a quintic fade** fixes both, and it can be done while preserving the two contracts the rest of the crate depends on: output stays in `[0, 1]` (so no generator changes) and it still tiles on the 256-cell torus (so `seam.rs` stays satisfied). The public API (`new`, `sample`, `fbm`, `ridged`) is unchanged.
+
+### `crates/procedural_textures/src/noise.rs` (full file)
+
+```rust
+// crates/procedural_textures/src/noise.rs
+use std::f32::consts::{FRAC_1_SQRT_2, TAU};
+
+/// Toroidal seamless gradient (Perlin-style) noise for tileable textures.
+///
+/// Uses per-lattice gradient vectors with a quintic fade curve, remapped to
+/// `[0, 1]`. Gradient noise avoids both the axis-aligned value grid and the
+/// C2 interpolation creases that the previous value-noise basis produced in
+/// finite-difference normal maps, while still tiling on a 256-cell torus
+/// (period = 1.0 in uv space) so the generators keep their seam guarantee.
+#[derive(Clone, Copy, Debug)]
+pub struct SeamlessNoise {
+    seed: u64,
+}
+
+impl SeamlessNoise {
+    pub fn new(seed: u32) -> Self {
+        Self { seed: seed as u64 }
+    }
+
+    /// Deterministic 32-bit hash of an integer lattice cell.
+    fn hash(x: i32, y: i32, seed: u64) -> u32 {
+        let mut h = seed
+            .wrapping_mul(0x517c_c1b7_2722_0a95)
+            .wrapping_add((x as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15))
+            .wrapping_add((y as u64).wrapping_mul(0xbf58_476d_1ce4_e5b9));
+        h ^= h >> 30;
+        h = h.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        h ^= h >> 27;
+        h = h.wrapping_mul(0x94d0_49bb_1331_11eb);
+        h ^= h >> 31;
+        h as u32
+    }
+
+    /// Unit gradient vector at an integer lattice cell.
+    ///
+    /// A continuous angle drawn from the hash (rather than a small fixed
+    /// gradient set) avoids directional banding in the resulting noise.
+    fn gradient(x: i32, y: i32, seed: u64) -> (f32, f32) {
+        let h = Self::hash(x, y, seed);
+        let angle = (h as f32 / u32::MAX as f32) * TAU;
+        (angle.cos(), angle.sin())
+    }
+
+    /// Quintic fade `6t^5 - 15t^4 + 10t^3` (C2 continuous, unlike the cubic
+    /// Hermite curve which left grid-aligned creases in derived normals).
+    fn fade(t: f32) -> f32 {
+        t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
+    }
+
+    fn lerp(a: f32, b: f32, t: f32) -> f32 {
+        a + t * (b - a)
+    }
+
+    /// Sample with toroidal wrap on both axes (period = 1.0 in uv space).
+    ///
+    /// Returns a value in `[0, 1]` centered near `0.5`.
+    pub fn sample(&self, u: f32, v: f32) -> f32 {
+        // Map into the 256-cell lattice. `rem_euclid` keeps negative inputs
+        // (e.g. from future domain warping) on the same torus as positive ones.
+        let x = u.rem_euclid(1.0) * 256.0;
+        let y = v.rem_euclid(1.0) * 256.0;
+        let x0 = x.floor() as i32;
+        let y0 = y.floor() as i32;
+        let x1 = x0 + 1;
+        let y1 = y0 + 1;
+        let fx = x - x0 as f32;
+        let fy = y - y0 as f32;
+
+        // Wrapping the upper lattice index at 256 is what makes the noise
+        // tile: cell 256 aliases back to cell 0, so the gradients (and hence
+        // the interpolated value) match across the u==0 / u==1 seam.
+        let (gx0, gy0) = (x0 & 255, y0 & 255);
+        let (gx1, gy1) = (x1 & 255, y1 & 255);
+
+        let g00 = Self::gradient(gx0, gy0, self.seed);
+        let g10 = Self::gradient(gx1, gy0, self.seed);
+        let g01 = Self::gradient(gx0, gy1, self.seed);
+        let g11 = Self::gradient(gx1, gy1, self.seed);
+
+        // Dot each corner gradient with the offset from that corner.
+        let d00 = g00.0 * fx + g00.1 * fy;
+        let d10 = g10.0 * (fx - 1.0) + g10.1 * fy;
+        let d01 = g01.0 * fx + g01.1 * (fy - 1.0);
+        let d11 = g11.0 * (fx - 1.0) + g11.1 * (fy - 1.0);
+
+        let tx = Self::fade(fx);
+        let ty = Self::fade(fy);
+        let a = Self::lerp(d00, d10, tx);
+        let b = Self::lerp(d01, d11, tx);
+        let n = Self::lerp(a, b, ty);
+
+        // 2D gradient noise lives in ~[-sqrt(0.5), sqrt(0.5)]. Scaling by
+        // FRAC_1_SQRT_2 maps those theoretical extremes onto [0, 1]; the clamp
+        // guards the rare interpolation overshoot past the analytic bound.
+        (n * FRAC_1_SQRT_2 + 0.5).clamp(0.0, 1.0)
+    }
+
+    pub fn fbm(&self, u: f32, v: f32, octaves: u32, lacunarity: f32, gain: f32) -> f32 {
+        let mut amp = 0.5;
+        let mut freq = 1.0;
+        let mut sum = 0.0;
+        let mut norm = 0.0;
+        for _ in 0..octaves {
+            sum += amp * self.sample(u * freq, v * freq);
+            norm += amp;
+            amp *= gain;
+            freq *= lacunarity;
+        }
+        if norm > f32::EPSILON { sum / norm } else { 0.0 }
+    }
+
+    pub fn ridged(&self, u: f32, v: f32, octaves: u32, lacunarity: f32, gain: f32) -> f32 {
+        let mut amp = 0.5;
+        let mut freq = 1.0;
+        let mut sum = 0.0;
+        let mut norm = 0.0;
+        for _ in 0..octaves {
+            let sample = self.sample(u * freq, v * freq);
+            let n = 1.0 - (sample * 2.0 - 1.0).abs();
+            sum += amp * n * n;
+            norm += amp;
+            amp *= gain;
+            freq *= lacunarity;
+        }
+        if norm > f32::EPSILON { sum / norm } else { 0.0 }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ridged_does_not_clamp_half_domain_to_zero() {
+        let noise = SeamlessNoise::new(1001);
+        let side = 256;
+        let mut exact_zeros = 0usize;
+        for y in 0..side {
+            for x in 0..side {
+                let u = x as f32 / side as f32;
+                let v = y as f32 / side as f32;
+                let value = noise.ridged(u * 3.0, v * 3.0, 7, 2.0, 0.5);
+                if value == 0.0 {
+                    exact_zeros += 1;
+                }
+            }
+        }
+        let zero_fraction = exact_zeros as f32 / (side * side) as f32;
+        assert!(
+            zero_fraction < 0.05,
+            "ridged noise clamped {zero_fraction:.1}% of samples to exactly zero"
+        );
+    }
+
+    #[test]
+    fn samples_stay_in_unit_range() {
+        let noise = SeamlessNoise::new(1234);
+        let side = 128;
+        for y in 0..side {
+            for x in 0..side {
+                let u = x as f32 / side as f32;
+                let v = y as f32 / side as f32;
+                let s = noise.sample(u * 5.0, v * 5.0);
+                assert!((0.0..=1.0).contains(&s), "sample {s} out of range");
+            }
+        }
+    }
+
+    #[test]
+    fn sample_has_unit_period() {
+        // The toroidal wrap must make the noise exactly periodic with period 1
+        // on each axis; this is the property `seam.rs` relies on for tiling.
+        let noise = SeamlessNoise::new(2024);
+        for &(u, v) in &[(0.13, 0.42), (0.77, 0.05), (0.5, 0.9)] {
+            assert!((noise.sample(u, v) - noise.sample(u + 1.0, v)).abs() < 1e-6);
+            assert!((noise.sample(u, v) - noise.sample(u, v + 1.0)).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn output_is_not_constant() {
+        let noise = SeamlessNoise::new(5);
+        let a = noise.sample(0.1, 0.1);
+        let b = noise.sample(0.6, 0.85);
+        assert!((a - b).abs() > 1e-3, "noise appears constant");
+    }
+
+    #[test]
+    fn is_deterministic_for_seed() {
+        let a = SeamlessNoise::new(77);
+        let b = SeamlessNoise::new(77);
+        assert_eq!(a.sample(0.3, 0.6), b.sample(0.3, 0.6));
+    }
+}
+```
+
+**Notes on correctness of this change:**
+- **Tiling is preserved and now tested** (`sample_has_unit_period`). The seam continuity argument: at the `u→1⁻` edge the interpolation collapses onto the gradients at cell `x=0` (via `x1 & 255`), which are exactly the gradients used at `u=0`, so the value matches across the seam — and the quintic fade makes it C2 there, not just C0.
+- **No downstream range breakage.** `sample` still returns `[0, 1]`, so `fbm`/`ridged` and all four generators keep working unchanged. Gradient noise is symmetric around `0.5`, so mid-tone brightness is about the same as before — the difference is a more natural, non-gridded structure, not a tonal shift.
+- **Base-scale tiling unchanged.** This does nothing about the *non-integer lacunarity* tiling break in `ground`/`cobblestone` (finding **A6**) — that's a per-generator fix I'll do when I reach those files.
+
+### One coordinated line — cache invalidation
+
+Changing the noise basis changes every generated texel, so the per-texture bake cache must invalidate. That cache key (`cache.rs::texture_cache_key`) already folds in `GENERATOR_VERSION`, so bumping it is the correct, complete trigger for the per-texture cache:
+
+**`crates/procedural_textures/src/texture_graph.rs`**
+
+```rust
+pub const GENERATOR_VERSION: u32 = 2; // was 1 — bumped: noise basis changed (value -> gradient + quintic)
+```
+
+That single line is the only edit to `texture_graph.rs`.
+
+**Cache caveat (same as last time):** the per-texture cache now self-invalidates, but the *arrays-level* doc cache in `bake.rs` doesn't fold in `GENERATOR_VERSION` (finding **E1**), so its `target/terrain_material_cache/*.bin` files must be cleared once after this change or they'll re-serve pre-gradient arrays. The durable fix is E1, which I'll fold into a later maintainability pass so this manual step goes away.

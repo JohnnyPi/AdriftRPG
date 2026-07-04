@@ -6,12 +6,7 @@ use tracing::info;
 use crate::camera::ThirdPersonCameraPlugin;
 use crate::data::{DataAssetPlugin, assets_root};
 use crate::debug_tools::DebugToolsPlugin;
-use crate::environment::volumetric_scatter::VolumetricScatterPlugin;
-use crate::environment::{
-    AtmosphereScenePlugin, BiomePlugin, CelestialPlugin, CloudPlugin, EnvironmentAudioStubPlugin,
-    EnvironmentConfigPlugin, EnvironmentLightingPlugin, FogPlugin, LightingPlugin,
-    SimulationTimePlugin, StarfieldPlugin, WeatherPlugin,
-};
+use crate::environment::{BiomePlugin, EnvironmentAudioStubPlugin, LightingDebugPlugin, SkyLightingPlugin};
 use crate::performance::PerformanceValidationPlugin;
 use crate::physics::GamePhysicsPlugin;
 use crate::player::{CharacterMotorPlugin, PlayerPlugin};
@@ -81,19 +76,8 @@ pub fn configure_vertical_slice_app(app: &mut App, window_title: &str) {
         crate::interest::ChunkInterestPlugin,
     ))
     .add_plugins((
-        LightingPlugin,
-        SimulationTimePlugin,
-        EnvironmentConfigPlugin,
-        EnvironmentLightingPlugin,
-        CelestialPlugin,
-        AtmosphereScenePlugin,
-        VolumetricScatterPlugin,
-        CloudPlugin,
-        FogPlugin,
-        StarfieldPlugin,
-        WeatherPlugin,
-    ))
-    .add_plugins((
+        SkyLightingPlugin,
+        LightingDebugPlugin,
         EnvironmentAudioStubPlugin,
         WaterPlugin,
         VegetationPlugin,

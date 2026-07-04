@@ -1,6 +1,6 @@
 // crates/game_bevy/src/camera/spawn.rs
 use bevy::prelude::*;
-use game_data::{CompiledCamera, CompiledLighting};
+use game_data::CompiledCamera;
 
 use crate::environment::atmosphere::atmosphere_camera_bundle;
 
@@ -11,7 +11,6 @@ pub fn spawn_game_camera(
     player: Entity,
     follow_target: Entity,
     camera: &CompiledCamera,
-    lighting: &CompiledLighting,
     spawn_focus: Vec3,
 ) -> Entity {
     let mmo_camera = MmoCamera {
@@ -33,7 +32,7 @@ pub fn spawn_game_camera(
         shoulder_offset: camera.shoulder_offset,
     };
 
-    let mut entity = commands.spawn((
+    let entity = commands.spawn((
         MainGameCamera,
         mmo_camera,
         Camera3d::default(),
@@ -48,23 +47,8 @@ pub fn spawn_game_camera(
         }),
         Transform::from_translation(spawn_focus),
         atmosphere_camera_bundle(),
+        DistanceFog::default(),
     ));
-
-    if lighting.fog_enabled {
-        entity.insert(DistanceFog {
-            color: Color::srgba(
-                lighting.fog_color[0],
-                lighting.fog_color[1],
-                lighting.fog_color[2],
-                1.0,
-            ),
-            falloff: FogFalloff::Linear {
-                start: lighting.fog_start_m,
-                end: lighting.fog_end_m,
-            },
-            ..default()
-        });
-    }
 
     entity.id()
 }

@@ -12,9 +12,18 @@ pub fn maximum_texture_seam_error(maps: &GeneratedPbrMaps) -> f32 {
         return 0.0;
     }
 
-    let horizontal = compare_left_right_edges(&maps.albedo_rgba8, w, h);
-    let vertical = compare_top_bottom_edges(&maps.albedo_rgba8, w, h);
-    horizontal.max(vertical)
+    let albedo_h = compare_left_right_edges(&maps.albedo_rgba8, w, h);
+    let albedo_v = compare_top_bottom_edges(&maps.albedo_rgba8, w, h);
+    let normal_h = compare_left_right_edges(&maps.normal_rgba8, w, h);
+    let normal_v = compare_top_bottom_edges(&maps.normal_rgba8, w, h);
+    let ormh_h = compare_left_right_edges(&maps.ormh_rgba8, w, h);
+    let ormh_v = compare_top_bottom_edges(&maps.ormh_rgba8, w, h);
+    albedo_h
+        .max(albedo_v)
+        .max(normal_h)
+        .max(normal_v)
+        .max(ormh_h)
+        .max(ormh_v)
 }
 
 fn compare_left_right_edges(buffer: &[u8], width: usize, height: usize) -> f32 {

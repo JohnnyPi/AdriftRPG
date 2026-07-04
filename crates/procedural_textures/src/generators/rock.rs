@@ -62,6 +62,7 @@ impl RockGenerator {
         let mut height_field = vec![0.0f32; count];
         let mut albedo = vec![0u8; count * 4];
         let mut ao = vec![0u8; count];
+        let mut roughness_field = vec![0.0f32; count];
 
         for y in 0..h {
             for x in 0..w {
@@ -98,16 +99,18 @@ impl RockGenerator {
                 albedo[ai + 2] = linear_to_srgb_u8(b);
                 albedo[ai + 3] = 255;
                 ao[idx] = (128.0 + detail * 127.0) as u8;
+                roughness_field[idx] =
+                    (self.config.roughness + detail * 0.18 - ridged * 0.08).clamp(0.04, 1.0);
             }
         }
 
-        build_maps_from_height(
+        build_maps_from_height_spatial(
             width,
             height,
             &height_field,
             albedo,
-            ao,
-            self.config.roughness,
+            &ao,
+            &roughness_field,
             self.config.metallic,
             self.config.normal_strength,
         )
@@ -124,6 +127,30 @@ pub(crate) fn build_maps_from_height(
     metallic: f32,
     normal_strength: f32,
 ) -> Result<GeneratedPbrMaps, TextureGenerationError> {
+    let count = height_field.len();
+    let roughness_field = vec![roughness; count];
+    build_maps_from_height_spatial(
+        width,
+        height,
+        height_field,
+        albedo,
+        &ao,
+        &roughness_field,
+        metallic,
+        normal_strength,
+    )
+}
+
+pub(crate) fn build_maps_from_height_spatial(
+    width: u32,
+    height: u32,
+    height_field: &[f32],
+    albedo: Vec<u8>,
+    ao: &[u8],
+    roughness_field: &[f32],
+    metallic: f32,
+    normal_strength: f32,
+) -> Result<GeneratedPbrMaps, TextureGenerationError> {
     let w = width as usize;
     let h = height as usize;
     let count = w * h;
@@ -134,7 +161,10 @@ pub(crate) fn build_maps_from_height(
     let normal =
         crate::normal::normals_from_height_field(width, height, height_field, normal_strength);
     let height_u8 = encode_height_u8(height_field, min_h, max_h);
-    let roughness_u8 = vec![(roughness.clamp(0.0, 1.0) * 255.0).round() as u8; count];
+    let roughness_u8: Vec<u8> = roughness_field
+        .iter()
+        .map(|r| (r.clamp(0.0, 1.0) * 255.0).round() as u8)
+        .collect();
     let metallic_u8 = vec![(metallic.clamp(0.0, 1.0) * 255.0).round() as u8; count];
     let ormh = pack_ormh(&ao, &roughness_u8, &metallic_u8, &height_u8);
 

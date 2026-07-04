@@ -48,6 +48,7 @@ impl Plugin for VolumetricScatterPlugin {
                 (
                     respawn_god_ray_on_sky_revision,
                     sync_god_ray_volume_strength,
+                    sync_god_ray_colors,
                     sync_volumetric_fog_ambient,
                 )
                     .chain()
@@ -189,13 +190,25 @@ fn sync_god_ray_volume_strength(
 }
 
 fn sync_volumetric_fog_ambient(
-    sky: Res<SkyPresentationConfig>,
+    celestial: Res<CelestialState>,
     mut cameras: Query<&mut VolumetricFog, With<MainGameCamera>>,
 ) {
-    let horizon = sky.horizon_color;
+    let ambient = celestial.fog_inscattering;
     for mut fog in &mut cameras {
-        fog.ambient_color = Color::srgb(horizon[0], horizon[1], horizon[2]);
+        fog.ambient_color = Color::srgb(ambient[0], ambient[1], ambient[2]);
         fog.ambient_intensity = fog.ambient_intensity.max(0.08);
+    }
+}
+
+fn sync_god_ray_colors(
+    celestial: Res<CelestialState>,
+    mut volumes: Query<&mut FogVolume, With<SunGodRayVolume>>,
+) {
+    let horizon = celestial.fog_inscattering;
+    let sun = celestial.sun_color;
+    for mut fog in &mut volumes {
+        fog.fog_color = Color::srgba(horizon[0], horizon[1], horizon[2], 1.0);
+        fog.light_tint = Color::srgb(sun[0], sun[1], sun[2]);
     }
 }
 

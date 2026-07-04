@@ -18,7 +18,9 @@ impl Plugin for LightingPlugin {
             Update,
             (
                 update_sky_visibility,
-                apply_cave_atmosphere.after(SyncEnvironmentLightingSet),
+                apply_cave_atmosphere
+                    .after(update_sky_visibility)
+                    .after(SyncEnvironmentLightingSet),
             )
                 .run_if(in_state(AppState::Running)),
         );

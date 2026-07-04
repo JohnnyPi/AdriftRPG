@@ -7,10 +7,16 @@ pub const UNUSED_SLOT: u32 = u32::MAX;
 /// Per-chunk mapping from local vertex slot (0..7) to global texture-array layer.
 ///
 /// See crate-level docs for where this sits in the palette hierarchy.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub struct ChunkSlotPalette {
     local_to_global: [u32; CHUNK_LOCAL_SLOT_COUNT],
     slot_count: u8,
+}
+
+impl Default for ChunkSlotPalette {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ChunkSlotPalette {
@@ -47,6 +53,7 @@ impl ChunkSlotPalette {
 #[derive(Clone, Debug, Default)]
 pub struct ChunkSlotRemapper {
     global_to_local: BTreeMap<u32, u8>,
+    slot_weights: [f32; CHUNK_LOCAL_SLOT_COUNT],
     palette: ChunkSlotPalette,
 }
 
@@ -55,23 +62,26 @@ impl ChunkSlotRemapper {
         Self::default()
     }
 
-    pub fn allocate_global(&mut self, global_layer: u32) -> u8 {
+    pub fn allocate_global(&mut self, global_layer: u32, weight: f32) -> u8 {
         if let Some(&local) = self.global_to_local.get(&global_layer) {
+            self.slot_weights[local as usize] += weight.max(0.0);
             return local;
         }
         let local = self.palette.slot_count;
         if local as usize >= CHUNK_LOCAL_SLOT_COUNT {
-            let best = self.palette.local_to_global[..self.palette.slot_count as usize]
+            let best = self.slot_weights[..self.palette.slot_count as usize]
                 .iter()
                 .enumerate()
-                .min_by_key(|(_, global)| global.abs_diff(global_layer))
+                .min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
                 .map(|(idx, _)| idx as u8)
                 .unwrap_or(0);
+            self.slot_weights[best as usize] += weight.max(0.0);
             return best;
         }
         self.palette.local_to_global[local as usize] = global_layer;
         self.palette.slot_count = local.saturating_add(1);
         self.global_to_local.insert(global_layer, local);
+        self.slot_weights[local as usize] = weight.max(0.0);
         local
     }
 

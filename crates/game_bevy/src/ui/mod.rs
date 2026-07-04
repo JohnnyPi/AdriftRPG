@@ -18,5 +18,6 @@ pub use tweaks::{
     RiverTweaks, SUN_PEAK_SCALE, TerrainMaterialTweaks, TerrainTweaks, WaterPhysicsTweaks,
     WaterTweaks, WorldTweaks, ambient_brightness_for_elevation,
     environment_intensity_for_elevation, exposure_ev_for_elevation, moon_gameplay_illuminance,
-    sun_angles_from_time_of_day, sun_color_for_elevation, sun_illuminance_for_elevation,
+    moon_phase_from_simulation_days, sun_angles_from_time_of_day, sun_color_for_elevation,
+    sun_illuminance_for_elevation,
 };

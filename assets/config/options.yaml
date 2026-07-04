@@ -7,7 +7,6 @@ panel:
 
 stubs:
   - weather
-  - day_night_cycle
   - networking
   - save_load
   - archipelago_streaming

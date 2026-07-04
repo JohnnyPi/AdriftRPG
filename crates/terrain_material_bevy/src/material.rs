@@ -1,7 +1,9 @@
 // crates/terrain_material_bevy/src/material.rs
-use bevy::pbr::Material;
+use bevy::pbr::{Material, MaterialPipeline, MaterialPipelineKey};
 use bevy::prelude::*;
-use bevy::render::render_resource::{AsBindGroup, ShaderType};
+use bevy::render::mesh::MeshVertexBufferLayoutRef;
+use bevy::render::render_resource::{AsBindGroup, RenderPipelineDescriptor, ShaderType};
+use bevy::render::render_resource::SpecializedMeshPipelineError;
 use bevy::shader::ShaderRef;
 use terrain_surface::{CHUNK_LOCAL_SLOT_COUNT, ChunkSlotPalette, UNUSED_SLOT};
 
@@ -86,12 +88,28 @@ pub struct TerrainPbrMaterial {
 }
 
 impl Material for TerrainPbrMaterial {
+    fn vertex_shader() -> ShaderRef {
+        "shaders/terrain_material.wgsl".into()
+    }
+
     fn fragment_shader() -> ShaderRef {
         "shaders/terrain_material.wgsl".into()
     }
 
     fn alpha_mode(&self) -> AlphaMode {
         AlphaMode::Opaque
+    }
+
+    fn specialize(
+        _pipeline: &MaterialPipeline,
+        descriptor: &mut RenderPipelineDescriptor,
+        _layout: &MeshVertexBufferLayoutRef,
+        _key: MaterialPipelineKey<Self>,
+    ) -> Result<(), SpecializedMeshPipelineError> {
+        // Cave interiors and overhangs expose back-facing terrain shells; default
+        // back-face culling made surface geometry vanish at certain view angles.
+        descriptor.primitive.cull_mode = None;
+        Ok(())
     }
 }
 

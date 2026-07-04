@@ -3,6 +3,7 @@
 
 use bevy::prelude::*;
 
+use crate::environment::lighting_state::SkyVisibility;
 use crate::terrain::CameraWaterState;
 use crate::ui::CameraTweaks;
 
@@ -22,17 +23,15 @@ pub struct CameraEnvironment {
 
 pub fn update_camera_environment(
     water: Res<CameraWaterState>,
-    players: Query<&Transform, With<crate::player::Player>>,
+    sky_visibility: Query<&SkyVisibility, With<crate::player::Player>>,
     mut env: ResMut<CameraEnvironment>,
     mut cameras: Query<&mut super::components::MmoCamera>,
     tweaks: Res<CameraTweaks>,
     time: Res<Time>,
 ) {
-    let in_cave = players
+    let in_cave = sky_visibility
         .single()
-        .map(|tf| {
-            tf.translation.y < 6.0 && tf.translation.distance(Vec3::new(26.0, 2.0, 12.0)) < 12.0
-        })
+        .map(|vis| vis.cave_depth > 0.35 && vis.sky < 0.45)
         .unwrap_or(false);
 
     env.state = if water.submerged_depth > 0.3 {

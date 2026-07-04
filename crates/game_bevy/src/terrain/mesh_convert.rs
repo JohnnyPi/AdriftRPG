@@ -23,7 +23,9 @@ pub fn mesh_from_terrain_data(data: TerrainMeshData, cell_size_m: f32) -> Mesh {
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, data.normals);
     let vertex_count = data.positions.len();
     if data.material_vertices.len() == vertex_count {
-        insert_terrain_material_attributes(&mut mesh, &data.material_vertices);
+        let mut material_vertices = data.material_vertices;
+        globalize_material_vertices(&mut material_vertices, &data.chunk_palette);
+        insert_terrain_material_attributes(&mut mesh, &material_vertices);
     } else {
         if !data.material_vertices.is_empty() {
             warn!(
@@ -47,6 +49,22 @@ pub fn mesh_from_terrain_data(data: TerrainMeshData, cell_size_m: f32) -> Mesh {
     mesh
 }
 
+/// Remap chunk-local layer slots to global texture-array indices in vertex data.
+pub fn globalize_material_vertices(
+    vertices: &mut [terrain_surface::MaterialVertex],
+    palette: &terrain_surface::ChunkSlotPalette,
+) {
+    if palette.slot_count() == 0 {
+        return;
+    }
+    for vertex in vertices {
+        for local in &mut vertex.local_indices {
+            if let Some(global) = palette.global_for_local(*local) {
+                *local = global.min(u8::MAX as u32) as u8;
+            }
+        }
+    }
+}
 /// Attach terrain triplanar blend channels used by `terrain_material.wgsl`.
 pub fn insert_terrain_material_attributes(
     mesh: &mut Mesh,

@@ -4,6 +4,7 @@ use bevy::prelude::*;
 
 use super::celestial::{CelestialState, UpdateCelestialSet};
 use super::fog::FogStack;
+use super::lighting_state::SyncEnvironmentLightingSet;
 use crate::data::{ConfigRegistryResource, UserSetupPrefs};
 use crate::state::AppState;
 use crate::world::requested_world_id;
@@ -40,6 +41,7 @@ impl Plugin for WeatherPlugin {
                 Update,
                 animate_weather
                     .after(UpdateCelestialSet)
+                    .before(SyncEnvironmentLightingSet)
                     .run_if(in_state(AppState::Running)),
             );
     }
