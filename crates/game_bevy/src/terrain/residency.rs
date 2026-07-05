@@ -42,8 +42,16 @@ impl Plugin for ChunkResidencyPlugin {
 
 fn update_interest_center(
     mut runtime: ResMut<TerrainWorldRuntime>,
+    pipeline: Res<crate::terrain::TerrainPipelineState>,
+    awaiting_spawn: Query<(), With<crate::physics::AwaitingSpawnTerrain>>,
     players: Query<&Transform, With<Player>>,
 ) {
+    if !awaiting_spawn.is_empty() {
+        if let Some(spawn) = pipeline.spawn_chunk {
+            runtime.interest_center = spawn;
+            return;
+        }
+    }
     let Ok(tf) = players.single() else {
         return;
     };

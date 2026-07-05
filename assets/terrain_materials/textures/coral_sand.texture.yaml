@@ -1,0 +1,20 @@
+schema_version: 1
+id: textures.coral_sand
+resolution: 512
+seed: 3102
+tileable: true
+generator:
+  Sand:
+    seed: 3102
+    ripple_scale: 5.2
+    grain_scale: 30.0
+    color_light:
+    - 0.96
+    - 0.91
+    - 0.78
+    color_dark:
+    - 0.74
+    - 0.67
+    - 0.53
+    normal_strength: 1.0
+    roughness: 0.94

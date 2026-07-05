@@ -146,7 +146,7 @@ Example app config (`assets/config/app.yaml`):
 schema_version: 1
 id: app.default
 
-world: world.island_testbed
+world: world.small
 player: player.default
 camera: camera.mmo_default
 performance: performance.default
@@ -154,8 +154,11 @@ performance: performance.default
 
 Two terrain modes exist:
 
-- **Atlas worlds** — Procedural islands via `island_gen.*` definitions (recommended for large islands).
-- **Op-based worlds** — Hand-authored terrain operation lists for smaller or bespoke layouts.
+- **Worldgen worlds** — `world.small`, `world.medium`, and `world.large` via the Milestone A compiler (recommended).
+- **Legacy atlas worlds** — Procedural islands via `island_gen.*` (deprecated for new work).
+- **Op-based worlds** — Hand-authored terrain operation lists for bespoke layouts.
+
+See [docs/world_tiers.md](docs/world_tiers.md) for the scale ladder.
 
 See the authoring guides:
 
@@ -170,7 +173,7 @@ The `terrain_tools` crate provides offline utilities:
 
 ```bash
 # Bake a procedural island atlas for faster loads
-cargo run -p terrain_tools --bin bake-atlas -- --world world.island_testbed
+cargo run -p terrain_tools --bin bake-atlas -- --world world.small
 
 # Bake procedural terrain materials
 cargo run -p terrain_tools --bin bake-materials -- --help

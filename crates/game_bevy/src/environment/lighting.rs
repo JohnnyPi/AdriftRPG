@@ -47,11 +47,7 @@ fn update_sky_visibility(
     sky_vis.sky = sky_visibility_from_cave(cave, source, player_tf.translation);
 }
 
-fn sky_visibility_from_cave(
-    cave_depth: f32,
-    source: &RecipeDensitySource,
-    position: Vec3,
-) -> f32 {
+fn sky_visibility_from_cave(cave_depth: f32, source: &RecipeDensitySource, position: Vec3) -> f32 {
     let sea = source.recipe().sea_level;
     if position.y < sea - 2.0 {
         let density = source.density_at(position.x, position.y + 2.0, position.z);

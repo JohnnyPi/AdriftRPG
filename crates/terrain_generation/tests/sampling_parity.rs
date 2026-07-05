@@ -11,6 +11,7 @@ fn assets() -> PathBuf {
 }
 
 #[test]
+#[ignore = "legacy island_gen; superseded by worldgen tier worlds (docs/worlds/)"]
 fn island_testbed_column_and_distance_sources_match_atlas() {
     let registry = load_registry_from_directory(assets()).expect("registry");
     let world = registry

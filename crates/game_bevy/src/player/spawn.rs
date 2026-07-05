@@ -78,11 +78,5 @@ pub fn spawn_player(
             .id();
     });
 
-    spawn_game_camera(
-        commands,
-        player_id,
-        follow_target_id,
-        camera,
-        spawn_focus,
-    );
+    spawn_game_camera(commands, player_id, follow_target_id, camera, spawn_focus);
 }

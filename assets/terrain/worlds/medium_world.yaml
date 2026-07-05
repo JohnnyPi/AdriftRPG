@@ -1,0 +1,63 @@
+﻿schema_version: 1
+id: world.medium
+
+seed: 48130
+
+# Milestone A world compiler (`world.medium`). 16 km span, 4× area vs small.
+
+voxel:
+  cell_size_m: 1.0
+
+chunks:
+  cells: [16, 16, 16]
+  world_extent: [1024, 52, 1024]
+  residency:
+    density_radius: 10
+    render_radius: 7
+    physics_radius: 5
+    decoration_radius: 5
+    high_detail_radius: 4
+  lod:
+    terrain:
+      - max_distance_chunks: 3
+        mesh_resolution_scale: 1.0
+        collider: full
+      - max_distance_chunks: 5
+        mesh_resolution_scale: 0.5
+        collider: simplified
+      - max_distance_chunks: 7
+        mesh_resolution_scale: 0.25
+        collider: none
+    materials:
+      render_profile: render.terrain_high
+    content:
+      vegetation_max_distance_m: 160
+      grass_lod: [25, 70, 140]
+    distant:
+      horizon_skirt: true
+      impostor_start_m: 800
+  staging:
+    prefetch_chunks_ahead: 2
+    preload_atlas: true
+    preload_material_arrays: true
+
+worldgen: world.medium
+
+terrain: terrain.island_testbed_objects
+biomes: biomes.expanded_slice
+materials: materials.expanded_slice
+material_catalog: catalogs.tropical_island
+surface: surface.expanded_slice
+water: water.tropical_shallow
+lighting: lighting.late_morning
+sky: sky.expanded_showcase
+vegetation: vegetation.vertical_slice
+weather: weather.clear
+
+ocean_extent_m: 16416.0
+coord_offset: [8192.0, 0.0, 8192.0]
+
+resolution:
+  regional_m: 128
+  local_m: 8
+  voxel_m: 1

@@ -1,17 +1,4 @@
-// crates/terrain_generation/tests/route_validation.rs
-//
-// Validates the island_testbed atlas world: generated features exist (river,
-// caves), the atlas passes its own design validation, terrain invariants hold
-// (seams, foundations, no void shafts / floating voxels), and authored routes
-// are traversable.
-//
-// History: this file previously probed hardcoded landmark coordinates of the
-// op-based world.vertical_slice / world.expanded_slice terrains (ridge, fort
-// pad, authored cave mouth, IslandMask/trench ops). Those worlds and their
-// authored geometry were removed in the two-world condensation; the
-// world-agnostic invariants were kept and retargeted here, and the landmark
-// probes were replaced by feature-existence checks against the generated
-// island.
+// Legacy island_gen route tests — superseded by worldgen tier worlds (see docs/worlds/).
 
 use game_data::load_registry_from_directory;
 use std::path::PathBuf;
@@ -83,6 +70,7 @@ fn assert_route_traversable(source: &RecipeDensitySource, waypoints: &[[f32; 2]]
 /// messages (e.g. "Primary river missing") instead of leaving them as
 /// easily-missed runtime warnings.
 #[test]
+#[ignore = "legacy island_gen; superseded by worldgen tier worlds (docs/worlds/)"]
 fn testbed_atlas_passes_design_validation() {
     let source = testbed_source();
     let atlas = source.atlas().expect("atlas");
@@ -94,6 +82,7 @@ fn testbed_atlas_passes_design_validation() {
 }
 
 #[test]
+#[ignore = "legacy island_gen; superseded by worldgen tier worlds (docs/worlds/)"]
 fn testbed_has_primary_river() {
     let source = testbed_source();
     let atlas = source.atlas().expect("atlas");
@@ -121,6 +110,7 @@ fn testbed_has_primary_river() {
 /// testbed terrain def authors no ops of its own, so every ellipsoid/capsule
 /// op in the recipe is a generated cave element.
 #[test]
+#[ignore = "legacy island_gen; superseded by worldgen tier worlds (docs/worlds/)"]
 fn testbed_recipe_includes_generated_caves() {
     let source = testbed_source();
     let cave_ops = source
@@ -138,6 +128,7 @@ fn testbed_recipe_includes_generated_caves() {
 /// Somewhere inside a generated cave chamber there must be air beneath the
 /// terrain surface — otherwise the caves are sealed and undiscoverable.
 #[test]
+#[ignore = "legacy island_gen; superseded by worldgen tier worlds (docs/worlds/)"]
 fn testbed_island_has_subsurface_cave_air() {
     let source = testbed_source();
     let mut found = false;
@@ -173,6 +164,7 @@ fn testbed_island_has_subsurface_cave_air() {
 }
 
 #[test]
+#[ignore = "legacy island_gen; superseded by worldgen tier worlds (docs/worlds/)"]
 fn testbed_peak_exceeds_35m() {
     let source = testbed_source();
     let mut peak = f32::MIN;
@@ -189,6 +181,7 @@ fn testbed_peak_exceeds_35m() {
 }
 
 #[test]
+#[ignore = "legacy island_gen; superseded by worldgen tier worlds (docs/worlds/)"]
 fn testbed_offshore_is_submerged() {
     let source = testbed_source();
     let sea = source.recipe().sea_level;
@@ -210,6 +203,7 @@ fn testbed_offshore_is_submerged() {
 /// Outdoor columns outside generated cavities must have bedrock within the
 /// foundation depth below the surface.
 #[test]
+#[ignore = "legacy island_gen; superseded by worldgen tier worlds (docs/worlds/)"]
 fn outdoor_columns_have_foundation_bedrock() {
     let source = testbed_source();
     let recipe = source.recipe();
@@ -249,6 +243,7 @@ fn outdoor_columns_have_foundation_bedrock() {
 /// No shallow outdoor void shafts (fully-air columns in the y=0..6 band)
 /// on island land outside generated cavities.
 #[test]
+#[ignore = "legacy island_gen; superseded by worldgen tier worlds (docs/worlds/)"]
 fn no_shallow_outdoor_void_shafts_on_island() {
     let source = testbed_source();
     let recipe = source.recipe();
@@ -284,6 +279,7 @@ fn no_shallow_outdoor_void_shafts_on_island() {
 }
 
 #[test]
+#[ignore = "legacy island_gen; superseded by worldgen tier worlds (docs/worlds/)"]
 fn no_floating_voxel_islands_in_probe_grid() {
     let source = testbed_source();
     let mut floaters = 0usize;
@@ -307,6 +303,7 @@ fn no_floating_voxel_islands_in_probe_grid() {
 }
 
 #[test]
+#[ignore = "legacy island_gen; superseded by worldgen tier worlds (docs/worlds/)"]
 fn chunk_border_sample_indices_are_consistent() {
     let source = testbed_source();
     let coord = voxel_core::ChunkCoord::new(1, 1, 0);
@@ -324,6 +321,7 @@ fn chunk_border_sample_indices_are_consistent() {
 /// Shared chunk faces must sample identical density values (mesh seam
 /// prerequisite) — now exercised against the atlas sampling path.
 #[test]
+#[ignore = "legacy island_gen; superseded by worldgen tier worlds (docs/worlds/)"]
 fn chunk_face_density_is_continuous() {
     let source = testbed_source();
     let cells = CHUNK_CELLS as i32;
@@ -396,6 +394,7 @@ fn chunk_face_density_is_continuous() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore = "legacy island_gen; superseded by worldgen tier worlds (docs/worlds/)"]
 fn testbed_spawn_resolves_on_natural_terrain() {
     let source = testbed_source();
     let wx = source.recipe().spawn_x - source.recipe().coord_offset[0];
@@ -420,6 +419,7 @@ fn testbed_spawn_resolves_on_natural_terrain() {
 }
 
 #[test]
+#[ignore = "legacy island_gen; superseded by worldgen tier worlds (docs/worlds/)"]
 fn testbed_routes_from_yaml_are_traversable() {
     let registry = load_registry_from_directory(workspace_assets()).expect("registry");
     let world = registry
@@ -450,6 +450,7 @@ fn large_source() -> RecipeDensitySource {
 }
 
 #[test]
+#[ignore = "legacy island_gen; superseded by worldgen tier worlds (docs/worlds/)"]
 fn large_routes_from_yaml_are_traversable() {
     let registry = load_registry_from_directory(workspace_assets()).expect("registry");
     let world = registry

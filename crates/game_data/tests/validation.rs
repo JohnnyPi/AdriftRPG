@@ -115,7 +115,7 @@ controls:
 #[test]
 fn workspace_registry_resolves_active_profiles() {
     let registry = load_registry_from_directory(workspace_assets()).expect("registry");
-    assert_eq!(registry.active_world().expect("world").seed, 48129);
+    assert_eq!(registry.active_world().expect("world").seed, 4815162342);
     assert_eq!(
         registry.active_player().expect("player").walk_speed_mps,
         4.8
@@ -249,20 +249,34 @@ gates: []
 }
 
 #[test]
-fn island_worlds_load_with_scale_appropriate_biomes() {
+fn tier_worlds_load_with_worldgen_and_shared_biomes() {
     let registry = load_registry_from_directory(workspace_assets()).expect("registry");
-    let testbed = registry
-        .world_by_id(&shared::StableId::new("world.island_testbed"))
-        .expect("testbed");
+    let small = registry
+        .world_by_id(&shared::StableId::new("world.small"))
+        .expect("small");
+    let medium = registry
+        .world_by_id(&shared::StableId::new("world.medium"))
+        .expect("medium");
     let large = registry
-        .world_by_id(&shared::StableId::new("world.island_large"))
+        .world_by_id(&shared::StableId::new("world.large"))
         .expect("large");
-    assert_eq!(testbed.biomes.as_str(), "biomes.expanded_slice");
-    assert_eq!(large.biomes.as_str(), "biomes.island_large");
-    assert_eq!(large.surface.as_str(), "surface.island_large");
-    assert!(testbed.island_gen.is_some());
-    assert!(large.island_gen.is_some());
-    assert!(!testbed.hydrology_bodies.is_empty());
+    assert_eq!(small.biomes.as_str(), "biomes.expanded_slice");
+    assert_eq!(medium.biomes.as_str(), "biomes.expanded_slice");
+    assert_eq!(large.biomes.as_str(), "biomes.expanded_slice");
+    assert_eq!(
+        small.worldgen.as_ref().map(|id| id.as_str()),
+        Some("world.small")
+    );
+    assert_eq!(
+        medium.worldgen.as_ref().map(|id| id.as_str()),
+        Some("world.medium")
+    );
+    assert_eq!(
+        large.worldgen.as_ref().map(|id| id.as_str()),
+        Some("world.large")
+    );
+    assert!(small.island_gen.is_none());
+    assert!(!small.hydrology_bodies.is_empty());
 }
 
 #[test]
@@ -330,6 +344,7 @@ fn rejects_non_standard_chunk_cells() {
         ocean_extent_m: None,
         coord_offset: None,
         island_gen: None,
+        worldgen: None,
         resolution: None,
         island_atlas_baked: None,
         hydrology_bodies: Vec::new(),
@@ -346,15 +361,25 @@ fn expanded_slice_materials_v2_loads_with_layer_order() {
         .materials
         .get(&shared::StableId::new("materials.expanded_slice"))
         .expect("expanded slice materials");
-    assert!(materials.layer_order.len() >= 9);
+    assert_eq!(materials.layer_order.len(), 8);
     assert!(
         materials
-            .layer_for_key(&shared::StableId::new("flowstone"))
+            .layer_for_key(&shared::StableId::new("scree"))
+            .is_some()
+    );
+    assert!(
+        materials
+            .layer_for_key(&shared::StableId::new("weathered_cliff"))
             .is_some()
     );
     assert!(
         materials
             .layer_for_key(&shared::StableId::new("limestone"))
+            .is_some()
+    );
+    assert!(
+        materials
+            .layer_for_key(&shared::StableId::new("volcanic_ash"))
             .is_some()
     );
 }

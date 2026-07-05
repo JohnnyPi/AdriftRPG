@@ -1,0 +1,12 @@
+﻿schema_version: 1
+id: validation.large
+land_fraction_min: 0.02
+land_fraction_max: 0.35
+min_peak_elevation_m: 1130
+max_peak_elevation_m: 7070
+river_ocean_connection_ratio_min: 0.85
+max_disconnected_river_fraction: 0.05
+min_permanent_river_length_m: 1414
+min_cave_systems: 2
+min_traversable_cave_systems: 1
+max_cave_mouth_breaches: 6

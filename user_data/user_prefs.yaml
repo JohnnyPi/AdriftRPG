@@ -1,4 +1,4 @@
-world_id: world.island_testbed
+world_id: world.large
 seed: 48129
 island_overrides: {}
 preview_color_mode: elevation

@@ -1,0 +1,21 @@
+﻿schema_version: 1
+id: island.volcanic_medium
+placement:
+  type: single_centered
+  age_myr: 2.5
+  uplift: 1.0
+  volcanic_activity: 0.9
+  footprint:
+    type: warped_ellipse
+    major_radius_m: 5600
+    minor_radius_m: 4200
+    rotation_deg: 18
+    warp_amplitude_m: 900
+    warp_wavelength_m: 5600
+  volcano:
+    peak_height_m: 2400
+    shield_radius_m: 7000
+    caldera_radius_m: 900
+    caldera_depth_m: 180
+    secondary_vents: 2
+    ridge_count: 3

@@ -1,0 +1,25 @@
+﻿schema_version: 1
+id: surfaces.basalt
+texture: textures.basalt
+tags:
+  - rock
+  - volcanic
+  - hard
+rendering:
+  projection: triplanar
+  meters_per_repeat: 3.5
+  triplanar_sharpness: 5.0
+  normal_strength: 1.15
+  height_blend_strength: 0.32
+  macro_variation:
+    enabled: true
+    scale_m: 42.0
+    color_strength: 0.10
+    roughness_strength: 0.07
+responses:
+  wetness:
+    darkening: 0.28
+    roughness_reduction: 0.32
+    normal_flattening: 0.06
+  moss:
+    affinity: 0.35

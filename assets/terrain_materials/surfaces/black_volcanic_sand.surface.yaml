@@ -1,0 +1,14 @@
+﻿schema_version: 1
+id: surfaces.black_volcanic_sand
+texture: textures.black_volcanic_sand
+tags:
+  - sand
+  - volcanic
+rendering:
+  projection: triplanar
+  meters_per_repeat: 1.5
+  normal_strength: 0.75
+responses:
+  wetness:
+    darkening: 0.20
+    roughness_reduction: 0.18

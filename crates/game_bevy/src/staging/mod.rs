@@ -129,7 +129,7 @@ fn update_staging_queue(
     queue.enqueued_this_frame = 0;
     let center = runtime.interest_center;
 
-    if policy.preload_atlas && pipeline.density_source.is_none() {
+    if policy.preload_atlas && !pipeline_density_ready(&pipeline) {
         queue.enqueue(StagingJob {
             priority: StagingPriority::Critical,
             kind: StagingJobKind::AtlasLoad,
@@ -232,7 +232,7 @@ fn update_staging_gate(
 ) {
     let mut waiting = Vec::new();
 
-    if pipeline.density_source.is_none() {
+    if !pipeline_density_ready(&pipeline) {
         waiting.push("atlas".into());
     }
 
@@ -244,10 +244,14 @@ fn update_staging_gate(
         if !spawn_terrain_collider_ready(&pipeline, spawn, &colliders) {
             waiting.push("spawn_collider".into());
         }
-    } else if pipeline.density_source.is_some() {
+    } else if pipeline_density_ready(&pipeline) {
         waiting.push("spawn_chunk".into());
     }
 
     gate.waiting_for = waiting;
     gate.spawn_allowed = gate.waiting_for.is_empty();
+}
+
+fn pipeline_density_ready(pipeline: &TerrainPipelineState) -> bool {
+    pipeline.density_source.is_some() || pipeline.world_density_provider.is_some()
 }

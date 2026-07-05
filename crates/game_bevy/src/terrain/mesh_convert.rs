@@ -160,18 +160,9 @@ mod tests {
             VertexAttributeValues::Float32x4(values) => values.clone(),
             other => panic!("unexpected tangents format: {other:?}"),
         };
-        assert_eq!(
-            colors,
-            vec![
-                [0.5, 0.3, 0.15, 0.05],
-                [0.1, 0.2, 0.3, 0.4],
-            ]
-        );
+        assert_eq!(colors, vec![[0.5, 0.3, 0.15, 0.05], [0.1, 0.2, 0.3, 0.4],]);
         assert_eq!(uv0, vec![[1.0, 2.0], [0.0, 1.0]]);
         assert_eq!(uv1, vec![[3.0, 0.0], [2.0, 3.0]]);
-        assert_eq!(
-            tangents,
-            vec![[0.8, 0.7, 0.6, 0.25], [0.1, 0.2, 0.3, 0.9]]
-        );
+        assert_eq!(tangents, vec![[0.8, 0.7, 0.6, 0.25], [0.1, 0.2, 0.3, 0.9]]);
     }
 }

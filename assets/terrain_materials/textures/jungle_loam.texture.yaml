@@ -1,0 +1,23 @@
+schema_version: 1
+id: textures.jungle_loam
+resolution: 512
+seed: 2112
+tileable: true
+generator:
+  Ground:
+    seed: 2112
+    macro_scale: 2.4
+    macro_octaves: 5
+    micro_scale: 15.0
+    micro_octaves: 5
+    micro_weight: 0.5
+    color_dry:
+    - 0.27
+    - 0.22
+    - 0.12
+    color_moist:
+    - 0.09
+    - 0.14
+    - 0.07
+    normal_strength: 1.95
+    roughness: 0.96

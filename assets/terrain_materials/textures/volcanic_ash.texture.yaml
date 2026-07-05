@@ -1,0 +1,23 @@
+schema_version: 1
+id: textures.volcanic_ash
+resolution: 512
+seed: 2109
+tileable: true
+generator:
+  Ground:
+    seed: 2109
+    macro_scale: 2.0
+    macro_octaves: 5
+    micro_scale: 15.0
+    micro_octaves: 5
+    micro_weight: 0.47
+    color_dry:
+    - 0.24
+    - 0.23
+    - 0.23
+    color_moist:
+    - 0.09
+    - 0.09
+    - 0.1
+    normal_strength: 1.55
+    roughness: 0.97

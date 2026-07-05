@@ -1,8 +1,10 @@
 // crates/game_bevy/src/ui/options_panel.rs
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 
 use crate::data::ConfigRegistryResource;
+use crate::data::{UserSetupPrefs, save_user_prefs};
 use crate::environment::SimulationTime;
 use crate::environment::celestial::CelestialState;
 use crate::environment::lighting_state::{
@@ -15,6 +17,7 @@ use super::tweaks::{
     RiverTweaks, TerrainMaterialTweaks, TerrainTweaks, WaterPhysicsTweaks, WaterTweaks,
     WorldTweaks,
 };
+use super::world_select::draw_world_profile_combo;
 
 #[derive(Resource, Clone, Debug)]
 pub struct OptionsPanelState {
@@ -157,25 +160,29 @@ fn toggle_options_panel(
     }
 }
 
-fn draw_options_panel(
-    mut contexts: EguiContexts,
-    mut panel: ResMut<OptionsPanelState>,
-    mut lighting: ResMut<LightingTweaks>,
-    mut movement: ResMut<MovementTweaks>,
-    mut physics: ResMut<PhysicsTweaks>,
-    mut world: ResMut<WorldTweaks>,
-    mut terrain: ResMut<TerrainTweaks>,
-    mut water: ResMut<WaterTweaks>,
-    mut river: ResMut<RiverTweaks>,
-    mut atmosphere: ResMut<AtmosphereTweaks>,
-    mut camera: ResMut<CameraTweaks>,
-    mut water_physics: ResMut<WaterPhysicsTweaks>,
-    mut ecology: ResMut<EcologyTweaks>,
-    mut sim_time: ResMut<SimulationTime>,
-    mut lighting_state: ResMut<EnvironmentLightingState>,
-    celestial: Option<Res<CelestialState>>,
-) {
-    if !panel.open {
+#[derive(SystemParam)]
+struct OptionsPanelDrawParams<'w> {
+    registry: Res<'w, ConfigRegistryResource>,
+    prefs: ResMut<'w, UserSetupPrefs>,
+    panel: ResMut<'w, OptionsPanelState>,
+    lighting: ResMut<'w, LightingTweaks>,
+    movement: ResMut<'w, MovementTweaks>,
+    physics: ResMut<'w, PhysicsTweaks>,
+    world: ResMut<'w, WorldTweaks>,
+    terrain: ResMut<'w, TerrainTweaks>,
+    water: ResMut<'w, WaterTweaks>,
+    river: ResMut<'w, RiverTweaks>,
+    atmosphere: ResMut<'w, AtmosphereTweaks>,
+    camera: ResMut<'w, CameraTweaks>,
+    water_physics: ResMut<'w, WaterPhysicsTweaks>,
+    ecology: ResMut<'w, EcologyTweaks>,
+    sim_time: ResMut<'w, SimulationTime>,
+    lighting_state: ResMut<'w, EnvironmentLightingState>,
+    celestial: Option<Res<'w, CelestialState>>,
+}
+
+fn draw_options_panel(mut contexts: EguiContexts, mut params: OptionsPanelDrawParams) {
+    if !params.panel.open {
         return;
     }
 
@@ -188,30 +195,49 @@ fn draw_options_panel(
         .resizable(true)
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
-                tab_button(ui, &mut panel.tab, OptionsTab::Atmosphere, "Atmosphere");
-                tab_button(ui, &mut panel.tab, OptionsTab::World, "World");
-                tab_button(ui, &mut panel.tab, OptionsTab::Movement, "Movement");
-                tab_button(ui, &mut panel.tab, OptionsTab::Physics, "Physics");
-                tab_button(ui, &mut panel.tab, OptionsTab::Water, "Water");
-                tab_button(ui, &mut panel.tab, OptionsTab::Debug, "Debug");
+                tab_button(
+                    ui,
+                    &mut params.panel.tab,
+                    OptionsTab::Atmosphere,
+                    "Atmosphere",
+                );
+                tab_button(ui, &mut params.panel.tab, OptionsTab::World, "World");
+                tab_button(ui, &mut params.panel.tab, OptionsTab::Movement, "Movement");
+                tab_button(ui, &mut params.panel.tab, OptionsTab::Physics, "Physics");
+                tab_button(ui, &mut params.panel.tab, OptionsTab::Water, "Water");
+                tab_button(ui, &mut params.panel.tab, OptionsTab::Debug, "Debug");
             });
             ui.separator();
 
-            match panel.tab {
-                OptionsTab::Atmosphere => {
-                    draw_atmosphere_tab(ui, &mut lighting, &mut atmosphere, &mut lighting_state)
-                }
-                OptionsTab::World => draw_world_tab(ui, &mut world, &mut terrain),
-                OptionsTab::Movement => draw_movement_tab(ui, &mut movement),
-                OptionsTab::Physics => draw_physics_tab(ui, &mut physics),
-                OptionsTab::Water => draw_water_tab(ui, &mut water, &mut river, &mut water_physics),
+            match params.panel.tab {
+                OptionsTab::Atmosphere => draw_atmosphere_tab(
+                    ui,
+                    &mut params.lighting,
+                    &mut params.atmosphere,
+                    &mut params.lighting_state,
+                ),
+                OptionsTab::World => draw_world_tab(
+                    ui,
+                    &params.registry,
+                    &mut params.prefs,
+                    &mut params.world,
+                    &mut params.terrain,
+                ),
+                OptionsTab::Movement => draw_movement_tab(ui, &mut params.movement),
+                OptionsTab::Physics => draw_physics_tab(ui, &mut params.physics),
+                OptionsTab::Water => draw_water_tab(
+                    ui,
+                    &mut params.water,
+                    &mut params.river,
+                    &mut params.water_physics,
+                ),
                 OptionsTab::Debug => draw_debug_tab(
                     ui,
-                    &mut camera,
-                    &mut ecology,
-                    &mut sim_time,
-                    &mut lighting_state,
-                    celestial.as_deref(),
+                    &mut params.camera,
+                    &mut params.ecology,
+                    &mut params.sim_time,
+                    &mut params.lighting_state,
+                    params.celestial.as_deref(),
                 ),
             }
 
@@ -263,20 +289,38 @@ fn draw_atmosphere_tab(
     );
     ui.add_enabled(
         lighting_state.override_sun_angles,
-        egui::Slider::new(&mut lighting_state.override_sun_azimuth_deg, 0.0..=360.0).text("azimuth"),
+        egui::Slider::new(&mut lighting_state.override_sun_azimuth_deg, 0.0..=360.0)
+            .text("azimuth"),
     );
     ui.add_enabled(
         lighting_state.override_sun_angles,
         egui::Slider::new(&mut lighting_state.override_sun_elevation_deg, -10.0..=85.0)
             .text("elevation"),
     );
-    ui.add(
-        egui::Slider::new(&mut atmosphere.height_fog_density, 0.0..=0.1).text("height fog"),
-    );
+    ui.add(egui::Slider::new(&mut atmosphere.height_fog_density, 0.0..=0.1).text("height fog"));
 }
 
-fn draw_world_tab(ui: &mut egui::Ui, world: &mut WorldTweaks, terrain: &mut TerrainTweaks) {
-    ui.label("World profile is selected on the Setup screen (main menu).");
+fn draw_world_tab(
+    ui: &mut egui::Ui,
+    registry: &ConfigRegistryResource,
+    prefs: &mut UserSetupPrefs,
+    world: &mut WorldTweaks,
+    terrain: &mut TerrainTweaks,
+) {
+    ui.heading("World profile");
+    if draw_world_profile_combo(ui, &registry.0, &mut prefs.world_id) {
+        let _ = save_user_prefs(prefs);
+    }
+    if let Ok(profile) = registry.0.world_by_id(&prefs.world_stable_id()) {
+        if let Some(worldgen) = profile.worldgen.as_ref() {
+            ui.label(format!(
+                "Terrain source: Milestone A worldgen ({})",
+                worldgen.as_str()
+            ));
+        } else if profile.island_gen.is_some() {
+            ui.label("Terrain source: runtime procedural island_gen atlas");
+        }
+    }
 
     ui.separator();
     ui.heading("Chunk residency");

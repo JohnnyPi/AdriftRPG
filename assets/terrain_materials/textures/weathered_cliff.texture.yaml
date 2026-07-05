@@ -1,0 +1,22 @@
+schema_version: 1
+id: textures.weathered_cliff
+resolution: 512
+seed: 1108
+tileable: true
+generator:
+  Rock:
+    seed: 1108
+    scale: 2.7
+    octaves: 7
+    attenuation: 2.15
+    color_light:
+    - 0.48
+    - 0.42
+    - 0.34
+    color_dark:
+    - 0.16
+    - 0.14
+    - 0.12
+    normal_strength: 4.25
+    roughness: 0.93
+    metallic: 0.0

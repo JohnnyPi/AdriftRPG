@@ -75,8 +75,7 @@ fn reload_terrain_materials(
     pending.task = None;
 
     if let Some(recipes) = override_recipes.recipes.as_ref() {
-        proc_state.recipe_fingerprint =
-            terrain_material_bevy::recipe_fingerprint_for(recipes);
+        proc_state.recipe_fingerprint = terrain_material_bevy::recipe_fingerprint_for(recipes);
         return;
     }
 
@@ -87,7 +86,10 @@ fn reload_terrain_materials(
         return;
     };
     let Ok(text) = std::fs::read_to_string(path) else {
-        warn!("terrain material hot reload: failed to read {}", path.display());
+        warn!(
+            "terrain material hot reload: failed to read {}",
+            path.display()
+        );
         return;
     };
     let text = procedural_textures::strip_utf8_bom(&text);

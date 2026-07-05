@@ -124,9 +124,10 @@ fn start_texture_bake(
                 layer_order.len()
             );
         } else {
-            pending.task = Some(AsyncComputeTaskPool::get().spawn(async move {
-                (cached, fingerprint, recipes, layer_order)
-            }));
+            pending.task = Some(
+                AsyncComputeTaskPool::get()
+                    .spawn(async move { (cached, fingerprint, recipes, layer_order) }),
+            );
             return;
         }
     }

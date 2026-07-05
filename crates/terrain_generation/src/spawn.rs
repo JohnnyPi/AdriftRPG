@@ -1,6 +1,8 @@
 // crates/terrain_generation/src/spawn.rs
 //! Player spawn resolution and object placement against terrain-only density.
 
+use crate::contract::coordinates::{WorldPosition, WorldXZ};
+use crate::contract::density::WorldDensityProvider;
 use crate::recipe::RecipeDensitySource;
 
 /// Default vertical clearance required above a terrain floor for player spawn.
@@ -232,6 +234,110 @@ impl RecipeDensitySource {
         }
         Some(center_y)
     }
+}
+
+/// Resolve player spawn using a compiled-world density provider.
+pub fn resolve_spawn_from_provider(
+    provider: &dyn WorldDensityProvider,
+    start_x_m: f32,
+    start_z_m: f32,
+    min_clearance: f32,
+    search_radius_m: f32,
+) -> (f32, f32, f32, SpawnValidationReport) {
+    let sea_level = provider.world_metadata().extent.sea_level_m;
+    let mut report = SpawnValidationReport {
+        foot_x: start_x_m,
+        foot_y: sea_level,
+        foot_z: start_z_m,
+        ..Default::default()
+    };
+
+    if let Some((x, y, z, local)) =
+        find_valid_spawn_near_provider(provider, start_x_m, start_z_m, min_clearance, 0.0)
+    {
+        report.passed = true;
+        report.foot_x = x;
+        report.foot_y = y;
+        report.foot_z = z;
+        report.messages = local.messages;
+        return (x, y + SPAWN_FLOOR_EPSILON_M, z, report);
+    }
+
+    let mut best: Option<(f32, f32, f32, f32)> = None;
+    let step = 4.0f32;
+    let mut radius = step;
+    while radius <= search_radius_m {
+        for (cx, cz) in ring_samples(start_x_m, start_z_m, radius, step) {
+            if let Some((x, y, z, local)) =
+                find_valid_spawn_near_provider(provider, cx, cz, min_clearance, radius)
+            {
+                if local.passed {
+                    let dist = ((x - start_x_m).powi(2) + (z - start_z_m).powi(2)).sqrt();
+                    match best {
+                        None => best = Some((dist, x, y, z)),
+                        Some((best_dist, ..)) if dist < best_dist => best = Some((dist, x, y, z)),
+                        _ => {}
+                    }
+                }
+            }
+        }
+        radius += step;
+    }
+
+    if let Some((_dist, x, y, z)) = best {
+        report.passed = true;
+        report.foot_x = x;
+        report.foot_y = y;
+        report.foot_z = z;
+        report.messages.push(format!(
+            "Spawn relocated to terrain near search point ({x:.1}, {y:.1}, {z:.1})"
+        ));
+        return (x, y + SPAWN_FLOOR_EPSILON_M, z, report);
+    }
+
+    report.passed = false;
+    report.messages.push(
+        "No valid terrain spawn within search radius (need walkable ground with clearance)".into(),
+    );
+    let fallback_y = sea_level + min_clearance + 2.0;
+    (start_x_m, fallback_y, start_z_m, report)
+}
+
+fn find_valid_spawn_near_provider(
+    provider: &dyn WorldDensityProvider,
+    world_x_m: f32,
+    world_z_m: f32,
+    min_clearance: f32,
+    search_radius_m: f32,
+) -> Option<(f32, f32, f32, SpawnValidationReport)> {
+    let horizontal = WorldXZ::new(world_x_m as f64, world_z_m as f64);
+    let surface = provider.sample_surface(horizontal);
+    if surface.land_mask < 0.25 {
+        return None;
+    }
+    if surface.slope > 35.0 {
+        return None;
+    }
+    let floor = surface.elevation_m;
+    let head_y = floor + min_clearance;
+    let head_density = provider.sample_density(WorldPosition::new(
+        world_x_m as f64,
+        head_y as f64,
+        world_z_m as f64,
+    ));
+    if head_density <= 0.0 {
+        return None;
+    }
+    let report = SpawnValidationReport {
+        passed: true,
+        foot_x: world_x_m,
+        foot_y: floor,
+        foot_z: world_z_m,
+        messages: vec![format!(
+            "Resolved within {search_radius_m:.0} m of search point"
+        )],
+    };
+    Some((world_x_m, floor, world_z_m, report))
 }
 
 fn ring_samples(cx: f32, cz: f32, radius: f32, step: f32) -> Vec<(f32, f32)> {

@@ -64,7 +64,11 @@ impl CobblestoneGenerator {
             for x in 0..w {
                 let u = x as f32 / w as f32;
                 let v = y as f32 / h as f32;
-                let (cell_u, cell_v, cell_id) = worley_cell(u * self.config.scale, v * self.config.scale, self.config.seed);
+                let (cell_u, cell_v, cell_id) = worley_cell(
+                    u * self.config.scale,
+                    v * self.config.scale,
+                    self.config.seed,
+                );
                 let edge = (cell_u - 0.5).abs().max((cell_v - 0.5).abs()) * 2.0;
                 let mortar = smoothstep(0.72, 0.92, edge);
                 let pebble = noise.fbm(

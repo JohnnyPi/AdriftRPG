@@ -9,38 +9,38 @@ classifiers:
   - id: coast
     blend:
       - { material: sand, weight: 0.70 }
-      - { material: wet_rock, weight: 0.20 }
-      - { material: rock, weight: 0.35 }
-      - { material: grass, weight: 0.50 }
+      - { material: weathered_cliff, weight: 0.30 }
+      - { material: rock, weight: 0.20 }
+      - { material: grass, weight: 0.35 }
   - id: river
     blend:
-      - { material: sand, weight: 0.45 }
-      - { material: wet_rock, weight: 0.55 }
+      - { material: sand, weight: 0.50 }
+      - { material: forest_floor, weight: 0.35 }
       - { material: grass, weight: 0.30 }
-      - { material: forest_floor, weight: 0.20 }
+      - { material: rock, weight: 0.15 }
   - id: cliff
     blend:
-      - { material: rock, weight: 0.70 }
-      - { material: rock, weight: 0.30 }
-      - { material: forest_floor, weight: 0.25 }
-      - { material: grass, weight: 0.10 }
+      - { material: rock, weight: 0.55 }
+      - { material: scree, weight: 0.35 }
+      - { material: weathered_cliff, weight: 0.30 }
+      - { material: forest_floor, weight: 0.15 }
   - id: land_forest
     blend:
       - { material: forest_floor, weight: 0.55 }
       - { material: forest_floor, weight: 0.30 }
       - { material: grass, weight: 0.25 }
-      - { material: wet_rock, weight: 0.15 }
+      - { material: rock, weight: 0.10 }
   - id: land_scrub
     blend:
       - { material: grass, weight: 0.40 }
-      - { material: rock, weight: 0.35 }
-      - { material: forest_floor, weight: 0.20 }
+      - { material: volcanic_ash, weight: 0.30 }
+      - { material: rock, weight: 0.25 }
       - { material: sand, weight: 0.10 }
   - id: land_alpine_rock
     blend:
-      - { material: rock, weight: 0.65 }
-      - { material: rock, weight: 0.25 }
-      - { material: wet_rock, weight: 0.20 }
+      - { material: scree, weight: 0.55 }
+      - { material: rock, weight: 0.45 }
+      - { material: volcanic_ash, weight: 0.25 }
       - { material: grass, weight: 0.05 }
   - id: land_default
     weighted_mix:
@@ -58,16 +58,16 @@ classifiers:
       - { material: rock, weight: 0.20 }
   - id: land_alpine
     blend:
-      - { material: rock, weight: 0.50 }
+      - { material: scree, weight: 0.50 }
       - { material: rock, weight: 0.35 }
-      - { material: forest_floor, weight: 0.20 }
+      - { material: volcanic_ash, weight: 0.25 }
       - { material: grass, weight: 0.10 }
   - id: land_wetland
     blend:
-      - { material: wet_rock, weight: 0.55 }
-      - { material: forest_floor, weight: 0.25 }
-      - { material: sand, weight: 0.20 }
-      - { material: grass, weight: 0.15 }
+      - { material: forest_floor, weight: 0.55 }
+      - { material: sand, weight: 0.25 }
+      - { material: grass, weight: 0.20 }
+      - { material: rock, weight: 0.15 }
 
 gates:
   - id: cave
@@ -75,32 +75,31 @@ gates:
     when:
       cave_exposure_min: 0.55
     blend:
-      - { material: cave_stone, weight: 0.55 }
-      - { material: flowstone, weight: 0.25 }
+      - { material: rock, weight: 0.55 }
+      - { material: limestone, weight: 0.35 }
       - { material: forest_floor, weight: 0.10 }
-      - { material: limestone, weight: 0.10 }
 
   - id: underwater
     exclusive: true
     when:
       water_depth_min: 0.05
     blend:
-      - { material: wet_rock, weight: 1.0 }
+      - { material: rock, weight: 1.0 }
 
   - id: coast
     when:
-      coast_distance_max: 342.0
-      elevation_above_sea_max: 43.0
+      coast_distance_max: 684.0
+      elevation_above_sea_max: 6.0
     gate_weight:
-      coast_distance: { from: 171.0, to: 342.0, invert: true }
-      elevation_above_sea: { from: 11.0, to: 43.0, invert: true }
+      coast_distance: { from: 342.0, to: 684.0, invert: true }
+      elevation_above_sea: { from: 1.5, to: 6.0, invert: true }
     classifier: coast
 
   - id: river
     when:
-      river_distance_max: 110.0
+      river_distance_max: 220.0
     gate_weight:
-      river_distance: { from: 24.0, to: 110.0, invert: true }
+      river_distance: { from: 49.0, to: 220.0, invert: true }
     classifier: river
 
   - id: cliff

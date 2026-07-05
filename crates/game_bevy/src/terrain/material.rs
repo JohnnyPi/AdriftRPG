@@ -18,8 +18,8 @@ use crate::data::ConfigRegistryResource;
 use crate::data::UserSetupPrefs;
 use crate::lod::{LodPolicy, render_lod_tier_for_distance};
 use crate::state::AppState;
-use crate::terrain::TerrainWorldRuntime;
 use crate::terrain::TerrainChunkEntity;
+use crate::terrain::TerrainWorldRuntime;
 use crate::ui::TerrainMaterialTweaks;
 use crate::world::requested_world_id;
 
@@ -161,7 +161,10 @@ fn sync_catalog_material_defaults(
         return;
     }
     *last_hash = Some(hash);
-    let Ok(world) = registry.0.effective_world(Some(&requested_world_id(&prefs))) else {
+    let Ok(world) = registry
+        .0
+        .effective_world(Some(&requested_world_id(&prefs)))
+    else {
         return;
     };
     let Some(render_profile) = registry
@@ -499,6 +502,8 @@ mod tests {
         assert!(recipes.iter().any(|recipe| recipe.normal_strength > 0.0));
         let keys: Vec<_> = recipes.iter().map(|r| r.id.as_str()).collect();
         assert!(keys.contains(&"grass"));
-        assert!(keys.contains(&"flowstone"));
+        assert!(keys.contains(&"rock"));
+        assert!(keys.contains(&"scree"));
+        assert!(keys.contains(&"weathered_cliff"));
     }
 }

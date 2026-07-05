@@ -177,10 +177,14 @@ fn strip_utf8_bom(text: &str) -> &str {
 }
 
 /// Procedural PBR recipe files use a separate schema and are loaded by `terrain_material_bevy`.
+/// Worldgen recipe files are loaded by `game_data::worldgen::load_worldgen_bundle`.
 fn should_skip_config_file(path: &Path) -> bool {
     path.components().any(|component| {
         let s = component.as_os_str();
-        s == "procedural" || s == "baked" || s.to_string_lossy().ends_with(".atlas")
+        s == "procedural"
+            || s == "baked"
+            || s == "worldgen"
+            || s.to_string_lossy().ends_with(".atlas")
     })
 }
 

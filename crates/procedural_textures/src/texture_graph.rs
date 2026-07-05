@@ -254,9 +254,7 @@ fn node_dependencies(node: &GraphNodeDefinition) -> Vec<String> {
         | GraphNodeDefinition::ColorRamp { input, .. }
         | GraphNodeDefinition::Cavity { input, .. } => vec![input.clone()],
         GraphNodeDefinition::DomainWarp {
-            input,
-            warp_source,
-            ..
+            input, warp_source, ..
         } => vec![input.clone(), warp_source.clone()],
         GraphNodeDefinition::Add { inputs } => inputs.iter().map(|i| i.source.clone()).collect(),
         _ => Vec::new(),
@@ -417,9 +415,7 @@ impl GraphExecutor {
         output: &GraphOutputDefinition,
     ) -> Result<Option<Vec<f32>>, TextureGenerationError> {
         match output {
-            GraphOutputDefinition::NodeRef(name) => {
-                Ok(Some(self.eval_scalar_node(name)?.to_vec()))
-            }
+            GraphOutputDefinition::NodeRef(name) => Ok(Some(self.eval_scalar_node(name)?.to_vec())),
             GraphOutputDefinition::Typed { kind, source, .. } if kind == "normal_from_height" => {
                 let _ = self.eval_scalar_node(source)?;
                 Ok(None)
@@ -597,10 +593,7 @@ impl GraphExecutor {
                 edge1,
             } => {
                 let src = self.eval_scalar_node(input)?;
-                Ok(src
-                    .iter()
-                    .map(|v| smoothstep(*edge0, *edge1, *v))
-                    .collect())
+                Ok(src.iter().map(|v| smoothstep(*edge0, *edge1, *v)).collect())
             }
             GraphNodeDefinition::SlopeFilter {
                 input,
@@ -608,7 +601,13 @@ impl GraphExecutor {
                 upper,
             } => {
                 let src = self.eval_scalar_node(input)?;
-                Ok(slope_from_height(&src, self.width, self.height, *lower, *upper))
+                Ok(slope_from_height(
+                    &src,
+                    self.width,
+                    self.height,
+                    *lower,
+                    *upper,
+                ))
             }
             GraphNodeDefinition::Invert { input } => {
                 let src = self.eval_scalar_node(input)?;

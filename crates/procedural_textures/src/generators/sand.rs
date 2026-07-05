@@ -66,7 +66,8 @@ impl SandGenerator {
                 let ripple_phase = v * self.config.ripple_scale * std::f32::consts::TAU
                     + noise.sample(u * 6.0 + 0.11, v * 6.0 + 0.37) * std::f32::consts::TAU;
                 let ripple_dir = noise.sample(u * 3.0 + 0.5, v * 3.0 + 0.2) * std::f32::consts::TAU;
-                let ripple = ((v * ripple_dir.cos() + u * ripple_dir.sin()) * self.config.ripple_scale
+                let ripple = ((v * ripple_dir.cos() + u * ripple_dir.sin())
+                    * self.config.ripple_scale
                     * std::f32::consts::TAU
                     + ripple_phase * 0.35)
                     .sin()

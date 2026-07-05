@@ -1,0 +1,20 @@
+﻿schema_version: 1
+id: surfaces.volcanic_ash
+texture: textures.volcanic_ash
+tags:
+  - soil
+  - volcanic
+  - loose
+rendering:
+  projection: triplanar
+  meters_per_repeat: 2.2
+  normal_strength: 0.85
+  macro_variation:
+    enabled: true
+    scale_m: 32.0
+    color_strength: 0.10
+    roughness_strength: 0.05
+responses:
+  wetness:
+    darkening: 0.30
+    roughness_reduction: 0.35

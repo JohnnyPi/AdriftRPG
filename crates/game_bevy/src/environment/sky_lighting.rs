@@ -2,12 +2,12 @@
 
 use bevy::prelude::*;
 
+use super::volumetric_scatter::VolumetricScatterPlugin;
 use super::{
     AtmosphereScenePlugin, CelestialPlugin, CloudPlugin, EnvironmentConfigPlugin,
     EnvironmentLightingPlugin, FogPlugin, LightingPlugin, SimulationTimePlugin, StarfieldPlugin,
     WeatherPlugin,
 };
-use super::volumetric_scatter::VolumetricScatterPlugin;
 
 /// Registers the full outdoor sky + lighting stack in dependency-safe order.
 pub struct SkyLightingPlugin;

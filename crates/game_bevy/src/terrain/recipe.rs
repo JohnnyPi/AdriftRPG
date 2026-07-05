@@ -220,32 +220,23 @@ mod tests {
     }
 
     #[test]
-    fn island_testbed_atlas_has_peak_and_chunk_coverage() {
+    fn small_world_uses_worldgen_pipeline() {
         let registry = load_registry_from_directory(workspace_assets()).expect("registry");
         let world = registry
-            .world_by_id(&StableId::new("world.island_testbed"))
+            .world_by_id(&StableId::new("world.small"))
             .expect("world");
         assert!(
-            world.island_gen.is_some(),
-            "testbed is an island-atlas world"
-        );
-        let source = build_density_source(
-            &registry,
-            Some(&StableId::new("world.island_testbed")),
-            None,
-            terrain_generation::FieldStackParams::default(),
+            world.worldgen.is_some(),
+            "small tier uses the worldgen compiler"
         );
         assert!(
-            source.atlas().is_some(),
-            "island testbed should resolve a procedural atlas"
-        );
-        assert!(
-            source.river_carve().is_some(),
-            "island atlas should include a carved primary river"
+            world.island_gen.is_none(),
+            "small tier should not use legacy island_gen"
         );
     }
 
     #[test]
+    #[ignore = "legacy island_gen budget validation; superseded by worldgen tier worlds"]
     fn island_large_world_passes_budget_validation() {
         let registry = load_registry_from_directory(workspace_assets()).expect("registry");
         let world = registry

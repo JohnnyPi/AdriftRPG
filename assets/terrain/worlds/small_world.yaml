@@ -1,14 +1,16 @@
 ﻿schema_version: 1
-id: world.island_large
+id: world.small
 
-seed: 48130
+seed: 4815162342
+
+# Milestone A world compiler (`world.small`). Density from compiled worldgen fields.
 
 voxel:
   cell_size_m: 1.0
 
 chunks:
   cells: [16, 16, 16]
-  world_extent: [200, 52, 200]
+  world_extent: [512, 52, 512]
   residency:
     density_radius: 10
     render_radius: 7
@@ -39,23 +41,26 @@ chunks:
     preload_atlas: true
     preload_material_arrays: true
 
-vegetation: vegetation.vertical_slice
-weather: weather.clear
+worldgen: world.small
 
-terrain: terrain.island_large
-island_gen: island_gen.island_large
-biomes: biomes.island_large
+terrain: terrain.island_testbed_objects
+biomes: biomes.expanded_slice
 materials: materials.expanded_slice
 material_catalog: catalogs.tropical_island
-surface: surface.island_large
+surface: surface.expanded_slice
 water: water.tropical_shallow
 lighting: lighting.late_morning
 sky: sky.expanded_showcase
+vegetation: vegetation.vertical_slice
+weather: weather.clear
 
-ocean_extent_m: 3200.0
-coord_offset: [1600.0, 0.0, 1600.0]
+hydrology_bodies:
+  - hydrology.upland_pool
+
+ocean_extent_m: 8256.0
+coord_offset: [4096.0, 0.0, 4096.0]
 
 resolution:
-  regional_m: 16
-  local_m: 4
+  regional_m: 128
+  local_m: 8
   voxel_m: 1

@@ -1,0 +1,23 @@
+schema_version: 1
+id: textures.tundra_ground
+resolution: 512
+seed: 2110
+tileable: true
+generator:
+  Ground:
+    seed: 2110
+    macro_scale: 2.5
+    macro_octaves: 5
+    micro_scale: 14.0
+    micro_octaves: 4
+    micro_weight: 0.4
+    color_dry:
+    - 0.44
+    - 0.42
+    - 0.31
+    color_moist:
+    - 0.25
+    - 0.3
+    - 0.22
+    normal_strength: 1.75
+    roughness: 0.95

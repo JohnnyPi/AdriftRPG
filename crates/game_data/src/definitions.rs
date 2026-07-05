@@ -271,6 +271,11 @@ pub struct WorldDefinition {
     pub coord_offset: Option<[f32; 3]>,
     #[serde(default)]
     pub island_gen: Option<StableId>,
+    /// Optional Milestone A worldgen recipe id (`world.*` under `assets/worldgen/worlds/`).
+    /// When set, terrain density is sourced from the compiled worldgen atlas instead of
+    /// `island_gen` procedural atlases.
+    #[serde(default)]
+    pub worldgen: Option<StableId>,
     #[serde(default)]
     pub resolution: Option<GenerationResolutionDefinition>,
     /// Optional path relative to assets root for a baked island atlas golden reference.

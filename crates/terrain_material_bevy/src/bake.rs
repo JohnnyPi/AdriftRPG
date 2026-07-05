@@ -44,7 +44,10 @@ pub fn load_recipes_from_yaml(path: &PathBuf) -> Option<(Vec<TerrainMaterialReci
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
         Err(err) => {
-            warn!("failed to read procedural materials YAML at {}: {err}", path.display());
+            warn!(
+                "failed to read procedural materials YAML at {}: {err}",
+                path.display()
+            );
             return None;
         }
     };
@@ -157,8 +160,8 @@ pub fn build_material_from_arrays(
             debug_mode: 0,
             macro_variation_scale: 42.0,
             macro_variation_strength: 0.10,
-            global_wetness: 0.0,
-            global_moss: 0.0,
+            global_wetness: 0.12,
+            global_moss: 0.08,
         },
         layer_scales,
         chunk_slots: default_chunk_slots(),

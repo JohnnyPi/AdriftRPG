@@ -1,0 +1,22 @@
+﻿schema_version: 1
+id: surfaces.jungle_loam
+texture: textures.jungle_loam
+tags:
+  - soil
+  - vegetation
+  - forest
+rendering:
+  projection: triplanar
+  meters_per_repeat: 1.6
+  normal_strength: 1.0
+  macro_variation:
+    enabled: true
+    scale_m: 24.0
+    color_strength: 0.14
+    roughness_strength: 0.06
+responses:
+  wetness:
+    darkening: 0.28
+    roughness_reduction: 0.32
+  moss:
+    affinity: 0.58

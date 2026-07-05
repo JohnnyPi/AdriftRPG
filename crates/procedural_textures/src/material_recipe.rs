@@ -93,7 +93,10 @@ fn default_tint() -> [f32; 3] {
 
 /// Layer order as declared in a procedural materials document (YAML list order).
 pub fn document_layer_order(doc: &ProceduralMaterialsDocument) -> Vec<String> {
-    doc.materials.iter().map(|recipe| recipe.id.clone()).collect()
+    doc.materials
+        .iter()
+        .map(|recipe| recipe.id.clone())
+        .collect()
 }
 
 pub fn order_recipes_for_document(

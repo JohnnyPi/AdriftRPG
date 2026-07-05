@@ -1297,7 +1297,7 @@ dependencies = [
  "arrayvec",
  "bevy_reflect",
  "derive_more",
- "glam",
+ "glam 0.32.1",
  "itertools 0.14.0",
  "libm",
  "rand",
@@ -1327,7 +1327,7 @@ dependencies = [
  "bytemuck",
  "derive_more",
  "encase",
- "glam",
+ "glam 0.32.1",
  "half",
  "hexasphere",
  "thiserror 2.0.18",
@@ -1477,7 +1477,7 @@ dependencies = [
  "downcast-rs 2.0.2",
  "erased-serde",
  "foldhash 0.2.0",
- "glam",
+ "glam 0.32.1",
  "indexmap",
  "inventory",
  "petgraph",
@@ -1539,7 +1539,7 @@ dependencies = [
  "derive_more",
  "downcast-rs 2.0.2",
  "encase",
- "glam",
+ "glam 0.32.1",
  "image",
  "indexmap",
  "itertools 0.14.0",
@@ -2777,6 +2777,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
+name = "dyn-clone"
+version = "1.0.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
+
+[[package]]
 name = "ecolor"
 version = "0.34.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3192,13 +3198,16 @@ dependencies = [
 name = "game_data"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "hex",
+ "schemars",
  "serde",
  "serde_json",
  "serde_yaml",
  "sha2",
  "shared",
  "tempfile",
+ "thiserror 2.0.18",
  "voxel_core",
  "walkdir",
 ]
@@ -3295,6 +3304,15 @@ dependencies = [
 
 [[package]]
 name = "glam"
+version = "0.29.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8babf46d4c1c9d92deac9f7be466f76dfc4482b6452fc5024b5e8daf6ffeb3ee"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "glam"
 version = "0.32.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f70749695b063ecbf6b62949ccccde2e733ec3ecbbd71d467dca4e5c6c97cca0"
@@ -3314,7 +3332,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "db060a7f23a5666ccbe9c770cd0e0e419b2eb94c86a7c8bfd091bacf8b4926cd"
 dependencies = [
  "bevy_reflect",
- "glam",
+ "glam 0.32.1",
 ]
 
 [[package]]
@@ -3324,7 +3342,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "59157a5886a9c68eb694df59254f7c9419c5648fc6ca1b728601a8baecc0dfcd"
 dependencies = [
  "approx",
- "glam",
+ "glam 0.32.1",
  "num-traits",
  "simba",
 ]
@@ -3548,7 +3566,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "177ea6330876de4ef08e184f827b98acc037614a4ce409902c5b0d53a9c2e951"
 dependencies = [
  "constgebra",
- "glam",
+ "glam 0.32.1",
  "tinyvec",
 ]
 
@@ -4750,7 +4768,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3194269f7697a676e6b6d93b3a8c9558727ce8f2425c6fdd01b6e364fdbbdb2e"
 dependencies = [
  "bytemuck",
- "glam",
+ "glam 0.32.1",
  "half",
  "log",
  "rdst",
@@ -5567,6 +5585,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "schemars"
+version = "0.8.22"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3fbf2ae1b8bc8e02df939598064d22402220cd5bbcca1c76f7d6a310974d5615"
+dependencies = [
+ "dyn-clone",
+ "schemars_derive",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "schemars_derive"
+version = "0.8.22"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32e265784ad618884abaea0600a9adf15393368d840e0222d101a072f3f7534d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "serde_derive_internals",
+ "syn",
+]
+
+[[package]]
 name = "scoped-tls"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5633,6 +5675,17 @@ name = "serde_derive"
 version = "1.0.228"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d540f220d3187173da220f885ab66608367b6574e925011a9353e4badda91d79"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "serde_derive_internals"
+version = "0.29.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "18d26a20a969b9e3fdf2fc2d9f21eda6c40e2de84c9408bb5d3b05d499aae711"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6010,8 +6063,11 @@ dependencies = [
 name = "terrain_generation"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "game_data",
+ "glam 0.29.3",
  "hex",
+ "rayon",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -6019,6 +6075,7 @@ dependencies = [
  "shared",
  "terrain_meshing",
  "terrain_surface",
+ "thiserror 2.0.18",
  "voxel_core",
  "zstd",
 ]

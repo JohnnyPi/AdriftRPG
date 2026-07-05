@@ -1,0 +1,16 @@
+﻿schema_version: 1
+id: surfaces.scree
+texture: textures.scree
+tags:
+  - rock
+  - loose
+rendering:
+  projection: triplanar
+  meters_per_repeat: 2.5
+  triplanar_sharpness: 4.5
+  normal_strength: 1.25
+  height_blend_strength: 0.28
+responses:
+  wetness:
+    darkening: 0.18
+    roughness_reduction: 0.15

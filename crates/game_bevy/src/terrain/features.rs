@@ -12,9 +12,10 @@
 use bevy::prelude::*;
 use shared::StableId;
 use std::collections::BTreeMap;
-use terrain_generation::water_body::{HorizontalFootprint, WaterBodyKind, WaterSurfaceDefinition};
+use terrain_generation::water_body::{HorizontalFootprint, WaterSurfaceDefinition};
 use terrain_generation::{
-    RiverHydrology, RiverSpline, WaterBody, WaterBodyId, WaterBodyRegistry, WaterQuery,
+    CompiledHydrologyProducts, RiverHydrology, RiverSpline, WaterBody, WaterBodyId, WaterBodyKind,
+    WaterBodyRegistry, WaterQuery,
 };
 
 /// Axis-aligned bounds of the primary river spline with flow-radius padding.
@@ -76,6 +77,7 @@ use crate::terrain::{
 };
 use crate::ui::{TerrainTweaks, WaterTweaks};
 use crate::world::requested_world_id;
+use crate::worldgen::ActiveCompiledWorld;
 use game_data::CompiledHydrologyBody;
 
 #[derive(Resource, Clone, Debug, Default)]
@@ -280,6 +282,140 @@ pub fn build_hydrology(
     }
 }
 
+fn append_compiled_hydrology(
+    bodies: &mut BTreeMap<WaterBodyId, WaterBody>,
+    products: &CompiledHydrologyProducts,
+    next_id: &mut u32,
+) {
+    for lake in &products.lakes {
+        let id = WaterBodyId(*next_id);
+        *next_id += 1;
+        let footprint = if lake.vertices_xz.len() >= 3 {
+            HorizontalFootprint::Polygon {
+                vertices_xz: lake.vertices_xz.clone(),
+            }
+        } else {
+            HorizontalFootprint::Disc {
+                center_xz: lake.centroid_xz,
+                radius_m: 8.0,
+            }
+        };
+        bodies.insert(
+            id,
+            WaterBody {
+                id,
+                stable_id: StableId::new(&format!("water.{}", lake.id)),
+                kind: WaterBodyKind::Lake,
+                surface: WaterSurfaceDefinition::Horizontal {
+                    elevation: lake.surface_elevation_m,
+                    footprint: Some(footprint),
+                },
+                material_id: StableId::new("water.freshwater"),
+            },
+        );
+    }
+    for lagoon in &products.lagoons {
+        let id = WaterBodyId(*next_id);
+        *next_id += 1;
+        bodies.insert(
+            id,
+            WaterBody {
+                id,
+                stable_id: StableId::new(&format!("water.{}", lagoon.id)),
+                kind: WaterBodyKind::Lagoon,
+                surface: WaterSurfaceDefinition::Horizontal {
+                    elevation: lagoon.surface_elevation_m,
+                    footprint: Some(HorizontalFootprint::Polygon {
+                        vertices_xz: lagoon.vertices_xz.clone(),
+                    }),
+                },
+                material_id: StableId::new("water.lagoon"),
+            },
+        );
+    }
+    for pool in &products.cave_pools {
+        let id = WaterBodyId(*next_id);
+        *next_id += 1;
+        bodies.insert(
+            id,
+            WaterBody {
+                id,
+                stable_id: StableId::new(&format!("water.{}", pool.id)),
+                kind: WaterBodyKind::CavePool,
+                surface: WaterSurfaceDefinition::Horizontal {
+                    elevation: pool.elevation_m,
+                    footprint: Some(HorizontalFootprint::Disc {
+                        center_xz: pool.center_xz,
+                        radius_m: pool.radius_m,
+                    }),
+                },
+                material_id: StableId::new("water.freshwater"),
+            },
+        );
+    }
+    for wetland in &products.wetlands {
+        let id = WaterBodyId(*next_id);
+        *next_id += 1;
+        bodies.insert(
+            id,
+            WaterBody {
+                id,
+                stable_id: StableId::new(&format!("water.{}", wetland.id)),
+                kind: WaterBodyKind::Swamp,
+                surface: WaterSurfaceDefinition::Horizontal {
+                    elevation: wetland.surface_elevation_m,
+                    footprint: Some(HorizontalFootprint::Polygon {
+                        vertices_xz: wetland.vertices_xz.clone(),
+                    }),
+                },
+                material_id: StableId::new("water.freshwater"),
+            },
+        );
+    }
+    for waterfall in &products.waterfalls {
+        let id = WaterBodyId(*next_id);
+        *next_id += 1;
+        bodies.insert(
+            id,
+            WaterBody {
+                id,
+                stable_id: StableId::new(&format!("water.{}", waterfall.id)),
+                kind: WaterBodyKind::Waterfall,
+                surface: WaterSurfaceDefinition::Horizontal {
+                    elevation: waterfall.surface_elevation_m,
+                    footprint: Some(HorizontalFootprint::Disc {
+                        center_xz: waterfall.position_xz,
+                        radius_m: 3.0,
+                    }),
+                },
+                material_id: StableId::new("water.freshwater"),
+            },
+        );
+    }
+}
+
+pub fn build_hydrology_with_compiled(
+    sea_level: f32,
+    river: Option<RiverSpline>,
+    lakes: &[CompiledHydrologyBody],
+    compiled: Option<&CompiledHydrologyProducts>,
+    coord_offset: [f32; 3],
+) -> RiverHydrology {
+    let mut hydrology = build_hydrology(sea_level, river, lakes, coord_offset);
+    if let Some(products) = compiled {
+        let mut next_id = hydrology
+            .water
+            .bodies
+            .keys()
+            .map(|id| id.0)
+            .max()
+            .unwrap_or(10)
+            + 1;
+        append_compiled_hydrology(&mut hydrology.water.bodies, products, &mut next_id);
+    }
+    hydrology
+}
+
 fn authored_lakes(
     registry: &ConfigRegistryResource,
     prefs: &UserSetupPrefs,
@@ -313,14 +449,18 @@ fn init_terrain_features(
     prefs: Res<UserSetupPrefs>,
     pipeline: Res<TerrainPipelineState>,
     water_tweaks: Res<WaterTweaks>,
+    compiled_world: Option<Res<ActiveCompiledWorld>>,
     mut features: ResMut<TerrainFeatureRegistry>,
 ) {
     let sea = world_sea_level(&registry, &prefs, &water_tweaks);
     let offset = world_coord_offset(&registry, &prefs);
-    let hydrology = build_hydrology(
+    let hydrology = build_hydrology_with_compiled(
         sea,
         pipeline_river(&pipeline),
         &authored_lakes(&registry, &prefs),
+        compiled_world
+            .as_deref()
+            .and_then(|w| w.hydrology_products.as_ref()),
         offset,
     );
     apply_hydrology(&mut features, hydrology);
@@ -332,6 +472,7 @@ fn sync_hydrology_from_tweaks(
     terrain_tweaks: Res<TerrainTweaks>,
     water_tweaks: Res<WaterTweaks>,
     pipeline: Res<TerrainPipelineState>,
+    compiled_world: Option<Res<ActiveCompiledWorld>>,
     terrain_revision: Res<TerrainRevision>,
     mut recipe_revision: ResMut<TerrainRecipeRevision>,
     mut features: ResMut<TerrainFeatureRegistry>,
@@ -363,10 +504,13 @@ fn sync_hydrology_from_tweaks(
 
     let sea = world_sea_level(&registry, &prefs, &water_tweaks);
     let offset = world_coord_offset(&registry, &prefs);
-    let hydrology = build_hydrology(
+    let hydrology = build_hydrology_with_compiled(
         sea,
         pipeline_river(&pipeline),
         &authored_lakes(&registry, &prefs),
+        compiled_world
+            .as_deref()
+            .and_then(|w| w.hydrology_products.as_ref()),
         offset,
     );
     apply_hydrology(&mut features, hydrology);

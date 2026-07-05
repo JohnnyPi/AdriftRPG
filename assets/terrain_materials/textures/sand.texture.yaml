@@ -1,4 +1,4 @@
-﻿schema_version: 1
+schema_version: 1
 id: textures.sand
 resolution: 512
 seed: 3001
@@ -6,9 +6,15 @@ tileable: true
 generator:
   Sand:
     seed: 3001
-    ripple_scale: 6.0
-    grain_scale: 24.0
-    color_light: [0.92, 0.84, 0.64]
-    color_dark: [0.68, 0.60, 0.44]
-    normal_strength: 1.2
-    roughness: 0.95
+    ripple_scale: 5.0
+    grain_scale: 28.0
+    color_light:
+    - 0.91
+    - 0.82
+    - 0.62
+    color_dark:
+    - 0.63
+    - 0.55
+    - 0.4
+    normal_strength: 1.0
+    roughness: 0.96

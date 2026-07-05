@@ -19,10 +19,12 @@ mod ui;
 mod vegetation;
 mod water;
 mod world;
+mod worldgen;
 
 pub use performance::{PerformanceReport, PerformanceValidationPlugin};
 pub use plugin::VerticalSlicePlugin;
 pub use state::AppState;
+pub use worldgen::{ActiveCompiledWorld, WorldCompilationConfig, WorldgenPlugin};
 
 use bevy::prelude::*;
 

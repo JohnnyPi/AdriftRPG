@@ -1,0 +1,20 @@
+﻿schema_version: 1
+id: coast.tropical_volcanic
+beaches:
+  width_max_m: 120
+  maximum_slope_deg: 12
+  berm_height_m: [0.3, 1.2]
+cliffs:
+  minimum_slope_deg: 25
+  minimum_exposure: 0.4
+reefs:
+  min_age_myr: 0.5
+  depth_m: [0.5, 25]
+  max_sediment: 0.35
+  min_temperature: 0.55
+lagoons:
+  max_depth_m: 8
+  reef_enclosure_min: 0.6
+mangroves:
+  max_slope_deg: 5
+  salinity_band_m: [0, 200]

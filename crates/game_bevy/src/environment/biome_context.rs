@@ -1,7 +1,10 @@
 // crates/game_bevy/src/environment/biome_context.rs
 use crate::ui::WaterPhysicsTweaks;
 use shared::smoothstep;
-use terrain_generation::{CAVITY_EXTERIOR_MARGIN, RecipeDensitySource, ValueNoise, cavity_sdf_at};
+use terrain_generation::{
+    CAVITY_EXTERIOR_MARGIN, RecipeDensitySource, ValueNoise, WorldDensityProvider, WorldXZ,
+    cavity_sdf_at, distance_to_river_centerline,
+};
 
 /// Slope above which exposed rock replaces the biome default surface material.
 pub const ROCK_SLOPE_DEG: f32 = 35.0;
@@ -96,6 +99,52 @@ impl ChunkColumnCache {
         }
     }
 
+    pub fn build_from_provider(
+        provider: &dyn WorldDensityProvider,
+        origin_x: i32,
+        origin_z: i32,
+        side: usize,
+        cell_size_m: f32,
+    ) -> Self {
+        let seed = provider.world_metadata().seed;
+        let sea_level = provider.world_metadata().extent.sea_level_m;
+        let noise = ValueNoise::new(seed);
+        let mut columns = Vec::with_capacity(side * side);
+        for lz in 0..side {
+            for lx in 0..side {
+                let wx = origin_x + lx as i32 - 1;
+                let wz = origin_z + lz as i32 - 1;
+                let wx_m = wx as f32 * cell_size_m;
+                let wz_m = wz as f32 * cell_size_m;
+                let column = provider.sample_column(WorldXZ::new(wx_m as f64, wz_m as f64));
+                let distance_to_river = provider
+                    .primary_river()
+                    .map(|river| distance_to_river_centerline(river, wx_m, wz_m))
+                    .unwrap_or(f32::MAX);
+                columns.push(sample_climate_from_provider(
+                    &noise,
+                    sea_level,
+                    wx_m,
+                    wz_m,
+                    column.surface.elevation_m,
+                    column.surface.slope,
+                    column.surface.coast_distance_m,
+                    column.temperature,
+                    column.humidity,
+                    column.rainfall,
+                    column.wetness,
+                    distance_to_river,
+                ));
+            }
+        }
+        Self {
+            origin_x,
+            origin_z,
+            side,
+            columns,
+        }
+    }
+
     pub fn column(&self, wx: i32, wz: i32) -> ColumnClimate {
         let lx = (wx - self.origin_x + 1).clamp(0, self.side as i32 - 1) as usize;
         let lz = (wz - self.origin_z + 1).clamp(0, self.side as i32 - 1) as usize;
@@ -111,6 +160,17 @@ impl ChunkColumnCache {
     ) -> BiomeSampleContext {
         let column = self.column(wx, wz);
         context_from_column(source, &column, wx as f32, y, wz as f32)
+    }
+
+    pub fn context_at_provider(
+        &self,
+        provider: &dyn WorldDensityProvider,
+        wx: i32,
+        y: f32,
+        wz: i32,
+    ) -> BiomeSampleContext {
+        let column = self.column(wx, wz);
+        context_from_column_provider(provider, &column, wx as f32, y, wz as f32)
     }
 }
 
@@ -132,6 +192,38 @@ impl BiomeSampleContext {
             distance_to_river,
         );
         context_from_column(source, &column, x, y, z)
+    }
+
+    pub fn sample_from_provider(
+        provider: &dyn WorldDensityProvider,
+        x: f32,
+        y: f32,
+        z: f32,
+    ) -> Self {
+        let horizontal = WorldXZ::new(x as f64, z as f64);
+        let column_sample = provider.sample_column(horizontal);
+        let sea_level = provider.world_metadata().extent.sea_level_m;
+        let seed = provider.world_metadata().seed;
+        let noise = ValueNoise::new(seed);
+        let distance_to_river = provider
+            .primary_river()
+            .map(|river| distance_to_river_centerline(river, x, z))
+            .unwrap_or(f32::MAX);
+        let column = sample_climate_from_provider(
+            &noise,
+            sea_level,
+            x,
+            z,
+            column_sample.surface.elevation_m,
+            column_sample.surface.slope,
+            column_sample.surface.coast_distance_m,
+            column_sample.temperature,
+            column_sample.humidity,
+            column_sample.rainfall,
+            column_sample.wetness,
+            distance_to_river,
+        );
+        context_from_column_provider(provider, &column, x, y, z)
     }
 
     pub fn is_underwater(&self) -> bool {
@@ -233,6 +325,98 @@ fn sample_climate(
         temperature,
         continentalness,
         coast_humidity,
+    }
+}
+
+fn sample_climate_from_provider(
+    noise: &ValueNoise,
+    sea_level_m: f32,
+    x_m: f32,
+    z_m: f32,
+    surface_elevation_m: f32,
+    slope_degrees: f32,
+    distance_to_water_m: f32,
+    atlas_temperature: f32,
+    atlas_humidity: f32,
+    atlas_rainfall: f32,
+    atlas_wetness: f32,
+    distance_to_river: f32,
+) -> ColumnClimate {
+    let surface_y = surface_elevation_m;
+    let distance_to_water = distance_to_water_m;
+    let feature_wavelength = 2048.0;
+    let moisture_scale = 1.0 / feature_wavelength;
+    let continental_scale = moisture_scale * 0.4;
+    let transition_scale = moisture_scale * 1.5;
+    let noise_moisture = noise.fbm(x_m * moisture_scale, 0.0, z_m * moisture_scale, 3, 2.0, 0.5);
+    let continentalness = noise.fbm(
+        x_m * continental_scale,
+        0.0,
+        z_m * continental_scale,
+        2,
+        2.0,
+        0.5,
+    );
+    let transition_noise = noise.sample(x_m * transition_scale, 0.0, z_m * transition_scale);
+    let coast_humidity = (-distance_to_water / COAST_HUMIDITY_SCALE).exp() * 0.22;
+
+    let has_atlas_climate =
+        atlas_rainfall > 0.0 || atlas_humidity != 0.5 || atlas_temperature != 0.5;
+    let moisture = if has_atlas_climate {
+        (atlas_humidity * 0.7 + noise_moisture * 0.15 + atlas_wetness * 0.15).clamp(0.0, 1.0)
+    } else {
+        noise_moisture
+    };
+    let effective_moisture = (moisture + coast_humidity + continentalness * 0.08).clamp(0.0, 1.0);
+    let elevation = surface_y - sea_level_m;
+    let noise_temperature = (BASE_TEMPERATURE - elevation * ELEVATION_COOLING
+        + transition_noise * 0.08)
+        .clamp(0.0, 1.0);
+    let temperature = if has_atlas_climate {
+        (atlas_temperature * 0.75 + noise_temperature * 0.25).clamp(0.0, 1.0)
+    } else {
+        noise_temperature
+    };
+    let _ = (slope_degrees, atlas_rainfall);
+    ColumnClimate {
+        surface_y,
+        slope_degrees,
+        distance_to_water,
+        distance_to_river,
+        moisture,
+        effective_moisture,
+        transition_noise,
+        temperature,
+        continentalness,
+        coast_humidity,
+    }
+}
+
+fn context_from_column_provider(
+    provider: &dyn WorldDensityProvider,
+    column: &ColumnClimate,
+    _wx: f32,
+    y: f32,
+    _wz: f32,
+) -> BiomeSampleContext {
+    let sea_level = provider.world_metadata().extent.sea_level_m;
+    let elevation = column.surface_y - sea_level;
+    let cave_depth = (column.surface_y - y).max(0.0);
+    BiomeSampleContext {
+        world_y: y,
+        elevation,
+        slope_degrees: column.slope_degrees,
+        distance_to_water: column.distance_to_water,
+        distance_to_river: column.distance_to_river,
+        cave_depth,
+        cave_exposure: 0.0,
+        moisture: column.moisture,
+        effective_moisture: column.effective_moisture,
+        transition_noise: column.transition_noise,
+        temperature: column.temperature,
+        continentalness: column.continentalness,
+        coast_humidity: column.coast_humidity,
+        sea_level_m: sea_level,
     }
 }
 

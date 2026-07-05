@@ -1,20 +1,22 @@
 ﻿schema_version: 1
-id: world.island_testbed
+id: world.large
 
-seed: 48129
+seed: 48131
+
+# Milestone A world compiler (`world.large`). ~23 km span, 8× area vs small.
 
 voxel:
   cell_size_m: 1.0
 
 chunks:
   cells: [16, 16, 16]
-  world_extent: [32, 14, 32]
+  world_extent: [1444, 52, 1444]
   residency:
-    density_radius: 10
-    render_radius: 7
-    physics_radius: 5
-    decoration_radius: 5
-    high_detail_radius: 4
+    density_radius: 8
+    render_radius: 6
+    physics_radius: 4
+    decoration_radius: 4
+    high_detail_radius: 3
   lod:
     terrain:
       - max_distance_chunks: 3
@@ -29,20 +31,22 @@ chunks:
     materials:
       render_profile: render.terrain_high
     content:
-      vegetation_max_distance_m: 80
+      vegetation_max_distance_m: 200
       grass_lod: [25, 70, 140]
     distant:
       horizon_skirt: true
-      impostor_start_m: 400
+      impostor_start_m: 1200
   staging:
     prefetch_chunks_ahead: 2
     preload_atlas: true
     preload_material_arrays: true
 
+worldgen: world.large
+
 terrain: terrain.island_testbed_objects
-island_gen: island_gen.island_testbed
 biomes: biomes.expanded_slice
 materials: materials.expanded_slice
+material_catalog: catalogs.tropical_island
 surface: surface.expanded_slice
 water: water.tropical_shallow
 lighting: lighting.late_morning
@@ -50,13 +54,10 @@ sky: sky.expanded_showcase
 vegetation: vegetation.vertical_slice
 weather: weather.clear
 
-hydrology_bodies:
-  - hydrology.upland_pool
-
-ocean_extent_m: 576.0
-coord_offset: [256.0, 0.0, 256.0]
+ocean_extent_m: 23136.0
+coord_offset: [11552.0, 0.0, 11552.0]
 
 resolution:
-  regional_m: 8
-  local_m: 4
+  regional_m: 128
+  local_m: 8
   voxel_m: 1

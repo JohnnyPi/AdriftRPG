@@ -36,3 +36,18 @@ pub use surface_registry::{
     resolve_entry_generator,
 };
 pub use validate::{ValidationReport, validate_definitions};
+pub use worldgen::{
+    BiomeRecipeSource, BoundaryRecipeSource, CavesRecipeSource, ClimateRecipeSource,
+    CoastRecipeSource, CompiledBiomeRecipe, CompiledBoundaryRecipe, CompiledCaveFamilyProfile,
+    CompiledCavesRecipe, CompiledClimateRecipe, CompiledCoastRecipe, CompiledErosionRecipe,
+    CompiledFootprint, CompiledGeologyRecipe, CompiledHydrologyRecipe, CompiledIslandRecipe,
+    CompiledRefinementRecipe, CompiledStrataDeposit, CompiledStrataLayer, CompiledStrataRecipe,
+    CompiledValidationRecipe, CompiledVolcano, CompiledWorldRecipe, ErosionRecipeSource,
+    FootprintSource, GeologyRecipeSource, HydrologyRecipeSource, IslandPlacementSource,
+    IslandRecipeSource, RefinementRecipeSource, ResolvedWorldBundle, StrataRecipeSource,
+    ValidationRecipeSource, WorldRecipeSource, WorldgenLoadError, WorldgenSourceBundle,
+    WorldgenValidationError, load_worldgen_bundle, recipe_content_hash, resolve_world_bundle,
+    validate_resolved_bundle,
+};
+
+mod worldgen;

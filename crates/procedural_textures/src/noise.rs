@@ -87,11 +87,7 @@ impl SeamlessNoise {
             amp *= gain;
             freq *= lacunarity;
         }
-        if norm > f32::EPSILON {
-            sum / norm
-        } else {
-            0.0
-        }
+        if norm > f32::EPSILON { sum / norm } else { 0.0 }
     }
 
     pub fn ridged(&self, u: f32, v: f32, octaves: u32, lacunarity: f32, gain: f32) -> f32 {
@@ -107,11 +103,7 @@ impl SeamlessNoise {
             amp *= gain;
             freq *= lacunarity;
         }
-        if norm > f32::EPSILON {
-            sum / norm
-        } else {
-            0.0
-        }
+        if norm > f32::EPSILON { sum / norm } else { 0.0 }
     }
 }
 
@@ -180,10 +172,7 @@ mod tests {
                 let v = y as f32 / side as f32;
                 let a = noise.fbm(u * 3.0, v * 3.0, 4, 2.0, 0.5);
                 let b = noise.fbm(u * 3.0 + 1.0, v * 3.0, 4, 2.0, 0.5);
-                assert!(
-                    (a - b).abs() < 1e-4,
-                    "fbm seam at ({u},{v}): {a} vs {b}"
-                );
+                assert!((a - b).abs() < 1e-4, "fbm seam at ({u},{v}): {a} vs {b}");
             }
         }
     }

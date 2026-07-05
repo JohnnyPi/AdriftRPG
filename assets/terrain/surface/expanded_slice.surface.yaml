@@ -1,43 +1,43 @@
 ﻿schema_version: 1
 id: surface.expanded_slice
-description: Data-driven island surface blending (expanded slice palette)
+description: Data-driven volcanic island surface blending (8-layer expanded_slice palette)
 
 classifiers:
   - id: coast
     blend:
       - { material: sand, weight: 0.70 }
-      - { material: wet_rock, weight: 0.20 }
-      - { material: rock, weight: 0.35 }
-      - { material: grass, weight: 0.50 }
+      - { material: weathered_cliff, weight: 0.30 }
+      - { material: rock, weight: 0.20 }
+      - { material: grass, weight: 0.35 }
   - id: river
     blend:
-      - { material: sand, weight: 0.45 }
-      - { material: wet_rock, weight: 0.55 }
+      - { material: sand, weight: 0.50 }
+      - { material: forest_floor, weight: 0.35 }
       - { material: grass, weight: 0.30 }
-      - { material: forest_floor, weight: 0.20 }
+      - { material: rock, weight: 0.15 }
   - id: cliff
     blend:
-      - { material: rock, weight: 0.70 }
-      - { material: rock, weight: 0.30 }
-      - { material: forest_floor, weight: 0.25 }
-      - { material: grass, weight: 0.10 }
+      - { material: rock, weight: 0.55 }
+      - { material: scree, weight: 0.35 }
+      - { material: weathered_cliff, weight: 0.30 }
+      - { material: forest_floor, weight: 0.15 }
   - id: land_forest
     blend:
       - { material: forest_floor, weight: 0.55 }
       - { material: forest_floor, weight: 0.30 }
       - { material: grass, weight: 0.25 }
-      - { material: wet_rock, weight: 0.15 }
+      - { material: rock, weight: 0.10 }
   - id: land_scrub
     blend:
       - { material: grass, weight: 0.40 }
-      - { material: rock, weight: 0.35 }
-      - { material: forest_floor, weight: 0.20 }
+      - { material: volcanic_ash, weight: 0.30 }
+      - { material: rock, weight: 0.25 }
       - { material: sand, weight: 0.10 }
   - id: land_alpine_rock
     blend:
-      - { material: rock, weight: 0.65 }
-      - { material: rock, weight: 0.25 }
-      - { material: wet_rock, weight: 0.20 }
+      - { material: scree, weight: 0.55 }
+      - { material: rock, weight: 0.45 }
+      - { material: volcanic_ash, weight: 0.25 }
       - { material: grass, weight: 0.05 }
   - id: land_default
     weighted_mix:
@@ -49,22 +49,22 @@ classifiers:
       - { classifier: land_core, weight: 1.0 }
   - id: land_core
     blend:
-      - { material: grass, weight: 0.45 }
       - { material: grass, weight: 0.35 }
-      - { material: forest_floor, weight: 0.35 }
-      - { material: rock, weight: 0.20 }
+      - { material: forest_floor, weight: 0.40 }
+      - { material: rock, weight: 0.25 }
+      - { material: volcanic_ash, weight: 0.15 }
   - id: land_alpine
     blend:
-      - { material: rock, weight: 0.50 }
+      - { material: scree, weight: 0.50 }
       - { material: rock, weight: 0.35 }
-      - { material: forest_floor, weight: 0.20 }
+      - { material: volcanic_ash, weight: 0.25 }
       - { material: grass, weight: 0.10 }
   - id: land_wetland
     blend:
-      - { material: wet_rock, weight: 0.55 }
-      - { material: forest_floor, weight: 0.25 }
-      - { material: sand, weight: 0.20 }
-      - { material: grass, weight: 0.15 }
+      - { material: forest_floor, weight: 0.55 }
+      - { material: sand, weight: 0.25 }
+      - { material: grass, weight: 0.20 }
+      - { material: rock, weight: 0.15 }
 
 gates:
   - id: cave
@@ -72,17 +72,16 @@ gates:
     when:
       cave_exposure_min: 0.55
     blend:
-      - { material: cave_stone, weight: 0.55 }
-      - { material: flowstone, weight: 0.25 }
+      - { material: rock, weight: 0.55 }
+      - { material: limestone, weight: 0.35 }
       - { material: forest_floor, weight: 0.10 }
-      - { material: limestone, weight: 0.10 }
 
   - id: underwater
     exclusive: true
     when:
       water_depth_min: 0.05
     blend:
-      - { material: wet_rock, weight: 1.0 }
+      - { material: rock, weight: 1.0 }
 
   - id: coast
     when:
@@ -107,7 +106,58 @@ gates:
       slope: { from: 44.0, to: 52.0 }
     classifier: cliff
 
+  - id: forest_biome
+    when:
+      soft_forest_min: 0.45
+    classifier: land_forest
+
+  - id: forest_biome_hard
+    when:
+      biome: forest
+    classifier: land_forest
+
+  - id: alpine_biome
+    when:
+      soft_alpine_min: 0.35
+    classifier: land_alpine_rock
+
+  - id: alpine_biome_hard
+    when:
+      biome: mountain_alpine
+    classifier: land_alpine_rock
+
+  - id: wetland_biome
+    when:
+      soft_wetland_min: 0.35
+    classifier: land_wetland
+
+  - id: wetland_biome_hard
+    when:
+      biome: wetland
+    classifier: land_wetland
+
+  - id: scrub_biome
+    when:
+      soft_grassland_min: 0.35
+      moisture_max: 0.52
+    classifier: land_scrub
+
+  - id: scrub_biome_hard
+    when:
+      biome: scrub
+    classifier: land_scrub
+
+  - id: coastal_scrub_biome
+    when:
+      biome: coastal_scrub
+    classifier: land_scrub
+
+  - id: rocky_biome
+    when:
+      biome: rocky_upland
+    classifier: land_alpine_rock
+
   - id: land
     when:
       fallback: true
-    classifier: land_default
+    classifier: land_core

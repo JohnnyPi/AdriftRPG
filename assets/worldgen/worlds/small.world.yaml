@@ -1,0 +1,27 @@
+﻿schema_version: 1
+id: world.small
+seed: 4815162342
+
+extent:
+  width_m: 8192
+  depth_m: 8192
+  sea_level_m: 0.0
+
+resolutions:
+  control_cell_m: 512
+  regional_cell_m: 128
+  local_cell_m: 8
+
+boundary: boundary.bounded_ocean
+islands:
+  - island.volcanic_small
+
+geology: geology.basaltic_volcanic
+refinement: refinement.tropical_volcanic
+climate: climate.tropical_trade_winds
+hydrology: hydrology.tropical_small
+erosion: erosion.tropical_volcanic
+coast: coast.tropical_volcanic
+biomes: biomes.tropical_land
+strata: strata.tropical_volcanic
+validation: validation.small

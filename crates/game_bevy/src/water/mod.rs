@@ -200,6 +200,7 @@ fn spawn_water_bodies(
         sea_level,
         &tweaks,
         &ocean_layout,
+        WaterBodyKind::Sea,
     );
     let tile_mesh = meshes.add(
         Plane3d::default()
@@ -239,6 +240,7 @@ fn spawn_water_bodies(
                 sea_level,
                 &tweaks,
                 &ocean_layout,
+                WaterBodyKind::River,
             );
             commands.spawn((
                 RiverWaterSurface,
@@ -325,21 +327,102 @@ fn sync_lake_surface_transforms(
         };
         let WaterSurfaceDefinition::Horizontal {
             elevation,
-            footprint:
-                Some(HorizontalFootprint::Disc {
-                    center_xz,
-                    radius_m,
-                }),
+            footprint: Some(footprint),
         } = &body.surface
         else {
             continue;
         };
-        transform.translation = Vec3::new(center_xz[0], *elevation + 0.02, center_xz[1]);
-        let diameter = radius_m.max(1.0) * 2.0;
+        let (center, size) = footprint_bounds(footprint);
+        transform.translation = Vec3::new(center[0], *elevation + 0.02, center[1]);
         if let Some(mut mesh_asset) = meshes.get_mut(&mesh.0) {
-            *mesh_asset = Plane3d::default().mesh().size(diameter, diameter).into();
+            *mesh_asset = footprint_mesh(footprint, size);
         }
     }
+}
+
+fn footprint_bounds(footprint: &HorizontalFootprint) -> ([f32; 2], f32) {
+    match footprint {
+        HorizontalFootprint::Disc {
+            center_xz,
+            radius_m,
+        } => (*center_xz, radius_m.max(1.0) * 2.0),
+        HorizontalFootprint::Polygon { vertices_xz } => {
+            if vertices_xz.is_empty() {
+                return ([0.0, 0.0], 4.0);
+            }
+            let mut min_x = f32::MAX;
+            let mut min_z = f32::MAX;
+            let mut max_x = f32::MIN;
+            let mut max_z = f32::MIN;
+            let mut cx = 0.0;
+            let mut cz = 0.0;
+            for v in vertices_xz {
+                min_x = min_x.min(v[0]);
+                min_z = min_z.min(v[1]);
+                max_x = max_x.max(v[0]);
+                max_z = max_z.max(v[1]);
+                cx += v[0];
+                cz += v[1];
+            }
+            let n = vertices_xz.len() as f32;
+            let size = (max_x - min_x).max(max_z - min_z).max(4.0);
+            ([cx / n, cz / n], size)
+        }
+    }
+}
+
+fn footprint_mesh(footprint: &HorizontalFootprint, fallback_size: f32) -> Mesh {
+    match footprint {
+        HorizontalFootprint::Disc { radius_m, .. } => {
+            let diameter = radius_m.max(1.0) * 2.0;
+            Plane3d::default().mesh().size(diameter, diameter).into()
+        }
+        HorizontalFootprint::Polygon { vertices_xz } => {
+            polygon_fan_mesh(vertices_xz, fallback_size)
+        }
+    }
+}
+
+fn polygon_fan_mesh(vertices: &[[f32; 2]], fallback_size: f32) -> Mesh {
+    if vertices.len() < 3 {
+        return Plane3d::default()
+            .mesh()
+            .size(fallback_size, fallback_size)
+            .into();
+    }
+    let mut cx = 0.0f32;
+    let mut cz = 0.0f32;
+    for v in vertices {
+        cx += v[0];
+        cz += v[1];
+    }
+    let n = vertices.len() as f32;
+    cx /= n;
+    cz /= n;
+    let mut positions = Vec::new();
+    let mut normals = Vec::new();
+    let mut uvs = Vec::new();
+    let mut indices = Vec::new();
+    positions.push([0.0, 0.0, 0.0]);
+    normals.push([0.0, 1.0, 0.0]);
+    uvs.push([0.5, 0.5]);
+    for v in vertices {
+        positions.push([v[0] - cx, 0.0, v[1] - cz]);
+        normals.push([0.0, 1.0, 0.0]);
+        uvs.push([0.5, 0.5]);
+    }
+    for i in 1..vertices.len() {
+        indices.extend_from_slice(&[0, i as u32, i as u32 + 1]);
+    }
+    let mut mesh = Mesh::new(
+        bevy::render::render_resource::PrimitiveTopology::TriangleList,
+        bevy::asset::RenderAssetUsages::default(),
+    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    mesh.insert_indices(bevy::render::mesh::Indices::U32(indices));
+    mesh
 }
 
 fn spawn_inland_lake_surfaces(
@@ -359,11 +442,7 @@ fn spawn_inland_lake_surfaces(
         }
         let WaterSurfaceDefinition::Horizontal {
             elevation,
-            footprint:
-                Some(HorizontalFootprint::Disc {
-                    center_xz,
-                    radius_m,
-                }),
+            footprint: Some(footprint),
         } = &body.surface
         else {
             continue;
@@ -371,18 +450,17 @@ fn spawn_inland_lake_surfaces(
         if !matches!(
             body.kind,
             WaterBodyKind::Lake
+                | WaterBodyKind::Lagoon
                 | WaterBodyKind::Pond
                 | WaterBodyKind::Spring
                 | WaterBodyKind::CavePool
+                | WaterBodyKind::Swamp
+                | WaterBodyKind::Waterfall
         ) {
             continue;
         }
-        let diameter = radius_m.max(1.0) * 2.0;
-        let material_key = if body.material_id.as_str().starts_with("waterbody.") {
-            body.material_id.clone()
-        } else {
-            shared::StableId::new("waterbody.upland_pool")
-        };
+        let (center, size) = footprint_bounds(footprint);
+        let material_key = water_material_key(body);
         let lake_mat = make_water_material(
             materials,
             water_def,
@@ -390,17 +468,28 @@ fn spawn_inland_lake_surfaces(
             *elevation,
             tweaks,
             layout,
+            body.kind,
         );
         commands.spawn((
             LakeWaterSurface { body_id: body.id.0 },
-            Mesh3d(meshes.add(Plane3d::default().mesh().size(diameter, diameter))),
+            Mesh3d(meshes.add(footprint_mesh(footprint, size))),
             MeshMaterial3d(lake_mat),
-            Transform::from_xyz(
-                center_xz[0],
-                *elevation + layout.surface_z_offset_m,
-                center_xz[1],
-            ),
+            Transform::from_xyz(center[0], *elevation + layout.surface_z_offset_m, center[1]),
         ));
+    }
+}
+
+fn water_material_key(body: &terrain_generation::WaterBody) -> shared::StableId {
+    if body.material_id.as_str().starts_with("water.") {
+        return body.material_id.clone();
+    }
+    if body.material_id.as_str().starts_with("waterbody.") {
+        return body.material_id.clone();
+    }
+    match body.kind {
+        WaterBodyKind::Lagoon => shared::StableId::new("water.lagoon"),
+        WaterBodyKind::Sea => shared::StableId::new("waterbody.sea"),
+        _ => shared::StableId::new("water.freshwater"),
     }
 }
 
@@ -492,6 +581,7 @@ fn sync_ocean_tiles(
         sea_level,
         &tweaks,
         &ocean_layout,
+        WaterBodyKind::Sea,
     );
     let tile_mesh = meshes.add(
         Plane3d::default()
@@ -548,6 +638,7 @@ fn make_water_material(
     elevation: f32,
     tweaks: &WaterTweaks,
     layout: &OceanLayout,
+    kind: WaterBodyKind,
 ) -> Handle<WaterMaterial> {
     let mut shallow = body_material
         .map(|m| m.shallow_color)
@@ -555,6 +646,13 @@ fn make_water_material(
     let mut deep = body_material
         .map(|m| m.deep_color)
         .unwrap_or(water_def.deep_color);
+    if matches!(kind, WaterBodyKind::Lagoon | WaterBodyKind::Sea) {
+        shallow = [0.15, 0.55, 0.62];
+        deep = [0.02, 0.18, 0.28];
+    } else if matches!(kind, WaterBodyKind::Swamp) {
+        shallow = [0.22, 0.34, 0.18];
+        deep = [0.08, 0.16, 0.10];
+    }
     if tweaks.use_overrides {
         shallow = tweaks.shallow_color;
         deep = tweaks.deep_color;

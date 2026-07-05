@@ -33,7 +33,7 @@ use crate::player::{
 use crate::state::AppState;
 use crate::terrain::spawn_terrain_uploaded;
 use crate::terrain::{
-    TerrainFeatureRegistry, TerrainPipelineState, effective_runtime_sea_level_m,
+    TerrainFeatureRegistry, TerrainPipelineState, TerrainSpawnPoint, effective_runtime_sea_level_m,
     spawn_terrain_collider_ready,
 };
 use crate::ui::CameraTweaks;
@@ -49,6 +49,10 @@ pub struct GamePhysicsPlugin;
 pub struct AwaitingSpawnTerrain {
     pub chunk: ChunkCoord,
 }
+
+/// Player finished initial spawn-chunk hold; do not re-hold when spawn chunk leaves render radius.
+#[derive(Component, Debug)]
+pub struct TerrainSpawnSettled;
 
 const GROUND_SNAP_MAX_ATTEMPTS: u8 = 120;
 const GROUND_SNAP_PROBE_M: f32 = 16.0;
@@ -74,6 +78,7 @@ impl Plugin for GamePhysicsPlugin {
         .add_systems(
             FixedUpdate,
             (
+                resync_players_after_worldgen_install,
                 tag_player_awaiting_terrain,
                 hold_player_until_spawn_terrain,
                 snap_players_to_ground,
@@ -151,6 +156,7 @@ fn tag_player_awaiting_terrain(
             With<Player>,
             Without<AwaitingSpawnTerrain>,
             Without<NeedsGroundSnap>,
+            Without<TerrainSpawnSettled>,
         ),
     >,
 ) {
@@ -177,6 +183,7 @@ fn hold_player_until_spawn_terrain(
     spatial: SpatialQuery,
     mut commands: Commands,
     pipeline: Res<TerrainPipelineState>,
+    spawn_point: Res<TerrainSpawnPoint>,
     registry: Res<ConfigRegistryResource>,
     colliders: Query<Entity, With<Collider>>,
     mut players: Query<
@@ -190,24 +197,62 @@ fn hold_player_until_spawn_terrain(
         With<Player>,
     >,
 ) {
-    let Some(_source) = pipeline.density_source.as_ref() else {
+    if pipeline.density_source.is_none() && pipeline.world_density_provider.is_none() {
         return;
-    };
+    }
     let Ok(player) = registry.0.active_player() else {
         return;
     };
 
     for (entity, awaiting, mut transform, mut velocity, collider) in &mut players {
         velocity.0 = Vec3::ZERO;
+        let probe_height =
+            GROUND_SNAP_PROBE_M.max(player.step_height_m + player.ground_snap_m + 3.0);
+        transform.translation = Vec3::new(
+            spawn_point.0.x,
+            spawn_point.0.y + probe_height,
+            spawn_point.0.z,
+        );
         let mesh_ready = spawn_terrain_uploaded(&pipeline, awaiting.chunk);
         let collider_ready = spawn_terrain_collider_ready(&pipeline, awaiting.chunk, &colliders);
         if mesh_ready && collider_ready {
             place_capsule_on_physics_ground(&spatial, entity, collider, &mut transform, player);
-            commands.entity(entity).remove::<AwaitingSpawnTerrain>();
+            commands
+                .entity(entity)
+                .remove::<AwaitingSpawnTerrain>()
+                .insert(TerrainSpawnSettled);
             commands
                 .entity(entity)
                 .insert(NeedsGroundSnap { attempts: 0 });
         }
+    }
+}
+
+/// Re-hold the player when a compiled worldgen atlas installs after bootstrap spawn.
+fn resync_players_after_worldgen_install(
+    mut commands: Commands,
+    pipeline: Res<TerrainPipelineState>,
+    recipe_revision: Res<crate::terrain::TerrainRecipeRevision>,
+    mut last_recipe_hash: Local<String>,
+    players: Query<Entity, With<Player>>,
+) {
+    if pipeline.world_density_provider.is_none() {
+        *last_recipe_hash = String::new();
+        return;
+    }
+    if last_recipe_hash.as_str() == recipe_revision.hash {
+        return;
+    }
+    *last_recipe_hash = recipe_revision.hash.clone();
+    let Some(chunk) = pipeline.spawn_chunk else {
+        return;
+    };
+    for entity in &players {
+        commands
+            .entity(entity)
+            .insert(AwaitingSpawnTerrain { chunk })
+            .remove::<NeedsGroundSnap>()
+            .remove::<TerrainSpawnSettled>();
     }
 }
 

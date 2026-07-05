@@ -1,0 +1,23 @@
+schema_version: 1
+id: textures.river_silt
+resolution: 512
+seed: 2108
+tileable: true
+generator:
+  Ground:
+    seed: 2108
+    macro_scale: 1.2
+    macro_octaves: 4
+    micro_scale: 9.0
+    micro_octaves: 3
+    micro_weight: 0.24
+    color_dry:
+    - 0.46
+    - 0.39
+    - 0.27
+    color_moist:
+    - 0.2
+    - 0.18
+    - 0.14
+    normal_strength: 0.85
+    roughness: 0.83

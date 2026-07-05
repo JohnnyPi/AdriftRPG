@@ -1,0 +1,23 @@
+schema_version: 1
+id: textures.wet_mud
+resolution: 512
+seed: 2104
+tileable: true
+generator:
+  Ground:
+    seed: 2104
+    macro_scale: 1.3
+    macro_octaves: 4
+    micro_scale: 7.0
+    micro_octaves: 3
+    micro_weight: 0.2
+    color_dry:
+    - 0.3
+    - 0.22
+    - 0.14
+    color_moist:
+    - 0.12
+    - 0.09
+    - 0.06
+    normal_strength: 0.95
+    roughness: 0.76

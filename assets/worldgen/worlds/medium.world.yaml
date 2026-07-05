@@ -1,0 +1,29 @@
+﻿schema_version: 1
+id: world.medium
+seed: 48130
+
+extent:
+  width_m: 16384
+  depth_m: 16384
+  vertical_min_m: -2048
+  vertical_max_m: 5120
+  sea_level_m: 0.0
+
+resolutions:
+  control_cell_m: 1024
+  regional_cell_m: 256
+  local_cell_m: 16
+
+boundary: boundary.bounded_ocean
+islands:
+  - island.volcanic_medium
+
+geology: geology.basaltic_volcanic
+refinement: refinement.tropical_volcanic
+climate: climate.tropical_trade_winds
+hydrology: hydrology.tropical_medium
+erosion: erosion.tropical_volcanic
+coast: coast.tropical_volcanic
+biomes: biomes.tropical_land
+strata: strata.tropical_volcanic
+validation: validation.medium

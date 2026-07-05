@@ -12,7 +12,7 @@ use terrain_generation::{
 #[derive(Parser, Debug)]
 #[command(name = "bake-atlas")]
 struct Args {
-    /// World stable id (e.g. world.island_testbed).
+    /// World stable id (e.g. world.small).
     #[arg(short, long)]
     world: String,
 

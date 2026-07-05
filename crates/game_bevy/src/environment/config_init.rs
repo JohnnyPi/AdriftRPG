@@ -176,10 +176,8 @@ pub fn sea_level_for_prefs(registry: &ConfigRegistryResource, prefs: &UserSetupP
 }
 
 fn log_atmosphere_presentation_warnings(atmo: &game_data::CompiledAtmosphere) {
-    let (expected_az, expected_el) = super::celestial::moon_angles_from_sun(
-        atmo.sun_azimuth_deg,
-        atmo.sun_elevation_deg,
-    );
+    let (expected_az, expected_el) =
+        super::celestial::moon_angles_from_sun(atmo.sun_azimuth_deg, atmo.sun_elevation_deg);
     if (atmo.moon_azimuth_deg - expected_az).abs() > 1.0
         || (atmo.moon_elevation_deg - expected_el).abs() > 1.0
     {

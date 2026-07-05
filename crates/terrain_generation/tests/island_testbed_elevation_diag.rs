@@ -21,6 +21,7 @@ const ALPINE_ELEVATION_M: f32 = 28.0;
 const ROCKY_ELEVATION_M: f32 = 12.0;
 
 #[test]
+#[ignore = "legacy island_gen; superseded by worldgen tier worlds (docs/worlds/)"]
 fn island_testbed_has_peak_and_chunk_coverage() {
     let registry = load_registry_from_directory(assets()).expect("registry");
     let world = registry

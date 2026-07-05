@@ -1,0 +1,22 @@
+﻿schema_version: 1
+id: surfaces.forest_floor
+texture: textures.forest_floor
+tags:
+  - soil
+  - vegetation
+  - forest
+rendering:
+  projection: triplanar
+  meters_per_repeat: 1.8
+  normal_strength: 1.05
+  macro_variation:
+    enabled: true
+    scale_m: 28.0
+    color_strength: 0.14
+    roughness_strength: 0.06
+responses:
+  wetness:
+    darkening: 0.26
+    roughness_reduction: 0.30
+  moss:
+    affinity: 0.62

@@ -1,0 +1,5 @@
+﻿schema_version: 1
+id: geology.basaltic_volcanic
+weathering_age_threshold_myr: 5.0
+tuff_age_threshold_myr: 3.0
+coastal_weathering_band_m: 400

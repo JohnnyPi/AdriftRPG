@@ -1,0 +1,22 @@
+﻿schema_version: 1
+id: erosion.tropical_volcanic
+
+iterations: 3
+
+stream_power:
+  m: 0.48
+  n: 1.0
+  maximum_step_m: 0.15
+  iterations_per_cycle: 8
+  erodibility: 0.02
+
+thermal:
+  talus_deg: 35
+  transfer_rate: 0.16
+  iterations_per_cycle: 6
+
+sediment:
+  pickup_rate: 0.12
+  transport_rate: 0.35
+  deposition_rate: 0.25
+  capacity_factor: 0.08

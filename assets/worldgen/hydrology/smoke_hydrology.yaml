@@ -1,0 +1,12 @@
+﻿schema_version: 1
+id: hydrology.smoke
+
+routing: d8
+rainfall_weight: 1.2
+stream_threshold: 4
+permanent_river_threshold: 12
+minimum_stream_length_m: 15
+lake_min_area_cells: 4
+wetland_moisture_threshold: 0.50
+waterfall_min_drop_m: 2.0
+waterfall_min_discharge: 8.0

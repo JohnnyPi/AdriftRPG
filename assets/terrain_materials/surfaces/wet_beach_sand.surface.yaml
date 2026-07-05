@@ -1,0 +1,14 @@
+﻿schema_version: 1
+id: surfaces.wet_beach_sand
+texture: textures.wet_beach_sand
+tags:
+  - sand
+  - coast
+rendering:
+  projection: triplanar
+  meters_per_repeat: 1.8
+  normal_strength: 0.65
+responses:
+  wetness:
+    darkening: 0.15
+    roughness_reduction: 0.35

@@ -1,0 +1,17 @@
+﻿schema_version: 1
+id: surfaces.limestone
+texture: textures.limestone
+tags:
+  - rock
+  - sedimentary
+  - cave
+rendering:
+  projection: triplanar
+  meters_per_repeat: 3.0
+  triplanar_sharpness: 4.0
+  normal_strength: 0.95
+  height_blend_strength: 0.25
+responses:
+  wetness:
+    darkening: 0.20
+    roughness_reduction: 0.22

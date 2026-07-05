@@ -1,0 +1,22 @@
+schema_version: 1
+id: textures.shale
+resolution: 512
+seed: 1105
+tileable: true
+generator:
+  Rock:
+    seed: 1105
+    scale: 2.1
+    octaves: 5
+    attenuation: 2.35
+    color_light:
+    - 0.34
+    - 0.35
+    - 0.36
+    color_dark:
+    - 0.11
+    - 0.12
+    - 0.13
+    normal_strength: 3.55
+    roughness: 0.87
+    metallic: 0.0

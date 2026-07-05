@@ -35,7 +35,7 @@ fn default_preview_resolution() -> u32 {
 impl Default for UserSetupPrefs {
     fn default() -> Self {
         Self {
-            world_id: "world.island_testbed".to_string(),
+            world_id: "world.small".to_string(),
             seed: 48_129,
             island_overrides: BTreeMap::new(),
             preview_color_mode: "elevation".to_string(),

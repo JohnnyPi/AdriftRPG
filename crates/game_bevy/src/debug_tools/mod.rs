@@ -14,11 +14,11 @@ use crate::environment::BiomeCatalog;
 use crate::environment::biome_context::BiomeSampleContext;
 use crate::environment::biomes::{
     biome_color, biome_discrete_debug_color, biome_scalar_debug_value, classify_biome,
+    classify_biome_from_provider, compiler_biome_debug_color,
 };
 use crate::environment::fog::FogStack;
 use crate::environment::materials::{assign_material_color, material_for_world};
 use crate::lod::LodPolicy;
-use crate::vegetation::GrassPatch;
 use crate::staging::{AssetStagingQueue, StagingGate};
 use crate::state::AppState;
 use crate::terrain::chunk_world_center;
@@ -30,11 +30,14 @@ use crate::terrain::{
     regen_terrain_with_seed,
 };
 use crate::ui::{EcologyTweaks, RiverTweaks, TerrainTweaks, WorldTweaks};
+use crate::vegetation::GrassPatch;
 use crate::world::{
     WorldSemanticRegistry, WorldSemanticTag, effective_world_from_prefs, semantic_tag_color,
 };
+use crate::worldgen::ActiveCompiledWorld;
 use bindings::init_debug_bindings;
 use terrain_generation::build_coast_mask;
+use terrain_generation::{WorldPosition, WorldXZ};
 use terrain_material_bevy::TerrainPbrMaterial;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -44,6 +47,7 @@ pub enum BiomeDebugView {
     ConstantGreen,
     HeatmapGrayscale,
     DiscreteRegions,
+    CompilerPrimary,
 }
 
 #[derive(Resource, Default)]
@@ -268,7 +272,8 @@ fn cycle_biome_debug_view(current: BiomeDebugView) -> BiomeDebugView {
         BiomeDebugView::Normal => BiomeDebugView::ConstantGreen,
         BiomeDebugView::ConstantGreen => BiomeDebugView::HeatmapGrayscale,
         BiomeDebugView::HeatmapGrayscale => BiomeDebugView::DiscreteRegions,
-        BiomeDebugView::DiscreteRegions => BiomeDebugView::Normal,
+        BiomeDebugView::DiscreteRegions => BiomeDebugView::CompilerPrimary,
+        BiomeDebugView::CompilerPrimary => BiomeDebugView::Normal,
     }
 }
 
@@ -373,46 +378,113 @@ fn draw_vertex_normals(
 fn draw_biome_labels(
     debug: Res<DebugOverlayState>,
     pipeline: Res<TerrainPipelineState>,
+    compiled_world: Option<Res<ActiveCompiledWorld>>,
     biomes: Res<BiomeCatalog>,
+    spawn_point: Res<TerrainSpawnPoint>,
+    players: Query<&Transform, With<crate::player::Player>>,
     mut gizmos: Gizmos,
 ) {
     if !debug.show_biomes && !debug.show_density && debug.biome_debug_view == BiomeDebugView::Normal
     {
         return;
     }
-    let Some(source) = pipeline.density_source.as_ref() else {
-        return;
-    };
-    for x in (-20..20).step_by(5) {
-        for z in (-20..20).step_by(5) {
-            let wx = x as f32;
-            let wz = z as f32;
-            let y = source.surface_height_at(wx, wz);
-            let density = source.density_at(wx, y, wz);
+    let center = players
+        .single()
+        .map(|tf| tf.translation)
+        .unwrap_or(spawn_point.0);
+    let center_x = center.x.round() as i32;
+    let center_z = center.z.round() as i32;
+
+    for x in (-20..=20).step_by(5) {
+        for z in (-20..=20).step_by(5) {
+            let wx = (center_x + x) as f32;
+            let wz = (center_z + z) as f32;
+            let (surface_y, density) = if let Some(source) = pipeline.density_source.as_ref() {
+                let y = source.surface_height_at(wx, wz);
+                (y, source.density_at(wx, y, wz))
+            } else if let Some(compiled) = compiled_world.as_ref() {
+                let provider = compiled.provider.as_ref();
+                let horizontal = WorldXZ::new(wx as f64, wz as f64);
+                let column = provider.sample_column(horizontal);
+                let y = column.surface.elevation_m;
+                let density = provider.sample_density(WorldPosition::new(
+                    wx as f64,
+                    y as f64,
+                    wz as f64,
+                ));
+                (y, density)
+            } else {
+                continue;
+            };
+
             if debug.show_biomes || debug.biome_debug_view != BiomeDebugView::Normal {
-                let ctx = BiomeSampleContext::sample(source, wx, y, wz);
-                let color = match debug.biome_debug_view {
-                    BiomeDebugView::HeatmapGrayscale => {
-                        let v = biome_scalar_debug_value(&ctx);
-                        Color::srgb(v, v, v)
+                let color = if let Some(source) = pipeline.density_source.as_ref() {
+                    let ctx = BiomeSampleContext::sample(source, wx, surface_y, wz);
+                    match debug.biome_debug_view {
+                        BiomeDebugView::HeatmapGrayscale => {
+                            let v = biome_scalar_debug_value(&ctx);
+                            Color::srgb(v, v, v)
+                        }
+                        BiomeDebugView::DiscreteRegions => {
+                            biome_discrete_debug_color(biome_scalar_debug_value(&ctx))
+                        }
+                        BiomeDebugView::CompilerPrimary => Color::srgb(0.5, 0.5, 0.5),
+                        _ => {
+                            let biome =
+                                classify_biome(biomes.as_ref(), source, wx, surface_y, wz, density);
+                            biome_color(biomes.as_ref(), biome)
+                        }
                     }
-                    BiomeDebugView::DiscreteRegions => {
-                        biome_discrete_debug_color(biome_scalar_debug_value(&ctx))
+                } else if let Some(compiled) = compiled_world.as_ref() {
+                    let provider = compiled.provider.as_ref();
+                    match debug.biome_debug_view {
+                        BiomeDebugView::CompilerPrimary => {
+                            let column = provider.sample_column(WorldXZ::new(wx as f64, wz as f64));
+                            compiler_biome_debug_color(column.primary_biome)
+                        }
+                        BiomeDebugView::HeatmapGrayscale => {
+                            let ctx = BiomeSampleContext::sample_from_provider(
+                                provider,
+                                wx,
+                                surface_y,
+                                wz,
+                            );
+                            let v = biome_scalar_debug_value(&ctx);
+                            Color::srgb(v, v, v)
+                        }
+                        BiomeDebugView::DiscreteRegions => {
+                            let ctx = BiomeSampleContext::sample_from_provider(
+                                provider,
+                                wx,
+                                surface_y,
+                                wz,
+                            );
+                            biome_discrete_debug_color(biome_scalar_debug_value(&ctx))
+                        }
+                        _ => {
+                            let biome = classify_biome_from_provider(
+                                biomes.as_ref(),
+                                provider,
+                                wx,
+                                surface_y,
+                                wz,
+                                density,
+                            );
+                            biome_color(biomes.as_ref(), biome)
+                        }
                     }
-                    _ => {
-                        let biome = classify_biome(biomes.as_ref(), source, wx, y, wz, density);
-                        biome_color(biomes.as_ref(), biome)
-                    }
+                } else {
+                    continue;
                 };
                 gizmos.sphere(
-                    Isometry3d::from_translation(Vec3::new(wx, y + 0.5, wz)),
+                    Isometry3d::from_translation(Vec3::new(wx, surface_y + 0.5, wz)),
                     0.25,
                     color,
                 );
             }
             if debug.show_density && density <= 0.0 {
                 gizmos.sphere(
-                    Isometry3d::from_translation(Vec3::new(wx, y, wz)),
+                    Isometry3d::from_translation(Vec3::new(wx, surface_y, wz)),
                     0.15,
                     Color::srgba(0.9, 0.2, 0.2, 0.5),
                 );

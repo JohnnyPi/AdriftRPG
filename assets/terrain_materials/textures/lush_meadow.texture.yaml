@@ -1,0 +1,23 @@
+schema_version: 1
+id: textures.lush_meadow
+resolution: 512
+seed: 2102
+tileable: true
+generator:
+  Ground:
+    seed: 2102
+    macro_scale: 1.5
+    macro_octaves: 5
+    micro_scale: 8.0
+    micro_octaves: 4
+    micro_weight: 0.26
+    color_dry:
+    - 0.4
+    - 0.62
+    - 0.25
+    color_moist:
+    - 0.18
+    - 0.43
+    - 0.12
+    normal_strength: 1.35
+    roughness: 0.88

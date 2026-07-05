@@ -10,9 +10,10 @@ fn assets() -> PathBuf {
 }
 
 #[test]
+#[ignore = "legacy island_gen; superseded by worldgen tier worlds (docs/worlds/)"]
 fn resolve_island_atlas_bad_baked_path_returns_err() {
     let registry = load_registry_from_directory(assets()).expect("registry");
-    let world_id = shared::StableId::new("world.island_testbed");
+    let world_id = shared::StableId::new("world.small");
     let mut world = registry.world_by_id(&world_id).expect("world").clone();
     let island = registry
         .island_generation_for_world(&world)

@@ -48,6 +48,8 @@ pub use residency::{
     world_position_in_high_detail_radius,
 };
 
+pub(crate) use pipeline::finish_compiled_world_install;
+
 use bevy::prelude::*;
 use voxel_core::ChunkCoord;
 

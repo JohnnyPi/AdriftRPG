@@ -288,14 +288,7 @@ fn move_character(
 /// immediately so the collider never intersects the ground.
 fn snap_to_ground(
     time: Res<Time<Fixed>>,
-    mut query: Query<
-        (
-            &mut Transform,
-            &GroundedState,
-            &LinearVelocity,
-        ),
-        With<CharacterController>,
-    >,
+    mut query: Query<(&mut Transform, &GroundedState, &LinearVelocity), With<CharacterController>>,
 ) {
     let dt = time.delta_secs();
     for (mut transform, grounded, velocity) in &mut query {

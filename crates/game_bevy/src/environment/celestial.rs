@@ -168,10 +168,8 @@ fn update_celestial_state(
     celestial.moon_azimuth_deg = moon_azimuth;
     celestial.moon_elevation_deg = moon_elevation;
     celestial.moon_direction = moon_direction_from_sun(azimuth, elevation);
-    celestial.moon_phase = crate::ui::moon_phase_from_simulation_days(
-        sim.simulation_days,
-        lighting.moon_phase_offset,
-    );
+    celestial.moon_phase =
+        crate::ui::moon_phase_from_simulation_days(sim.simulation_days, lighting.moon_phase_offset);
     celestial.moon_enabled = lighting.moon_enabled && elevation < -2.0;
     celestial.moon_illuminance = if celestial.moon_enabled {
         lighting.moon_illuminance

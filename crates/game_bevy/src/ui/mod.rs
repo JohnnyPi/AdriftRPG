@@ -5,6 +5,7 @@ mod options_panel;
 mod overlay_camera;
 mod setup_options;
 mod tweaks;
+mod world_select;
 
 pub use hud::HudPlugin;
 pub use main_menu::MainMenuPlugin;

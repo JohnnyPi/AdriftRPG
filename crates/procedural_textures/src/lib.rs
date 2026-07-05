@@ -31,9 +31,9 @@ pub use generators::{
 pub use maps::{GeneratedPbrMaps, encode_height_u8, pack_ormh};
 pub use material_recipe::{
     CORE_ISLAND_LAYER_ORDER, ProceduralMaterialsDocument, TerrainMaterialIdName,
-    TerrainMaterialRecipe, default_island_recipes, document_fingerprint,
-    document_layer_order, order_recipes_for_core_layers, order_recipes_for_document,
-    order_recipes_for_palette, strip_utf8_bom,
+    TerrainMaterialRecipe, default_island_recipes, document_fingerprint, document_layer_order,
+    order_recipes_for_core_layers, order_recipes_for_document, order_recipes_for_palette,
+    strip_utf8_bom,
 };
 pub use recipe::{
     ProceduralTextureGenerator, TextureRecipe, texture_recipe_from_definition,

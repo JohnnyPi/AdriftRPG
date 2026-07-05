@@ -1,0 +1,12 @@
+﻿schema_version: 1
+id: hydrology.tropical_medium
+
+routing: d8
+rainfall_weight: 1.0
+stream_threshold: 24
+permanent_river_threshold: 80
+minimum_stream_length_m: 400
+lake_min_area_cells: 16
+wetland_moisture_threshold: 0.55
+waterfall_min_drop_m: 3.0
+waterfall_min_discharge: 40.0

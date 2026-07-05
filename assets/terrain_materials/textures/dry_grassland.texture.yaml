@@ -1,0 +1,23 @@
+schema_version: 1
+id: textures.dry_grassland
+resolution: 512
+seed: 2101
+tileable: true
+generator:
+  Ground:
+    seed: 2101
+    macro_scale: 1.7
+    macro_octaves: 5
+    micro_scale: 9.0
+    micro_octaves: 4
+    micro_weight: 0.3
+    color_dry:
+    - 0.52
+    - 0.48
+    - 0.24
+    color_moist:
+    - 0.34
+    - 0.4
+    - 0.18
+    normal_strength: 1.45
+    roughness: 0.91

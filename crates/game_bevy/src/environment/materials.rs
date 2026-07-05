@@ -96,9 +96,9 @@ pub fn terrain_material_key_from_paint_material(
         BiomeId::Beach => terrain_surface::MaterialKey::new("sand"),
         BiomeId::RockyUpland | BiomeId::Alpine => terrain_surface::MaterialKey::new("rock"),
         BiomeId::Forest => terrain_surface::MaterialKey::new("forest_floor"),
-        BiomeId::Wetland | BiomeId::Riverbank => terrain_surface::MaterialKey::new("wet_rock"),
-        BiomeId::Cave => terrain_surface::MaterialKey::new("cave_stone"),
-        BiomeId::Scrub | BiomeId::CoastalScrub => terrain_surface::MaterialKey::new("scrub"),
+        BiomeId::Wetland | BiomeId::Riverbank => terrain_surface::MaterialKey::new("rock"),
+        BiomeId::Cave => terrain_surface::MaterialKey::new("limestone"),
+        BiomeId::Scrub | BiomeId::CoastalScrub => terrain_surface::MaterialKey::new("volcanic_ash"),
         _ => terrain_surface::MaterialKey::new("grass"),
     }
 }

@@ -1,0 +1,24 @@
+﻿schema_version: 1
+id: surfaces.weathered_cliff
+texture: textures.weathered_cliff
+tags:
+  - rock
+  - cliff
+  - weathered
+rendering:
+  projection: triplanar
+  meters_per_repeat: 4.0
+  triplanar_sharpness: 5.0
+  normal_strength: 1.2
+  height_blend_strength: 0.35
+  macro_variation:
+    enabled: true
+    scale_m: 48.0
+    color_strength: 0.12
+    roughness_strength: 0.08
+responses:
+  wetness:
+    darkening: 0.24
+    roughness_reduction: 0.25
+  moss:
+    affinity: 0.40

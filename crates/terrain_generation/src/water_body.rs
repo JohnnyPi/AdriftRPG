@@ -12,16 +12,19 @@ pub struct WaterBodyId(pub u32);
 pub enum WaterBodyKind {
     Sea,
     Lake,
+    Lagoon,
     Pond,
     River,
     Spring,
     Waterfall,
     CavePool,
+    Swamp,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub enum HorizontalFootprint {
     Disc { center_xz: [f32; 2], radius_m: f32 },
+    Polygon { vertices_xz: Vec<[f32; 2]> },
 }
 
 impl HorizontalFootprint {
@@ -35,8 +38,35 @@ impl HorizontalFootprint {
                 let dz = position_xz[1] - center_xz[1];
                 dx * dx + dz * dz <= radius_m.max(0.1).powi(2)
             }
+            Self::Polygon { vertices_xz } => point_in_polygon(position_xz, vertices_xz),
         }
     }
+}
+
+fn point_in_polygon(point: [f32; 2], vertices: &[[f32; 2]]) -> bool {
+    if vertices.len() < 3 {
+        if let Some(v) = vertices.first() {
+            let dx = point[0] - v[0];
+            let dz = point[1] - v[1];
+            return dx * dx + dz * dz <= 4.0;
+        }
+        return false;
+    }
+    let mut inside = false;
+    let mut j = vertices.len() - 1;
+    for i in 0..vertices.len() {
+        let xi = vertices[i][0];
+        let zi = vertices[i][1];
+        let xj = vertices[j][0];
+        let zj = vertices[j][1];
+        let intersect = ((zi > point[1]) != (zj > point[1]))
+            && (point[0] < (xj - xi) * (point[1] - zi) / (zj - zi).max(1e-6) + xi);
+        if intersect {
+            inside = !inside;
+        }
+        j = i;
+    }
+    inside
 }
 
 /// Whether a horizontal surface applies at `position_xz`. Sea is unbounded when

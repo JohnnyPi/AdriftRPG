@@ -1,7 +1,7 @@
 ﻿schema_version: 1
 id: app.default
 
-world: world.island_testbed
+world: world.small
 player: player.default
 camera: camera.mmo_default
 performance: performance.default

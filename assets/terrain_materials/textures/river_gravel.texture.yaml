@@ -1,0 +1,22 @@
+schema_version: 1
+id: textures.river_gravel
+resolution: 512
+seed: 1107
+tileable: true
+generator:
+  Rock:
+    seed: 1107
+    scale: 5.8
+    octaves: 6
+    attenuation: 1.65
+    color_light:
+    - 0.55
+    - 0.52
+    - 0.46
+    color_dark:
+    - 0.18
+    - 0.19
+    - 0.18
+    normal_strength: 3.65
+    roughness: 0.9
+    metallic: 0.0

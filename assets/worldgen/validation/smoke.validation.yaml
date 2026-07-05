@@ -1,0 +1,12 @@
+﻿schema_version: 1
+id: validation.smoke
+land_fraction_min: 0.02
+land_fraction_max: 0.45
+min_peak_elevation_m: 30
+max_peak_elevation_m: 80
+river_ocean_connection_ratio_min: 0.80
+max_disconnected_river_fraction: 0.10
+min_permanent_river_length_m: 20
+min_cave_systems: 1
+min_traversable_cave_systems: 1
+max_cave_mouth_breaches: 2

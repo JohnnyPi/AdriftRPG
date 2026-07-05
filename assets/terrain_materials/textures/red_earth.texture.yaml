@@ -1,0 +1,23 @@
+schema_version: 1
+id: textures.red_earth
+resolution: 512
+seed: 2111
+tileable: true
+generator:
+  Ground:
+    seed: 2111
+    macro_scale: 1.8
+    macro_octaves: 5
+    micro_scale: 12.0
+    micro_octaves: 4
+    micro_weight: 0.32
+    color_dry:
+    - 0.58
+    - 0.25
+    - 0.12
+    color_moist:
+    - 0.31
+    - 0.1
+    - 0.06
+    normal_strength: 1.6
+    roughness: 0.93

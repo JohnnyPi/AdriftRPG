@@ -1,8 +1,8 @@
 # Terrain Feature Catalog
 
 Bridge between **authored op-based** terrain (`terrain.*` YAML) and **procedural island_gen**
-modules. Use the authored `world.island_testbed` as the reference layout when tuning
-`island_gen.island_large`.
+modules. Use `world.small` as the reference layout when tuning scaled tiers.
+See [world_tiers.md](world_tiers.md) and [worlds/small.md](worlds/small.md).
 
 ## Island footprint
 
@@ -53,5 +53,7 @@ modules. Use the authored `world.island_testbed` as the reference layout when tu
 
 | World | Mode | Horizontal span | Island size |
 |-------|------|-----------------|-------------|
-| `world.island_testbed` | Authored ops | 512 m | ~360 m |
-| `world.island_large` | Procedural `island_gen` | 3200 m | ~2500 m |
+| `world.small` | Worldgen compiler | 8192 m | ~5600 m |
+| `world.medium` | Worldgen compiler | 16384 m | ~11200 m |
+| `world.large` | Worldgen compiler | 23104 m | ~15800 m |
+| `world.smoke` | Worldgen compiler (CI) | 512 m | ~190 m |

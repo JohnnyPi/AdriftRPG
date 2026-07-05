@@ -17,6 +17,7 @@
 //!
 //! [`RuleSurfaceClassifier`] produces a four-material [`SurfaceMaterialBlend`] in
 //! material-key space; [`resolve_blend`] converts keys to global layers before remapping.
+mod biome_bridge;
 mod blend;
 mod chunk_palette;
 mod classifier;
@@ -37,6 +38,10 @@ pub use classifier::IslandSurfaceClassifier;
 pub use classifier::{
     RuleSurfaceClassifier, SurfaceBlendEntry, SurfaceClassifierPreset, SurfaceConditions,
     SurfaceGate, SurfaceGateWeights, SurfaceRamp, SurfaceRuleSet, SurfaceWeightedMix,
+};
+pub use biome_bridge::{
+    compiler_biome_to_presentation, merge_soft_biome_sources, soft_weights_from_blend_cell,
+    soft_weights_from_primary_u8,
 };
 pub use context::{
     BiomeId, EnvironmentSample, GeologyId, SoftBiomeWeights, SurfaceContext,

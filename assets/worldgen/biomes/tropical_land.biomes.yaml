@@ -1,0 +1,12 @@
+﻿schema_version: 1
+id: biomes.tropical_land
+land:
+  cloud_forest_elevation_m: [600, 1400]
+  dry_forest_rainfall_max: 0.45
+  montane_shrub_elevation_m: 900
+  volcanic_barren_slope_deg: 35
+  wetland_moisture_min: 0.65
+marine:
+  reef_depth_m: [0.5, 25]
+  shelf_depth_m: 80
+  deep_coastal_depth_m: 300

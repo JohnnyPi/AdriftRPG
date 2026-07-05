@@ -1,0 +1,22 @@
+schema_version: 1
+id: textures.basalt
+resolution: 512
+seed: 1101
+tileable: true
+generator:
+  Rock:
+    seed: 1101
+    scale: 3.8
+    octaves: 6
+    attenuation: 2.2
+    color_light:
+    - 0.22
+    - 0.23
+    - 0.24
+    color_dark:
+    - 0.055
+    - 0.06
+    - 0.07
+    normal_strength: 3.75
+    roughness: 0.88
+    metallic: 0.0

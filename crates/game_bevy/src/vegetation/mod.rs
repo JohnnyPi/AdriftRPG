@@ -3,25 +3,26 @@ mod grass;
 
 use bevy::prelude::*;
 use std::sync::Arc;
-use terrain_generation::RecipeDensitySource;
+use terrain_generation::{
+    RecipeDensitySource, WorldDensityProvider, WorldPosition, WorldXZ,
+};
 use voxel_core::ChunkCoord;
 
 use crate::data::{ConfigRegistryResource, UserSetupPrefs};
 use crate::environment::BiomeCatalog;
-use crate::environment::biomes::{BiomeKind, classify_biome};
+use crate::environment::biomes::{BiomeKind, classify_biome, classify_biome_from_provider};
 use crate::lod::LodPolicy;
 use crate::physics::NeedsGroundSnap;
 use crate::player::Player;
 use crate::state::AppState;
 use crate::terrain::{
     ChunkState, TerrainPipelineState, TerrainWorldRuntime,
-    residency::{
-        chunk_chebyshev_distance, within_decoration_radius, within_high_detail_radius,
-    },
+    residency::{chunk_chebyshev_distance, within_decoration_radius, within_high_detail_radius},
     world_position_in_decoration_radius, world_position_in_high_detail_radius,
 };
 use crate::ui::{EcologyTweaks, WorldTweaks};
 use crate::world::requested_world_id;
+use crate::worldgen::ActiveCompiledWorld;
 use game_data::VegetationRuleDefinition;
 use voxel_core::CHUNK_CELLS;
 
@@ -104,6 +105,7 @@ fn spawn_environment_when_ready(
     prefs: Res<UserSetupPrefs>,
     policy: Res<LodPolicy>,
     pipeline: Res<TerrainPipelineState>,
+    compiled_world: Option<Res<ActiveCompiledWorld>>,
     biomes: Res<BiomeCatalog>,
     ecology: Res<EcologyTweaks>,
     world_tweaks: Res<WorldTweaks>,
@@ -122,7 +124,11 @@ fn spawn_environment_when_ready(
     let Ok((player_tf, player)) = players.single() else {
         return;
     };
-    let Some(source) = pipeline.density_source.as_ref().map(Arc::clone) else {
+    let sampler = if let Some(source) = pipeline.density_source.as_ref() {
+        EnvironmentSampler::Recipe(Arc::clone(source))
+    } else if let Some(compiled) = compiled_world.as_ref() {
+        EnvironmentSampler::Compiled(Arc::clone(&compiled.provider))
+    } else {
         return;
     };
     let Some(lib) = mesh_library.0.as_ref() else {
@@ -145,7 +151,7 @@ fn spawn_environment_when_ready(
         &mut commands,
         &registry,
         &prefs,
-        source.as_ref(),
+        sampler,
         lib,
         &biomes,
         ecology.vegetation_density,
@@ -154,6 +160,62 @@ fn spawn_environment_when_ready(
         runtime.interest_center,
         player_tf.translation,
     );
+}
+
+enum EnvironmentSampler {
+    Recipe(Arc<RecipeDensitySource>),
+    Compiled(Arc<dyn WorldDensityProvider>),
+}
+
+impl EnvironmentSampler {
+    fn seed(&self) -> u64 {
+        match self {
+            Self::Recipe(source) => source.recipe().seed,
+            Self::Compiled(provider) => provider.world_metadata().seed,
+        }
+    }
+
+    fn surface_height_at(&self, wx: f32, wz: f32) -> f32 {
+        match self {
+            Self::Recipe(source) => source.surface_height_at(wx, wz),
+            Self::Compiled(provider) => provider
+                .sample_column(WorldXZ::new(wx as f64, wz as f64))
+                .surface
+                .elevation_m,
+        }
+    }
+
+    fn density_at(&self, wx: f32, wy: f32, wz: f32) -> f32 {
+        match self {
+            Self::Recipe(source) => source.density_at(wx, wy, wz),
+            Self::Compiled(provider) => provider.sample_density(WorldPosition::new(
+                wx as f64,
+                wy as f64,
+                wz as f64,
+            )),
+        }
+    }
+
+    fn classify(&self, catalog: &BiomeCatalog, wx: f32, wy: f32, wz: f32, density: f32) -> BiomeKind {
+        match self {
+            Self::Recipe(source) => classify_biome(catalog, source, wx, wy, wz, density),
+            Self::Compiled(provider) => {
+                classify_biome_from_provider(catalog, provider.as_ref(), wx, wy, wz, density)
+            }
+        }
+    }
+
+    fn estimate_slope_deg(&self, wx: f32, y: f32, wz: f32) -> f32 {
+        match self {
+            Self::Recipe(source) => estimate_slope_deg(source, wx, y, wz),
+            Self::Compiled(provider) => {
+                provider
+                    .sample_column(WorldXZ::new(wx as f64, wz as f64))
+                    .surface
+                    .slope
+            }
+        }
+    }
 }
 
 struct MeshLibrary {
@@ -282,7 +344,7 @@ fn spawn_vegetation_and_props(
     commands: &mut Commands,
     registry: &ConfigRegistryResource,
     prefs: &UserSetupPrefs,
-    source: &RecipeDensitySource,
+    sampler: EnvironmentSampler,
     lib: &MeshLibrary,
     biomes: &BiomeCatalog,
     ecology_density: f32,
@@ -310,7 +372,7 @@ fn spawn_vegetation_and_props(
         .content
         .vegetation_max_distance_m
         .min(perf.vegetation_maximum_distance_m);
-    let seed = source.recipe().seed;
+    let seed = sampler.seed();
 
     let default_rules = vegetation.map(|v| v.rules.as_slice()).unwrap_or(&[]);
     let mut rng_state = seed;
@@ -364,13 +426,13 @@ fn spawn_vegetation_and_props(
                             continue;
                         }
                         rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
-                        let surface_y = source.surface_height_at(wx, wz);
-                        let density = source.density_at(wx, surface_y, wz);
+                        let surface_y = sampler.surface_height_at(wx, wz);
+                        let density = sampler.density_at(wx, surface_y, wz);
                         if density > 0.0 {
                             continue;
                         }
-                        let biome = classify_biome(biomes, source, wx, surface_y, wz, density);
-                        let slope = estimate_slope_deg(source, wx, surface_y, wz);
+                        let biome = sampler.classify(biomes, wx, surface_y, wz, density);
+                        let slope = sampler.estimate_slope_deg(wx, surface_y, wz);
                         let biome_rules = biomes
                             .vegetation_profile_for(biome)
                             .and_then(|id| registry.0.vegetation.get(&id))

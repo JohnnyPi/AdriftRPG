@@ -14,6 +14,10 @@ serde_yaml = "0.9"
 sha2 = "0.10"
 hex = "0.4"
 zstd = "0.13"
+blake3 = { workspace = true }
+glam = { version = "0.29", features = ["serde"] }
+thiserror = "2"
+rayon = { workspace = true }
 
 [dev-dependencies]
 game_data = { path = "../game_data" }

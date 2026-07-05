@@ -1,0 +1,15 @@
+﻿schema_version: 1
+id: climate.tropical_trade_winds
+
+base_temperature_c: 28
+lapse_rate_c_per_km: 6.2
+
+prevailing_wind:
+  direction_deg: 72
+  strength: 0.8
+  moisture: 0.95
+
+rainfall:
+  ocean_recharge: 0.018
+  orographic_factor: 2.6
+  rain_shadow_factor: 0.72

@@ -2,8 +2,8 @@
 use bevy::pbr::{Material, MaterialPipeline, MaterialPipelineKey};
 use bevy::prelude::*;
 use bevy::render::mesh::MeshVertexBufferLayoutRef;
-use bevy::render::render_resource::{AsBindGroup, RenderPipelineDescriptor, ShaderType};
 use bevy::render::render_resource::SpecializedMeshPipelineError;
+use bevy::render::render_resource::{AsBindGroup, RenderPipelineDescriptor, ShaderType};
 use bevy::shader::ShaderRef;
 use terrain_surface::{CHUNK_LOCAL_SLOT_COUNT, ChunkSlotPalette, UNUSED_SLOT};
 

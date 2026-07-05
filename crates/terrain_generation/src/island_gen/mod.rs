@@ -14,6 +14,7 @@ mod util;
 mod validate;
 mod volcano;
 
+pub use carving::carve_river_channels;
 pub use params::*;
 pub use validate::{ValidationReport, min_peak_elevation_m, validate_atlas};
 
@@ -22,7 +23,7 @@ use crate::island_atlas::IslandAtlas;
 use crate::noise::ValueNoise;
 use bathymetry::{bathymetry_height, compute_coast_distance};
 use biome_field::compute_biome_weights;
-use carving::{carve_river_channels, compute_slope};
+use carving::compute_slope;
 use coast::{apply_beach_profiles, classify_coast};
 use erosion::{apply_stream_power_erosion, apply_thermal_erosion};
 use footprint::build_island_mask;

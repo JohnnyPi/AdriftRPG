@@ -3,10 +3,10 @@
 use bevy::prelude::*;
 
 use crate::camera::MainGameCamera;
-use crate::environment::celestial::CelestialState;
-use crate::environment::lighting_state::EnvironmentLightingState;
-use crate::environment::celestial::MoonLight;
 use crate::environment::SunLight;
+use crate::environment::celestial::CelestialState;
+use crate::environment::celestial::MoonLight;
+use crate::environment::lighting_state::EnvironmentLightingState;
 use crate::state::AppState;
 
 #[derive(Resource, Default)]
@@ -60,10 +60,18 @@ fn draw_lighting_debug(
     if debug.show_light_vectors {
         if let Ok(sun_tf) = sun.single() {
             let sun_dir = sun_tf.forward().as_vec3();
-            gizmos.arrow(origin, origin + sun_dir * 40.0, Color::srgb(1.0, 0.92, 0.55));
+            gizmos.arrow(
+                origin,
+                origin + sun_dir * 40.0,
+                Color::srgb(1.0, 0.92, 0.55),
+            );
         }
         let moon_dir = -celestial.sun_direction;
-        gizmos.arrow(origin, origin + moon_dir * 30.0, Color::srgb(0.72, 0.78, 0.92));
+        gizmos.arrow(
+            origin,
+            origin + moon_dir * 30.0,
+            Color::srgb(0.72, 0.78, 0.92),
+        );
     }
 
     if debug.show_lighting_stats {

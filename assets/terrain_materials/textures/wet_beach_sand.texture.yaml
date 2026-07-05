@@ -1,0 +1,20 @@
+schema_version: 1
+id: textures.wet_beach_sand
+resolution: 512
+seed: 3101
+tileable: true
+generator:
+  Sand:
+    seed: 3101
+    ripple_scale: 4.0
+    grain_scale: 28.0
+    color_light:
+    - 0.62
+    - 0.56
+    - 0.43
+    color_dark:
+    - 0.29
+    - 0.27
+    - 0.23
+    normal_strength: 0.75
+    roughness: 0.82

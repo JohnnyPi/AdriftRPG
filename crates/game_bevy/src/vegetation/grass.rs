@@ -47,10 +47,7 @@ impl Plugin for GrassPlugin {
             .add_systems(Startup, init_grass_render_assets)
             .add_systems(
                 Update,
-                (
-                    cleanup_stale_grass_patches,
-                    sync_grass_patches,
-                )
+                (cleanup_stale_grass_patches, sync_grass_patches)
                     .chain()
                     .run_if(in_state(AppState::Running)),
             );
@@ -86,7 +83,7 @@ fn cleanup_stale_grass_patches(
             || pipeline
                 .chunks
                 .get(&patch.terrain_chunk)
-                .is_none_or(|chunk| chunk.state != ChunkState::Ready);
+                .is_none_or(|chunk| chunk.state != ChunkState::Ready || chunk.entity.is_none());
         if !stale {
             continue;
         }
@@ -129,7 +126,7 @@ fn sync_grass_patches(
                 let Some(chunk) = pipeline.chunks.get(&coord) else {
                     continue;
                 };
-                if chunk.state != ChunkState::Ready {
+                if chunk.state != ChunkState::Ready || chunk.entity.is_none() {
                     continue;
                 }
                 let chunk_center = chunk_world_center(coord, cell_size_m);

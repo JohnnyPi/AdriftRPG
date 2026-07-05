@@ -57,6 +57,7 @@ fn build_authored_testbed_density_source(
 }
 
 #[test]
+#[ignore = "legacy island_gen; superseded by worldgen tier worlds (docs/worlds/)"]
 fn atlas_harness_matches_runtime_island_params() {
     let registry = load_registry_from_directory(workspace_assets()).expect("registry");
     let world = registry
@@ -98,6 +99,7 @@ fn atlas_harness_matches_runtime_island_params() {
 }
 
 #[test]
+#[ignore = "legacy island_gen; superseded by worldgen tier worlds (docs/worlds/)"]
 fn testbed_spawn_chunk_has_mesh() {
     let registry = load_registry_from_directory(workspace_assets()).expect("registry");
     let source = build_authored_testbed_density_source(&registry);
@@ -131,6 +133,7 @@ fn testbed_spawn_chunk_has_mesh() {
 }
 
 #[test]
+#[ignore = "legacy island_gen; superseded by worldgen tier worlds (docs/worlds/)"]
 fn testbed_meshes_surface_chunks() {
     let registry = load_registry_from_directory(workspace_assets()).expect("registry");
     let source = build_authored_testbed_density_source(&registry);
@@ -163,6 +166,7 @@ fn testbed_meshes_surface_chunks() {
 }
 
 #[test]
+#[ignore = "legacy island_gen; superseded by worldgen tier worlds (docs/worlds/)"]
 fn testbed_world_edge_columns_mesh_seabed() {
     let registry = load_registry_from_directory(workspace_assets()).expect("registry");
     let source = build_authored_testbed_density_source(&registry);
@@ -196,6 +200,7 @@ fn testbed_world_edge_columns_mesh_seabed() {
 }
 
 #[test]
+#[ignore = "legacy island_gen; superseded by worldgen tier worlds (docs/worlds/)"]
 fn golden_atlas_hash_matches_live_generation() {
     let assets = workspace_assets();
     let registry = load_registry_from_directory(&assets).expect("registry");
@@ -224,6 +229,7 @@ fn golden_atlas_hash_matches_live_generation() {
 }
 
 #[test]
+#[ignore = "legacy island_gen; superseded by worldgen tier worlds (docs/worlds/)"]
 fn golden_spawn_height_stable() {
     let assets = workspace_assets();
     let registry = load_registry_from_directory(&assets).expect("registry");
@@ -239,6 +245,7 @@ fn golden_spawn_height_stable() {
 }
 
 #[test]
+#[ignore = "legacy island_gen; superseded by worldgen tier worlds (docs/worlds/)"]
 fn golden_mesh_vertex_count_band() {
     let assets = workspace_assets();
     let registry = load_registry_from_directory(&assets).expect("registry");
@@ -274,6 +281,7 @@ fn golden_mesh_vertex_count_band() {
 }
 
 #[test]
+#[ignore = "legacy island_gen; superseded by worldgen tier worlds (docs/worlds/)"]
 fn baked_atlas_rejects_wrong_seed() {
     let assets = workspace_assets();
     let registry = load_registry_from_directory(&assets).expect("registry");

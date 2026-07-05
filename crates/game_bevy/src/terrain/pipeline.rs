@@ -20,7 +20,10 @@ use bevy::tasks::{AsyncComputeTaskPool, Task};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use terrain_generation::{DensitySource, RecipeDensitySource, fill_padded_samples};
+use terrain_generation::{
+    DensitySource, RecipeDensitySource, WorldDensityProvider, WorldPosition, fill_padded_samples,
+    resolve_spawn_from_provider,
+};
 use terrain_meshing::{ChunkMeshingInput, SurfaceNetsMesher, TerrainMeshData, TerrainMesher};
 use tracing::{info, warn};
 use voxel_core::{CHUNK_CELLS, ChunkCoord, WorldCell};
@@ -49,6 +52,7 @@ use crate::terrain::{
 };
 use crate::terrain::{build_density_source_from_prefs, validate_density_source_buildable};
 use crate::ui::{TerrainTweaks, WorldTweaks};
+use crate::worldgen::{ActiveCompiledWorld, WorldCompilationConfig};
 use game_data::TerrainColliderLodDefinition;
 use physics_bridge::terrain_layers;
 use terrain_surface::{
@@ -57,6 +61,15 @@ use terrain_surface::{
 };
 
 const MAX_TASK_POLLS_PER_FRAME: usize = 64;
+
+#[derive(Clone)]
+pub(crate) enum DensitySamplingContext {
+    Legacy(Arc<RecipeDensitySource>),
+    Compiled {
+        provider: Arc<dyn WorldDensityProvider>,
+        cell_size_m: f32,
+    },
+}
 
 fn try_poll_task<T>(task: &mut Task<T>) -> Option<T> {
     bevy::tasks::block_on(bevy::tasks::futures_lite::future::poll_once(task))
@@ -128,6 +141,7 @@ impl Plugin for TerrainPlugin {
             .add_systems(
                 Update,
                 (
+                    crate::worldgen::apply_compiled_world_to_pipeline,
                     poll_procedural_atlas_init,
                     sync_terrain_on_recipe_change,
                     manage_chunk_residency,
@@ -171,6 +185,7 @@ pub struct TerrainRegenPending {
 #[derive(Resource, Default)]
 pub struct TerrainPipelineState {
     pub density_source: Option<Arc<RecipeDensitySource>>,
+    pub world_density_provider: Option<Arc<dyn WorldDensityProvider>>,
     pub spawn_chunk: Option<ChunkCoord>,
     /// Sparse chunk records keyed by coordinate; see module docs.
     pub chunks: HashMap<ChunkCoord, ChunkRecord>,
@@ -224,6 +239,18 @@ impl TerrainPipelineState {
 
     pub fn collider_queue_len(&self) -> usize {
         self.collider_queue.len()
+    }
+
+    pub fn density_sampling_context(&self, cell_size_m: f32) -> Option<DensitySamplingContext> {
+        if let Some(provider) = self.world_density_provider.as_ref() {
+            return Some(DensitySamplingContext::Compiled {
+                provider: Arc::clone(provider),
+                cell_size_m,
+            });
+        }
+        self.density_source
+            .as_ref()
+            .map(|source| DensitySamplingContext::Legacy(Arc::clone(source)))
     }
 
     /// Invalidate specific chunks after terrain edits.
@@ -368,6 +395,69 @@ fn world_chunk_bounds(extent: [i32; 3]) -> ([i32; 3], [i32; 3]) {
     (min, max)
 }
 
+fn world_extent_chunks_from_metadata(
+    extent: &terrain_generation::WorldExtent,
+    cell_size_m: f32,
+    spawn_chunk: Option<ChunkCoord>,
+) -> [i32; 3] {
+    let chunk_span_m = voxel_core::CHUNK_CELLS as f32 * cell_size_m;
+    let horizontal = (extent.width_m / chunk_span_m as f64).ceil() as i32;
+    let mut vertical =
+        ((extent.vertical_max_m - extent.vertical_min_m) / chunk_span_m as f64).ceil() as i32;
+    let depth = (extent.depth_m / chunk_span_m as f64).ceil() as i32;
+    // Chunk Y is centered on sea level; YAML vertical span can underestimate volcanic peaks.
+    if let Some(spawn) = spawn_chunk {
+        let margin_chunks = 8;
+        let peak_vertical = (spawn.y.abs() + margin_chunks) * 2 + 1;
+        vertical = vertical.max(peak_vertical);
+    }
+    [horizontal.max(1), vertical.max(1), depth.max(1)]
+}
+
+pub(crate) fn finish_compiled_world_install(
+    provider: Arc<dyn WorldDensityProvider>,
+    pipeline: &mut TerrainPipelineState,
+    spawn_point: &mut TerrainSpawnPoint,
+    recipe_revision: &mut TerrainRecipeRevision,
+    runtime: &mut TerrainWorldRuntime,
+    recipe_hash: String,
+    cell_size_m: f32,
+) {
+    let metadata = provider.world_metadata().clone();
+    let extent = metadata.extent;
+    let (sx, sy, sz, spawn_report) = resolve_spawn_from_provider(
+        provider.as_ref(),
+        0.0,
+        0.0,
+        terrain_generation::PLAYER_SPAWN_MIN_CLEARANCE_M,
+        256.0,
+    );
+    let spawn_cell = WorldCell::new(
+        (sx / cell_size_m).floor() as i32,
+        (sy / cell_size_m).floor() as i32,
+        (sz / cell_size_m).floor() as i32,
+    );
+    spawn_point.0 = Vec3::new(sx, sy, sz);
+    let spawn_chunk_coord = spawn_cell.chunk_coord();
+    pipeline.spawn_chunk = Some(spawn_chunk_coord);
+    runtime.interest_center = spawn_chunk_coord;
+    pipeline.world_density_provider = Some(provider);
+    pipeline.density_source = None;
+    pipeline.world_extent_chunks =
+        world_extent_chunks_from_metadata(&extent, cell_size_m, Some(spawn_chunk_coord));
+    pipeline.chunks = HashMap::new();
+    pipeline.frozen = false;
+    recipe_revision.hash = recipe_hash;
+    info!(
+        world = %metadata.world_id,
+        spawn = ?spawn_point.0,
+        spawn_valid = spawn_report.passed,
+        spawn_notes = ?spawn_report.messages,
+        extent_chunks = ?pipeline.world_extent_chunks,
+        "compiled world installed into terrain pipeline"
+    );
+}
+
 fn finish_terrain_world_init(
     source: RecipeDensitySource,
     world: &game_data::CompiledWorld,
@@ -397,6 +487,7 @@ fn finish_terrain_world_init(
     ];
 
     pipeline.density_source = Some(Arc::new(source));
+    pipeline.world_density_provider = None;
     pipeline.world_extent_chunks = extent;
     pipeline.chunks = HashMap::new();
     pipeline.frozen = false;
@@ -416,6 +507,8 @@ fn init_terrain_world(
     registry: Res<ConfigRegistryResource>,
     prefs: Res<UserSetupPrefs>,
     terrain_tweaks: Res<TerrainTweaks>,
+    worldgen_config: Res<WorldCompilationConfig>,
+    compiled_world: Option<Res<ActiveCompiledWorld>>,
     mut pipeline: ResMut<TerrainPipelineState>,
     mut spawn_point: ResMut<TerrainSpawnPoint>,
     mut recipe_revision: ResMut<TerrainRecipeRevision>,
@@ -429,6 +522,43 @@ fn init_terrain_world(
         .0
         .effective_world(world_override.as_ref())
         .expect("world");
+
+    let worldgen_recipe = world.worldgen.as_ref().map(|id| id.as_str());
+    let use_worldgen = worldgen_recipe.is_some() && worldgen_config.enabled;
+
+    if use_worldgen {
+        runtime.cell_size_m = world.cell_size_m;
+        runtime.revision = revision.value;
+        seed_override.seed = prefs.seed;
+        runtime.seed = prefs.seed;
+        let expected_id = worldgen_recipe.unwrap_or_default();
+        if let Some(active) = compiled_world {
+            if active.world_id == expected_id {
+                let cell_size_m = runtime.cell_size_m.max(0.001);
+                finish_compiled_world_install(
+                    Arc::clone(&active.provider),
+                    &mut pipeline,
+                    &mut spawn_point,
+                    &mut recipe_revision,
+                    &mut runtime,
+                    active.recipe_hash.clone(),
+                    cell_size_m,
+                );
+                return;
+            }
+        }
+        pipeline.frozen = true;
+        pipeline.density_source = None;
+        pipeline.world_density_provider = None;
+        pipeline.chunks.clear();
+        info!(
+            worldgen = expected_id,
+            presentation = %world.id.as_str(),
+            "waiting for compiled worldgen atlas"
+        );
+        return;
+    }
+
     seed_override.seed = prefs.seed;
     runtime.seed = prefs.seed;
     runtime.cell_size_m = world.cell_size_m;
@@ -558,6 +688,11 @@ fn sync_terrain_on_recipe_change(
         .0
         .effective_world(world_override.as_ref())
         .expect("world");
+    // Milestone A worlds track recipe identity via the compiled atlas hash, not the
+    // legacy terrain-recipe payload used for island YAML / op stacks.
+    if world.worldgen.is_some() {
+        return;
+    }
     let override_seed = seed_override_active(&seed_override, world.seed);
     let hash = terrain_recipe_hash(
         &registry.0,
@@ -596,6 +731,33 @@ pub fn regen_terrain_with_seed(
         .expect("world");
     let override_seed = seed_override_active(seed_override, world.seed);
     revision.value += 1;
+    edit_store.clear();
+    pending.pending = false;
+    pending.recipe_hash.clear();
+    pending.horizon_skirt_reset = true;
+    let to_despawn = pipeline.reset_for_revision();
+    for entity in to_despawn {
+        commands.entity(entity).despawn();
+    }
+    pipeline.world_extent_chunks = [
+        world.world_extent_chunks[0] as i32,
+        world.world_extent_chunks[1] as i32,
+        world.world_extent_chunks[2] as i32,
+    ];
+
+    if world.worldgen.is_some() {
+        pipeline.density_source = None;
+        pipeline.world_density_provider = None;
+        pipeline.frozen = true;
+        pipeline.chunks.clear();
+        recipe_revision.hash.clear();
+        info!(
+            worldgen = ?world.worldgen,
+            "world profile uses Milestone A worldgen; waiting for compiled atlas"
+        );
+        return;
+    }
+
     let source =
         build_density_source_from_prefs(&registry.0, prefs, terrain_tweaks.field_stack_params());
     warn_if_atlas_validation_failed(&source);
@@ -605,11 +767,6 @@ pub fn regen_terrain_with_seed(
     let spawn_cell = WorldCell::new(sx.floor() as i32, sy.floor() as i32, sz.floor() as i32);
     pipeline.density_source = Some(Arc::new(source));
     pipeline.spawn_chunk = Some(spawn_cell.chunk_coord());
-    pipeline.world_extent_chunks = [
-        world.world_extent_chunks[0] as i32,
-        world.world_extent_chunks[1] as i32,
-        world.world_extent_chunks[2] as i32,
-    ];
     runtime.interest_center = spawn_cell.chunk_coord();
     recipe_revision.hash = terrain_recipe_hash(
         &registry.0,
@@ -618,14 +775,6 @@ pub fn regen_terrain_with_seed(
         Some(prefs),
         Some(&terrain_tweaks.field_stack_params()),
     );
-    edit_store.clear();
-    pending.pending = false;
-    pending.recipe_hash.clear();
-    pending.horizon_skirt_reset = true;
-    let to_despawn = pipeline.reset_for_revision();
-    for entity in to_despawn {
-        commands.entity(entity).despawn();
-    }
 }
 
 fn manage_chunk_residency(
@@ -769,7 +918,7 @@ fn dispatch_density_jobs(
     if pipeline.pending_density.len() >= max_jobs {
         return;
     }
-    let Some(source) = pipeline.density_source.as_ref().map(Arc::clone) else {
+    let Some(density_ctx) = pipeline.density_sampling_context(runtime.cell_size_m) else {
         return;
     };
 
@@ -848,12 +997,26 @@ fn dispatch_density_jobs(
         let edits = edit_snapshot.get(revision.value, &edit_store);
         let cell_size_m = runtime.cell_size_m;
         for (coord, rev) in to_start {
-            let src = Arc::clone(&source);
             let edit_overlay = Arc::clone(&edits);
             let started = Instant::now();
-            let task = AsyncComputeTaskPool::get().spawn(async move {
-                generate_padded_samples_runtime(&src, &edit_overlay, coord, cell_size_m)
-            });
+            let task = match &density_ctx {
+                DensitySamplingContext::Legacy(source) => {
+                    let src = Arc::clone(source);
+                    AsyncComputeTaskPool::get().spawn(async move {
+                        generate_padded_samples_runtime(&src, &edit_overlay, coord, cell_size_m)
+                    })
+                }
+                DensitySamplingContext::Compiled {
+                    provider,
+                    cell_size_m,
+                } => {
+                    let provider = Arc::clone(provider);
+                    let cell = *cell_size_m;
+                    AsyncComputeTaskPool::get().spawn(async move {
+                        generate_padded_samples_from_provider(&provider, &edit_overlay, coord, cell)
+                    })
+                }
+            };
             pipeline.pending_density.push(PendingDensityJob {
                 coord,
                 revision: rev,
@@ -948,7 +1111,7 @@ fn promote_density_ready_to_mesh(
     if pipeline.pending_mesh.len() >= max_mesh_jobs {
         return;
     }
-    let Some(source) = pipeline.density_source.as_ref().map(Arc::clone) else {
+    let Some(density_ctx) = pipeline.density_sampling_context(runtime.cell_size_m) else {
         return;
     };
 
@@ -1042,44 +1205,66 @@ fn promote_density_ready_to_mesh(
             cell_stride,
         };
 
-        let src = Arc::clone(&source);
         let (ox, oy, oz) = voxel_core::TerrainChunk::new(job.coord).sample_origin();
         let mesh_started = Instant::now();
         let palette_job = Arc::clone(&palette);
         let surface_rules_job = Arc::clone(&surface_rules);
         let biome_catalog_job = Arc::clone(&biome_catalog);
         let cell_stride = job.cell_stride;
-        let mesh_task = AsyncComputeTaskPool::get().spawn(async move {
-            let resolver = ChunkSurfaceResolver::from_compiled(
-                Arc::unwrap_or_clone(src),
-                Arc::unwrap_or_clone(job.column_cache),
-                ox,
-                oy,
-                oz,
-                cell_size_m,
-                Arc::unwrap_or_clone(job.edit_snapshot),
-                &palette_job,
-                &surface_rules_job,
-                (*biome_catalog_job).clone(),
-            );
-            let mesher = SurfaceNetsMesher;
-            let input = ChunkMeshingInput {
-                samples: &job.samples,
-                chunk_cells: CHUNK_CELLS,
-                cell_stride,
-                surface_resolver: Some(&resolver),
-            };
-            let mesh_data = mesher.build_mesh(&input)?;
-            let collider = if job.needs_collider {
-                build_chunk_collider(&mesh_data, cell_size_m)
-            } else {
-                None
-            };
-            Ok(MeshJobResult {
-                mesh_data,
-                collider,
-            })
-        });
+        let samples = Arc::clone(&job.samples);
+        let column_cache = Arc::clone(&job.column_cache);
+        let edit_snapshot = Arc::clone(&job.edit_snapshot);
+        let needs_collider = job.needs_collider;
+        let mesh_task = match &density_ctx {
+            DensitySamplingContext::Legacy(source) => {
+                let src = Arc::clone(source);
+                AsyncComputeTaskPool::get().spawn(async move {
+                    let resolver = ChunkSurfaceResolver::from_compiled(
+                        Arc::unwrap_or_clone(src),
+                        Arc::unwrap_or_clone(column_cache),
+                        ox,
+                        oy,
+                        oz,
+                        cell_size_m,
+                        Arc::unwrap_or_clone(edit_snapshot),
+                        &palette_job,
+                        &surface_rules_job,
+                        (*biome_catalog_job).clone(),
+                    );
+                    build_mesh_with_resolver(
+                        &samples,
+                        needs_collider,
+                        &resolver,
+                        cell_size_m,
+                        cell_stride,
+                    )
+                })
+            }
+            DensitySamplingContext::Compiled { provider, .. } => {
+                let provider = Arc::clone(provider);
+                AsyncComputeTaskPool::get().spawn(async move {
+                    let resolver = ChunkSurfaceResolver::from_world_provider(
+                        provider,
+                        Arc::unwrap_or_clone(column_cache),
+                        ox,
+                        oy,
+                        oz,
+                        cell_size_m,
+                        Arc::unwrap_or_clone(edit_snapshot),
+                        &palette_job,
+                        &surface_rules_job,
+                        (*biome_catalog_job).clone(),
+                    );
+                    build_mesh_with_resolver(
+                        &samples,
+                        needs_collider,
+                        &resolver,
+                        cell_size_m,
+                        cell_stride,
+                    )
+                })
+            }
+        };
         pipeline.pending_mesh.push(PendingMeshJob {
             coord: job.coord,
             revision: revision_value,
@@ -1417,6 +1602,62 @@ fn build_chunk_collider(mesh_data: &TerrainMeshData, cell_size_m: f32) -> Option
         .map(|c| [c[0], c[1], c[2]])
         .collect();
     Some(Collider::trimesh(positions, tri_indices))
+}
+
+fn generate_padded_samples_from_provider(
+    provider: &Arc<dyn WorldDensityProvider>,
+    edits: &Arc<TerrainEditStore>,
+    coord: ChunkCoord,
+    cell_size_m: f32,
+) -> DensityJobResult {
+    let (ox, _oy, oz) = voxel_core::TerrainChunk::new(coord).sample_origin();
+    let padded_side = CHUNK_CELLS + 3;
+    let column_cache =
+        ChunkColumnCache::build_from_provider(provider.as_ref(), ox, oz, padded_side, cell_size_m);
+    let samples = fill_padded_samples(coord, |wx, wy, wz| {
+        if let Some(override_sample) = edits.0.sample_override(wx, wy, wz) {
+            (override_sample.density, override_sample.material)
+        } else {
+            (
+                provider.sample_density(WorldPosition::new(
+                    (wx as f32 * cell_size_m) as f64,
+                    (wy as f32 * cell_size_m) as f64,
+                    (wz as f32 * cell_size_m) as f64,
+                )),
+                voxel_core::MaterialId(0),
+            )
+        }
+    });
+    DensityJobResult {
+        samples: Arc::from(samples),
+        column_cache: Arc::new(column_cache),
+    }
+}
+
+fn build_mesh_with_resolver(
+    samples: &Arc<[voxel_core::TerrainSample]>,
+    needs_collider: bool,
+    resolver: &ChunkSurfaceResolver,
+    cell_size_m: f32,
+    cell_stride: u32,
+) -> Result<MeshJobResult, terrain_meshing::MeshingError> {
+    let mesher = SurfaceNetsMesher;
+    let input = ChunkMeshingInput {
+        samples,
+        chunk_cells: CHUNK_CELLS,
+        cell_stride,
+        surface_resolver: Some(resolver),
+    };
+    let mesh_data = mesher.build_mesh(&input)?;
+    let collider = if needs_collider {
+        build_chunk_collider(&mesh_data, cell_size_m)
+    } else {
+        None
+    };
+    Ok(MeshJobResult {
+        mesh_data,
+        collider,
+    })
 }
 
 fn generate_padded_samples_runtime(

@@ -1,13 +1,17 @@
 // crates/game_bevy/src/environment/surface.rs
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use game_data::{CompiledSurfaceRules, CompiledTerrainMaterials};
-use terrain_generation::{DensitySource, RecipeDensitySource};
+use terrain_generation::{
+    DensitySource, RecipeDensitySource, WorldDensityProvider, WorldPosition, WorldXZ,
+};
 use terrain_surface::{
     ChunkSlotPalette, ChunkSlotRemapper, EnvironmentSample, GeologyId, MaterialKey,
     MaterialLayerRegistry, MaterialVertex, RuleSurfaceClassifier, SurfaceClassifier,
     SurfaceContext, SurfaceMeshResolver, SurfaceRuleSet, compute_overlay_state,
-    overlay_response_for_material_name, remap_blend_to_local_slots, resolve_blend,
+    compiler_biome_to_presentation, merge_soft_biome_sources, overlay_response_for_material_name,
+    remap_blend_to_local_slots, resolve_blend, soft_weights_from_blend_cell,
+    soft_weights_from_primary_u8,
 };
 
 use super::biome_context::ChunkColumnCache;
@@ -17,6 +21,7 @@ use crate::environment::BiomeCatalog;
 use crate::terrain::TerrainEditStore;
 
 const ATLAS_BIOME_MIX: f32 = 0.30;
+const COMPILER_BIOME_MIX: f32 = 0.85;
 
 fn wetness_normalization(source: &RecipeDensitySource) -> f32 {
     source
@@ -27,8 +32,46 @@ fn wetness_normalization(source: &RecipeDensitySource) -> f32 {
 }
 const PAINT_DENSITY_MATCH_EPS: f32 = 0.001;
 
+enum TerrainDensityBackend {
+    Recipe(RecipeDensitySource),
+    Compiled(Arc<dyn WorldDensityProvider>),
+}
+
+impl TerrainDensityBackend {
+    fn sample_density_m(&self, wx_m: f32, wy_m: f32, wz_m: f32) -> f32 {
+        match self {
+            Self::Recipe(source) => source.sample_density(wx_m, wy_m, wz_m),
+            Self::Compiled(provider) => {
+                provider.sample_density(WorldPosition::new(wx_m as f64, wy_m as f64, wz_m as f64))
+            }
+        }
+    }
+
+    fn atlas(&self) -> Option<&terrain_generation::IslandAtlas> {
+        match self {
+            Self::Recipe(source) => source.atlas(),
+            Self::Compiled(_) => None,
+        }
+    }
+
+    fn recipe_source(&self) -> Option<&RecipeDensitySource> {
+        match self {
+            Self::Recipe(source) => Some(source),
+            Self::Compiled(_) => None,
+        }
+    }
+
+    fn provider(&self) -> Option<&dyn WorldDensityProvider> {
+        match self {
+            Self::Recipe(_) => None,
+            Self::Compiled(provider) => Some(provider.as_ref()),
+        }
+    }
+}
+
 pub struct ChunkSurfaceResolver {
-    source: RecipeDensitySource,
+    backend: TerrainDensityBackend,
+    use_provider_context: bool,
     column_cache: ChunkColumnCache,
     layer_registry: MaterialLayerRegistry,
     classifier: RuleSurfaceClassifier,
@@ -76,7 +119,51 @@ impl ChunkSurfaceResolver {
             slot_remapper: Mutex::new(ChunkSlotRemapper::new()),
             edit_store,
             biome_catalog,
-            source,
+            backend: TerrainDensityBackend::Recipe(source),
+            use_provider_context: false,
+            origin_x,
+            origin_y,
+            origin_z,
+            cell_size_m,
+            sea_level_m,
+        }
+    }
+
+    pub fn from_world_provider(
+        provider: Arc<dyn WorldDensityProvider>,
+        column_cache: ChunkColumnCache,
+        origin_x: i32,
+        origin_y: i32,
+        origin_z: i32,
+        cell_size_m: f32,
+        edit_store: TerrainEditStore,
+        palette: &CompiledTerrainMaterials,
+        rules: &CompiledSurfaceRules,
+        biome_catalog: BiomeCatalog,
+    ) -> Self {
+        let layer_order: Vec<MaterialKey> = palette
+            .layer_order
+            .iter()
+            .map(|key| MaterialKey::new(key.as_str()))
+            .collect();
+        let default_material = palette
+            .layer_order
+            .first()
+            .map(|key| MaterialKey::new(key.as_str()))
+            .unwrap_or_else(|| MaterialKey::new("grass"));
+        let sea_level_m = provider.world_metadata().extent.sea_level_m;
+        Self {
+            column_cache,
+            layer_registry: MaterialLayerRegistry::from_layer_order(&layer_order),
+            classifier: RuleSurfaceClassifier::new(
+                SurfaceRuleSet::from_compiled(rules),
+                default_material,
+            ),
+            slot_remapper: Mutex::new(ChunkSlotRemapper::new()),
+            edit_store,
+            biome_catalog,
+            backend: TerrainDensityBackend::Compiled(provider),
+            use_provider_context: true,
             origin_x,
             origin_y,
             origin_z,
@@ -90,7 +177,7 @@ impl ChunkSurfaceResolver {
         let wx_m = wx as f32 * self.cell_size_m;
         let wy_m = wy as f32 * self.cell_size_m;
         let wz_m = wz as f32 * self.cell_size_m;
-        let field = self.source.sample_density(wx_m, wy_m, wz_m);
+        let field = self.backend.sample_density_m(wx_m, wy_m, wz_m);
         if (sample.density - field).abs() > PAINT_DENSITY_MATCH_EPS {
             return None;
         }
@@ -131,21 +218,42 @@ impl ChunkSurfaceResolver {
         let wz = (wz_m / self.cell_size_m).round() as i32;
         let elevation_m = wy_m;
 
-        let biome_ctx = self.column_cache.context_at(&self.source, wx, wy_m, wz);
+        let biome_ctx = if self.use_provider_context {
+            let provider = self.backend.provider().expect("compiled provider");
+            self.column_cache
+                .context_at_provider(provider, wx, wy_m, wz)
+        } else {
+            let source = self.backend.recipe_source().expect("recipe source");
+            self.column_cache.context_at(source, wx, wy_m, wz)
+        };
 
         let mut effective_moisture = biome_ctx.effective_moisture;
         let mut coast_distance_m = biome_ctx.distance_to_water;
         let mut slope_degrees = biome_ctx.slope_degrees;
         let mut soil_depth_m =
             fallback_soil_depth(elevation_m, self.sea_level_m, biome_ctx.slope_degrees);
+        let mut wave_exposure = (1.0 - (coast_distance_m / 80.0).clamp(0.0, 1.0))
+            * (1.0 - (elevation_m / (self.sea_level_m + 6.0)).clamp(0.0, 1.0));
 
-        if let Some(atlas) = self.source.atlas() {
+        if self.use_provider_context {
+            if let Some(provider) = self.backend.provider() {
+                let column = provider.sample_column(WorldXZ::new(wx_m as f64, wz_m as f64));
+                if column.soil_depth_m > 0.0 {
+                    soil_depth_m = column.soil_depth_m;
+                }
+                if column.wave_exposure > 0.0 {
+                    wave_exposure = column.wave_exposure;
+                }
+                coast_distance_m = column.surface.coast_distance_m;
+                slope_degrees = column.surface.slope;
+            }
+        } else if let Some(atlas) = self.backend.atlas() {
             coast_distance_m = atlas.sample_coast_distance(wx_m, wz_m);
             slope_degrees = atlas.slope_at(wx_m, wz_m);
             soil_depth_m = atlas.sample_soil_depth(wx_m, wz_m);
             let wetness = terrain_surface::normalize_wetness(
                 atlas.sample_wetness(wx_m, wz_m),
-                wetness_normalization(&self.source),
+                wetness_normalization(self.backend.recipe_source().expect("recipe source")),
             );
             effective_moisture = (effective_moisture * 0.5 + wetness * 0.5).clamp(0.0, 1.0);
         }
@@ -162,19 +270,42 @@ impl ChunkSurfaceResolver {
             cave_depth: biome_ctx.cave_depth,
             world_y: biome_ctx.world_y,
         };
-        let mut soft = terrain_surface::compute_soft_biome_weights(&env);
-        if let Some(atlas) = self.source.atlas() {
+        let climate_soft = terrain_surface::compute_soft_biome_weights(&env);
+        let mut soft = climate_soft;
+        let mut biome = soft.primary_biome();
+
+        if self.use_provider_context {
+            if let Some(provider) = self.backend.provider() {
+                let horizontal = WorldXZ::new(wx_m as f64, wz_m as f64);
+                if let Some(blend) = provider.sample_biome_blend(horizontal) {
+                    let compiler_soft = soft_weights_from_blend_cell(blend);
+                    soft = merge_soft_biome_sources(compiler_soft, climate_soft, COMPILER_BIOME_MIX);
+                    biome = compiler_biome_to_presentation(blend.primary);
+                } else {
+                    let column = provider.sample_column(horizontal);
+                    if column.primary_biome != 0 {
+                        let compiler_soft = soft_weights_from_primary_u8(column.primary_biome);
+                        soft = merge_soft_biome_sources(
+                            compiler_soft,
+                            climate_soft,
+                            COMPILER_BIOME_MIX,
+                        );
+                        biome = compiler_biome_to_presentation(
+                            terrain_generation::CompilerBiomeId::from_u8(column.primary_biome),
+                        );
+                    }
+                }
+            }
+        } else if let Some(atlas) = self.backend.atlas() {
             soft = terrain_surface::merge_soft_with_atlas(
-                soft,
+                climate_soft,
                 atlas.sample_biome_weights(wx_m, wz_m),
                 ATLAS_BIOME_MIX,
             );
+            biome = soft.primary_biome();
         }
-        let biome = soft.primary_biome();
 
         let water_depth_m = (self.sea_level_m - elevation_m).max(0.0);
-        let wave_exposure = (1.0 - (coast_distance_m / 80.0).clamp(0.0, 1.0))
-            * (1.0 - (elevation_m / (self.sea_level_m + 6.0)).clamp(0.0, 1.0));
         let cave_exposure = biome_ctx.cave_exposure;
 
         SurfaceContext {
@@ -192,29 +323,30 @@ impl ChunkSurfaceResolver {
             cave_exposure,
             mineral_deposition: cave_exposure * effective_moisture,
             biome,
-            geology: resolve_geology(&self.source, cave_exposure),
+            geology: self.resolve_geology(cave_exposure),
             soft,
         }
+    }
+
+    fn resolve_geology(&self, cave_exposure: f32) -> GeologyId {
+        if cave_exposure <= 0.35 {
+            return GeologyId::Basalt;
+        }
+        if self.backend.atlas().is_some() {
+            return GeologyId::Basalt;
+        }
+        if let Some(source) = self.backend.recipe_source() {
+            if recipe_has_subtract_cavities(source.recipe()) {
+                return GeologyId::Limestone;
+            }
+        }
+        GeologyId::Basalt
     }
 }
 
 fn fallback_soil_depth(elevation_m: f32, sea_level_m: f32, slope_degrees: f32) -> f32 {
     let relief = (elevation_m - sea_level_m).max(0.0);
     (1.5 - relief * 0.02 - slope_degrees * 0.02).clamp(0.2, 2.0)
-}
-
-fn resolve_geology(source: &RecipeDensitySource, cave_exposure: f32) -> GeologyId {
-    if cave_exposure <= 0.35 {
-        return GeologyId::Basalt;
-    }
-    if source.atlas().is_some() {
-        return GeologyId::Basalt;
-    }
-    if recipe_has_subtract_cavities(source.recipe()) {
-        GeologyId::Limestone
-    } else {
-        GeologyId::Basalt
-    }
 }
 
 fn recipe_has_subtract_cavities(recipe: &terrain_generation::TerrainRecipe) -> bool {
@@ -282,23 +414,21 @@ mod tests {
                 StableId::new("grass"),
                 StableId::new("sand"),
                 StableId::new("rock"),
-                StableId::new("cave_stone"),
-                StableId::new("wet_rock"),
                 StableId::new("forest_floor"),
-                StableId::new("scrub"),
-                StableId::new("flowstone"),
+                StableId::new("scree"),
+                StableId::new("weathered_cliff"),
+                StableId::new("volcanic_ash"),
                 StableId::new("limestone"),
             ],
             key_to_layer: [
                 (StableId::new("grass"), 0),
                 (StableId::new("sand"), 1),
                 (StableId::new("rock"), 2),
-                (StableId::new("cave_stone"), 3),
-                (StableId::new("wet_rock"), 4),
-                (StableId::new("forest_floor"), 5),
-                (StableId::new("scrub"), 6),
-                (StableId::new("flowstone"), 7),
-                (StableId::new("limestone"), 8),
+                (StableId::new("forest_floor"), 3),
+                (StableId::new("scree"), 4),
+                (StableId::new("weathered_cliff"), 5),
+                (StableId::new("volcanic_ash"), 6),
+                (StableId::new("limestone"), 7),
             ]
             .into_iter()
             .collect(),
@@ -321,7 +451,7 @@ mod tests {
                     gate_weight: Default::default(),
                     exclusive: true,
                     blend: vec![SurfaceBlendEntryDefinition {
-                        material: StableId::new("wet_rock"),
+                        material: StableId::new("rock"),
                         weight: 1.0,
                     }],
                     classifier: None,
@@ -550,6 +680,10 @@ mod tests {
             &rule_classifier.classify(&cliff),
             "rock"
         ));
+        assert!(blend_has_material(
+            &rule_classifier.classify(&cliff),
+            "scree"
+        ));
         assert!(blend_has_material(&island.classify(&cliff), "rock"));
 
         let mut coast = parity_context();
@@ -560,7 +694,21 @@ mod tests {
             &rule_classifier.classify(&coast),
             "sand"
         ));
+        assert!(blend_has_material(
+            &rule_classifier.classify(&coast),
+            "weathered_cliff"
+        ));
         assert!(blend_has_material(&island.classify(&coast), "sand"));
+
+        let mut alpine = parity_context();
+        alpine.elevation_m = 45.0;
+        alpine.slope_degrees = 38.0;
+        alpine.soft.grassland = 0.1;
+        alpine.soft.alpine = 0.7;
+        assert!(blend_has_material(
+            &rule_classifier.classify(&alpine),
+            "scree"
+        ));
 
         let mut cave = parity_context();
         cave.cave_exposure = 0.8;

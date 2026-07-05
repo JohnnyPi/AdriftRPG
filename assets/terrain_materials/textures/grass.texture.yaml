@@ -1,4 +1,4 @@
-﻿schema_version: 1
+schema_version: 1
 id: textures.grass
 resolution: 512
 seed: 2001
@@ -6,12 +6,18 @@ tileable: true
 generator:
   Ground:
     seed: 2001
-    macro_scale: 2.0
+    macro_scale: 1.55
     macro_octaves: 5
-    micro_scale: 10.0
+    micro_scale: 8.0
     micro_octaves: 4
-    micro_weight: 0.38
-    color_dry: [0.36, 0.54, 0.30]
-    color_moist: [0.24, 0.40, 0.18]
-    normal_strength: 1.8
-    roughness: 0.9
+    micro_weight: 0.27
+    color_dry:
+    - 0.42
+    - 0.59
+    - 0.28
+    color_moist:
+    - 0.21
+    - 0.43
+    - 0.14
+    normal_strength: 1.45
+    roughness: 0.88

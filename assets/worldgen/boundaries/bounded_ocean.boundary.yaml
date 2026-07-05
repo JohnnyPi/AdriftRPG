@@ -1,0 +1,9 @@
+﻿schema_version: 1
+id: boundary.bounded_ocean
+shape:
+  type: bounded_ocean
+  ocean_edge_start_fraction: 0.78
+  maximum_depth_m: 5000
+  safety_margin_fraction: 0.08
+  variation_amplitude_m: 120
+  variation_frequency: 0.0001

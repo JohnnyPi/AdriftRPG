@@ -1,0 +1,22 @@
+schema_version: 1
+id: textures.granite
+resolution: 512
+seed: 1102
+tileable: true
+generator:
+  Rock:
+    seed: 1102
+    scale: 4.4
+    octaves: 7
+    attenuation: 1.85
+    color_light:
+    - 0.64
+    - 0.61
+    - 0.58
+    color_dark:
+    - 0.25
+    - 0.23
+    - 0.24
+    normal_strength: 3.25
+    roughness: 0.82
+    metallic: 0.0

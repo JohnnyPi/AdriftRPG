@@ -120,11 +120,12 @@ fn spawn_bootstrap_scene(
 }
 
 fn cascade_shadow_config(performance: &game_data::CompiledPerformance) -> CascadeShadowConfig {
-    let (num_cascades, default_max_distance) = match performance.shadow_quality.to_ascii_lowercase().as_str() {
-        "low" => (2, 80.0),
-        "medium" => (3, 120.0),
-        _ => (4, 180.0),
-    };
+    let (num_cascades, default_max_distance) =
+        match performance.shadow_quality.to_ascii_lowercase().as_str() {
+            "low" => (2, 80.0),
+            "medium" => (3, 120.0),
+            _ => (4, 180.0),
+        };
     let maximum_distance = if performance.shadow_maximum_distance_m > 0.0 {
         performance.shadow_maximum_distance_m
     } else {

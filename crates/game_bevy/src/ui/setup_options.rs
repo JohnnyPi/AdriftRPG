@@ -7,6 +7,7 @@ use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 
 use crate::data::{ConfigRegistryResource, UserSetupPrefs, save_user_prefs};
 use crate::state::AppState;
+use crate::ui::world_select::draw_world_profile_combo;
 use crate::world::{
     MapPreviewState, cancel_map_preview_build, hash_prefs, poll_map_preview_build,
     start_map_preview_build,
@@ -179,35 +180,38 @@ fn draw_setup_options(
         .resizable(true)
         .show_inside(&mut viewport_ui, |ui| {
             ui.heading("World profile");
-            let worlds: Vec<_> = registry.0.world_profiles().map(|w| w.id.as_str().to_string()).collect();
-            egui::ComboBox::from_id_salt("world_profile")
-                .selected_text(&prefs.world_id)
-                .show_ui(ui, |ui| {
-                    for id in &worlds {
-                        if ui.selectable_label(&prefs.world_id == id, id).clicked() {
-                            prefs.world_id = id.clone();
-                            ui_state.params_stale = true;
-                        }
+            if draw_world_profile_combo(ui, &registry.0, &mut prefs.world_id) {
+                ui_state.params_stale = true;
+            }
+            if let Some(world) = world {
+                if let Some(worldgen) = world.worldgen.as_ref() {
+                    ui.label(format!(
+                        "Terrain: Milestone A worldgen ({})",
+                        worldgen.as_str()
+                    ));
+                    if ui
+                        .add(egui::Slider::new(&mut prefs.seed, 1..=999_999).text("Seed"))
+                        .changed()
+                    {
+                        ui_state.params_stale = true;
                     }
-                });
-
-            if let Some(baked_path) = baked_atlas {
-                let world_seed = world.map(|w| w.seed).unwrap_or(prefs.seed);
-                ui.label(format!("Terrain: baked atlas (seed {world_seed})"));
-                ui.label(egui::RichText::new(baked_path).small().weak());
-                if ui
-                    .add(
-                        egui::Slider::new(&mut prefs.seed, 1..=999_999).text("Cave seed"),
-                    )
+                } else if let Some(baked_path) = baked_atlas {
+                    ui.label(format!("Terrain: baked atlas (seed {})", world.seed));
+                    ui.label(egui::RichText::new(baked_path).small().weak());
+                    if ui
+                        .add(
+                            egui::Slider::new(&mut prefs.seed, 1..=999_999).text("Cave seed"),
+                        )
+                        .changed()
+                    {
+                        ui_state.params_stale = true;
+                    }
+                } else if ui
+                    .add(egui::Slider::new(&mut prefs.seed, 1..=999_999).text("Seed"))
                     .changed()
                 {
                     ui_state.params_stale = true;
                 }
-            } else if ui
-                .add(egui::Slider::new(&mut prefs.seed, 1..=999_999).text("Seed"))
-                .changed()
-            {
-                ui_state.params_stale = true;
             }
             ui.separator();
 
@@ -259,7 +263,12 @@ fn draw_setup_options(
 
             ui.separator();
             ui.heading("Island preview");
-            if island_base.is_none() {
+            if world.is_some_and(|w| w.worldgen.is_some()) {
+                ui.label(
+                    "Setup preview uses the classic island_gen atlas. \
+                     The worldgen profile compiles terrain when you enter the world.",
+                );
+            } else if island_base.is_none() {
                 ui.label("This world uses legacy recipe terrain; island generation sliders are inactive.");
             }
             if ui_state.params_stale && !preview.building {

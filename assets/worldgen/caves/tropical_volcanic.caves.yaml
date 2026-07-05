@@ -1,0 +1,38 @@
+﻿schema_version: 1
+id: caves.tropical_volcanic
+lava_max_age_myr: 8.0
+limestone_min_permeability: 0.35
+sea_tidal_band_m: [0.5, 6.0]
+
+lava_tube:
+  systems_max: 2
+  chamber_count_min: 3
+  chamber_count_max: 6
+  passage_radius_min_m: 1.2
+  passage_radius_max_m: 2.4
+  minimum_cover_m: 4.0
+  maximum_depth_m: 18.0
+  entrance_threshold: 0.08
+  overhang_enabled: true
+
+limestone:
+  systems_max: 1
+  chamber_count_min: 4
+  chamber_count_max: 7
+  passage_radius_min_m: 1.0
+  passage_radius_max_m: 2.0
+  minimum_cover_m: 3.0
+  maximum_depth_m: 22.0
+  entrance_threshold: 0.05
+  overhang_enabled: false
+
+sea_cave:
+  systems_max: 1
+  chamber_count_min: 2
+  chamber_count_max: 4
+  passage_radius_min_m: 1.5
+  passage_radius_max_m: 2.8
+  minimum_cover_m: 2.0
+  maximum_depth_m: 12.0
+  entrance_threshold: 0.08
+  overhang_enabled: false

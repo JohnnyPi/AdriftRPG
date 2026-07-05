@@ -6,7 +6,9 @@ use tracing::info;
 use crate::camera::ThirdPersonCameraPlugin;
 use crate::data::{DataAssetPlugin, assets_root};
 use crate::debug_tools::DebugToolsPlugin;
-use crate::environment::{BiomePlugin, EnvironmentAudioStubPlugin, LightingDebugPlugin, SkyLightingPlugin};
+use crate::environment::{
+    BiomePlugin, EnvironmentAudioStubPlugin, LightingDebugPlugin, SkyLightingPlugin,
+};
 use crate::performance::PerformanceValidationPlugin;
 use crate::physics::GamePhysicsPlugin;
 use crate::player::{CharacterMotorPlugin, PlayerPlugin};
@@ -23,6 +25,7 @@ use crate::ui::{
 use crate::vegetation::VegetationPlugin;
 use crate::water::WaterPlugin;
 use crate::world::{WorldProfilePlugin, WorldSemanticPlugin};
+use crate::worldgen::WorldgenPlugin;
 
 pub struct VerticalSlicePlugin;
 
@@ -58,6 +61,7 @@ pub fn configure_vertical_slice_app(app: &mut App, window_title: &str) {
     app.add_plugins((
         DataAssetPlugin,
         crate::data::VisualConfigHotReloadPlugin,
+        WorldgenPlugin,
         BiomePlugin,
         TerrainPlugin,
         TerrainMaterialPlugin,
